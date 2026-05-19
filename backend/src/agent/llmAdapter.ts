@@ -11,6 +11,7 @@
 import OpenAI from 'openai';
 import { LLMClient } from './agents/baseExpertAgent';
 import { parseLlmJson } from '../utils/llmJson';
+import { hasConcreteEnvValue } from '../agentRuntime/envCredentialSources';
 
 export interface LLMAdapterConfig {
   provider: 'deepseek' | 'openai';
@@ -41,12 +42,12 @@ const DEFAULT_MAX_RETRY_DELAY_MS = Number.parseInt(process.env.LLM_MAX_RETRY_DEL
  * Error thrown when LLM API key is not configured
  */
 export class LLMConfigurationError extends Error {
-  constructor(provider: string) {
+  constructor(provider?: string) {
     super(
-      `LLM API key not configured for provider '${provider}'. ` +
+      `LLM API key not configured${provider ? ` for provider '${provider}'` : ''}. ` +
       `Please set the appropriate environment variable:\n` +
-      `  - DeepSeek: DEEPSEEK_API_KEY\n` +
       `  - OpenAI: OPENAI_API_KEY\n` +
+      `  - DeepSeek: DEEPSEEK_API_KEY\n` +
       `Or specify the API key in the configuration.`
     );
     this.name = 'LLMConfigurationError';
@@ -288,10 +289,11 @@ export function createOpenAILLMClient(config?: Partial<LLMAdapterConfig>): LLMCl
  * Creates the appropriate LLMClient based on configuration or environment
  */
 export function createLLMClient(config?: LLMAdapterConfig): LLMClient {
-  const provider =
-    config?.provider ||
-    (process.env.SMARTPERFETTO_LLM_PROVIDER as LLMAdapterConfig['provider']) ||
-    'deepseek';
+  const provider = resolveLLMClientProvider(config);
+
+  if (!provider) {
+    throw new LLMConfigurationError();
+  }
 
   switch (provider) {
     case 'deepseek':
@@ -301,6 +303,19 @@ export function createLLMClient(config?: LLMAdapterConfig): LLMClient {
     default:
       throw new LLMConfigurationError(provider);
   }
+}
+
+function resolveLLMClientProvider(config?: LLMAdapterConfig): LLMAdapterConfig['provider'] | undefined {
+  if (config?.provider) return config.provider;
+
+  const envProvider = process.env.SMARTPERFETTO_LLM_PROVIDER;
+  if (envProvider === 'deepseek' || envProvider === 'openai') {
+    return envProvider;
+  }
+
+  if (hasConcreteEnvValue(process.env.OPENAI_API_KEY)) return 'openai';
+  if (hasConcreteEnvValue(process.env.DEEPSEEK_API_KEY)) return 'deepseek';
+  return undefined;
 }
 
 function parseJSONResponse<T>(content: string): T {

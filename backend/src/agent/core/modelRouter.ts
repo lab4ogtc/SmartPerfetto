@@ -14,6 +14,7 @@
 
 import { EventEmitter } from 'events';
 import { resolveFeatureConfig } from '../../config';
+import { hasConcreteEnvValue } from '../../agentRuntime/envCredentialSources';
 import { LLM_REDACTION_VERSION, hashSha256, redactTextForLLM } from '../../utils/llmPrivacy';
 import {
   ModelProvider,
@@ -41,87 +42,94 @@ function normalizeDeepSeekBaseUrl(baseUrl: string): string {
     .replace(/\/v1$/i, '');
 }
 
-// 默认模型配置
-const DEFAULT_MODELS: ModelProfile[] = [
-  {
-    id: 'deepseek-chat',
-    provider: 'deepseek',
-    model: DEFAULT_DEEPSEEK_CHAT_MODEL,
-    strengths: ['reasoning', 'coding', 'cost'],
-    costPerInputToken: 0.00014,
-    costPerOutputToken: 0.00028,
-    avgLatencyMs: 1500,
-    maxTokens: 8192,
-    supportsJSON: true,
-    supportsStreaming: true,
-    enabled: true,
-  },
-  {
-    id: 'deepseek-reasoner',
-    provider: 'deepseek',
-    model: DEFAULT_DEEPSEEK_REASONING_MODEL,
-    strengths: ['reasoning', 'coding'],
-    costPerInputToken: 0.00014,
-    costPerOutputToken: 0.00028,
-    avgLatencyMs: 1800,
-    maxTokens: 8192,
-    supportsJSON: true,
-    supportsStreaming: true,
-    enabled: true,
-  },
-  {
-    id: 'deepseek-coder',
-    provider: 'deepseek',
-    model: 'deepseek-coder',
-    strengths: ['coding', 'cost'],
-    costPerInputToken: 0.00014,
-    costPerOutputToken: 0.00028,
-    avgLatencyMs: 1200,
-    maxTokens: 8192,
-    supportsJSON: true,
-    supportsStreaming: true,
-    enabled: true,
-  },
-  {
-    id: 'claude-sonnet',
-    provider: 'anthropic',
-    model: 'claude-sonnet-4-20250514',
-    strengths: ['reasoning', 'coding'],
-    costPerInputToken: 0.003,
-    costPerOutputToken: 0.015,
-    avgLatencyMs: 2000,
-    maxTokens: 8192,
-    supportsJSON: true,
-    supportsStreaming: true,
-    enabled: false, // 默认禁用，需要配置 API key
-  },
-  {
-    id: 'claude-haiku',
-    provider: 'anthropic',
-    model: 'claude-haiku-4-20250514',
-    strengths: ['speed', 'cost'],
-    costPerInputToken: 0.00025,
-    costPerOutputToken: 0.00125,
-    avgLatencyMs: 500,
-    maxTokens: 8192,
-    supportsJSON: true,
-    supportsStreaming: true,
-    enabled: false,
-  },
-  {
-    id: 'gpt-4o',
-    provider: 'openai',
-    model: 'gpt-4o',
-    strengths: ['reasoning', 'vision'],
-    costPerInputToken: 0.0025,
-    costPerOutputToken: 0.01,
-    avgLatencyMs: 1800,
-    maxTokens: 4096,
-    supportsJSON: true,
-    supportsStreaming: true,
-    enabled: false,
-  },
-];
+// 默认模型配置。默认只启用真实配置了凭据的 provider，避免无 DeepSeek key 时
+// legacy ModelRouter 路径仍然先走 deepseek 并抛出 provider-specific 错误。
+function createDefaultModels(): ModelProfile[] {
+  const deepseekEnabled = hasConcreteEnvValue(process.env.DEEPSEEK_API_KEY);
+  const anthropicEnabled = hasConcreteEnvValue(process.env.ANTHROPIC_API_KEY);
+  const openAIEnabled = hasConcreteEnvValue(process.env.OPENAI_API_KEY);
+
+  return [
+    {
+      id: 'deepseek-chat',
+      provider: 'deepseek',
+      model: DEFAULT_DEEPSEEK_CHAT_MODEL,
+      strengths: ['reasoning', 'coding', 'cost'],
+      costPerInputToken: 0.00014,
+      costPerOutputToken: 0.00028,
+      avgLatencyMs: 1500,
+      maxTokens: 8192,
+      supportsJSON: true,
+      supportsStreaming: true,
+      enabled: deepseekEnabled,
+    },
+    {
+      id: 'deepseek-reasoner',
+      provider: 'deepseek',
+      model: DEFAULT_DEEPSEEK_REASONING_MODEL,
+      strengths: ['reasoning', 'coding'],
+      costPerInputToken: 0.00014,
+      costPerOutputToken: 0.00028,
+      avgLatencyMs: 1800,
+      maxTokens: 8192,
+      supportsJSON: true,
+      supportsStreaming: true,
+      enabled: deepseekEnabled,
+    },
+    {
+      id: 'deepseek-coder',
+      provider: 'deepseek',
+      model: 'deepseek-coder',
+      strengths: ['coding', 'cost'],
+      costPerInputToken: 0.00014,
+      costPerOutputToken: 0.00028,
+      avgLatencyMs: 1200,
+      maxTokens: 8192,
+      supportsJSON: true,
+      supportsStreaming: true,
+      enabled: deepseekEnabled,
+    },
+    {
+      id: 'claude-sonnet',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-20250514',
+      strengths: ['reasoning', 'coding'],
+      costPerInputToken: 0.003,
+      costPerOutputToken: 0.015,
+      avgLatencyMs: 2000,
+      maxTokens: 8192,
+      supportsJSON: true,
+      supportsStreaming: true,
+      enabled: anthropicEnabled,
+    },
+    {
+      id: 'claude-haiku',
+      provider: 'anthropic',
+      model: 'claude-haiku-4-20250514',
+      strengths: ['speed', 'cost'],
+      costPerInputToken: 0.00025,
+      costPerOutputToken: 0.00125,
+      avgLatencyMs: 500,
+      maxTokens: 8192,
+      supportsJSON: true,
+      supportsStreaming: true,
+      enabled: anthropicEnabled,
+    },
+    {
+      id: 'gpt-4o',
+      provider: 'openai',
+      model: 'gpt-4o',
+      strengths: ['reasoning', 'vision'],
+      costPerInputToken: 0.0025,
+      costPerOutputToken: 0.01,
+      avgLatencyMs: 1800,
+      maxTokens: 4096,
+      supportsJSON: true,
+      supportsStreaming: true,
+      enabled: openAIEnabled,
+    },
+  ];
+}
 
 // 任务类型到模型强项的映射
 const TASK_STRENGTH_MAPPING: Record<TaskType, ModelStrength[]> = {
@@ -136,26 +144,27 @@ const TASK_STRENGTH_MAPPING: Record<TaskType, ModelStrength[]> = {
   general: ['reasoning'],
 };
 
-const DEFAULT_TASK_MODEL_MAPPING: Partial<Record<TaskType, string>> = {
-  intent_understanding: 'deepseek-chat',
-  planning: 'deepseek-chat',
-  synthesis: 'deepseek-chat',
-  evaluation: 'deepseek-chat',
-  sql_generation: 'deepseek-chat',
-  code_analysis: 'deepseek-chat',
-  simple_extraction: 'deepseek-chat',
-  formatting: 'deepseek-chat',
-  general: 'deepseek-chat',
-};
+const DEFAULT_TASK_MODEL_MAPPING: Partial<Record<TaskType, string>> = {};
 
 // 默认配置
 const DEFAULT_CONFIG: Partial<ModelRouterConfig> = {
-  defaultModel: 'deepseek-chat',
-  fallbackChain: ['deepseek-reasoner', 'deepseek-chat'],
+  defaultModel: '',
+  fallbackChain: [],
   enableEnsemble: false,
   ensembleThreshold: 0.8,
   taskModelMapping: DEFAULT_TASK_MODEL_MAPPING,
 };
+
+function createDefaultRouterConfig(
+  models: ModelProfile[],
+): Pick<ModelRouterConfig, 'defaultModel' | 'fallbackChain' | 'taskModelMapping'> {
+  const enabledModelIds = models.filter(model => model.enabled).map(model => model.id);
+  return {
+    defaultModel: enabledModelIds[0] || '',
+    fallbackChain: enabledModelIds,
+    taskModelMapping: DEFAULT_TASK_MODEL_MAPPING,
+  };
+}
 
 /**
  * 模型路由器实现
@@ -189,13 +198,15 @@ export class ModelRouter extends EventEmitter {
     super();
 
     // 初始化模型列表
-    const models = config.models || DEFAULT_MODELS;
+    const models = config.models || createDefaultModels();
+
+    const defaultRouterConfig = createDefaultRouterConfig(models);
 
     this.config = {
       models,
-      defaultModel: config.defaultModel || DEFAULT_CONFIG.defaultModel!,
-      taskModelMapping: config.taskModelMapping || DEFAULT_CONFIG.taskModelMapping!,
-      fallbackChain: config.fallbackChain || DEFAULT_CONFIG.fallbackChain!,
+      defaultModel: config.defaultModel ?? defaultRouterConfig.defaultModel,
+      taskModelMapping: config.taskModelMapping ?? defaultRouterConfig.taskModelMapping,
+      fallbackChain: config.fallbackChain ?? defaultRouterConfig.fallbackChain,
       enableEnsemble: config.enableEnsemble ?? false,
       ensembleThreshold: config.ensembleThreshold ?? 0.8,
     };

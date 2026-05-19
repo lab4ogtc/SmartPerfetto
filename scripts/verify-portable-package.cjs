@@ -273,6 +273,12 @@ function frontendRootForTarget(target) {
     : 'frontend';
 }
 
+function backendRootForTarget(target) {
+  return target.os === 'macos'
+    ? 'SmartPerfetto.app/Contents/Resources/backend'
+    : 'backend';
+}
+
 function assertEntryExists(entries, packageName, rel) {
   const entry = `${packageName}/${rel}`;
   assert(entries.includes(entry), `Missing package entry: ${entry}`);
@@ -404,11 +410,66 @@ function main() {
 
   const frontendBundleEntry = `${packageName}/${frontendRoot}/${frontendStableVersion}/frontend_bundle.js`;
   const frontendBundleText = readExtractedText(extractedRoot, frontendBundleEntry);
+  for (const forbidden of [
+    "regexp_extract(r.name, 'Lock contention on (?:a )?(.*) lock')",
+    'lock_name FROM android_monitor_contention',
+    'SELECT lock_name FROM android_monitor_contention',
+  ]) {
+    assert(
+      !frontendBundleText.includes(forbidden),
+      `Frontend bundle contains stale AndroidLockContention SQL: ${forbidden}`,
+    );
+  }
   const referencedSyntaqliteAssets = [...frontendBundleText.matchAll(/["'](assets\/syntaqlite-[^"']+)["']/g)]
     .map(match => match[1]);
   for (const rel of [...new Set(referencedSyntaqliteAssets)].sort()) {
     const entry = assertEntryExists(entries, packageName, `${frontendRoot}/${rel}`);
     assertExtractedEntryNonEmpty(extractedRoot, entry);
+  }
+
+  const engineBundleEntry = `${packageName}/${frontendRoot}/${frontendStableVersion}/engine_bundle.js`;
+  const engineBundleText = readExtractedText(extractedRoot, engineBundleEntry);
+  assert(
+    engineBundleText.includes('function requireTrace_processor()') &&
+      engineBundleText.includes('return locateFile("trace_processor.wasm")'),
+    `${engineBundleEntry} is missing classic trace_processor.wasm loader glue`,
+  );
+
+  const backendRoot = backendRootForTarget(target);
+  const backendDistRoot = `${packageName}/${backendRoot}/dist/`;
+  const staleBackendEntries = entries.filter(entry => (
+    entry.startsWith(backendDistRoot) &&
+    (
+      entry.includes('traceAnalysisSkill') ||
+      entry.includes('traceAnalysisSkillConfig') ||
+      entry.includes('advancedAIRoutes') ||
+      entry.includes('autoAnalysis') ||
+      entry.includes('advancedAIController') ||
+      entry.includes('autoAnalysisController') ||
+      entry.includes('advancedAIService') ||
+      entry.includes('autoAnalysisService') ||
+      entry.includes('aiService') ||
+      entry.includes('enterpriseLegacyAiGuard')
+    )
+  ));
+  assert(
+    staleBackendEntries.length === 0,
+    `Package contains stale legacy AI backend artifacts: ${staleBackendEntries.join(', ')}`,
+  );
+  for (const entry of entries) {
+    if (!entry.startsWith(backendDistRoot) || !/\.(js|mjs|cjs|json|map|d\.ts)$/.test(entry)) continue;
+    const text = readExtractedText(extractedRoot, entry);
+    for (const forbidden of [
+      'TraceAnalysisSkill',
+      'traceAnalysisSkill',
+      'trace-analysis-system',
+      'TRACE_ANALYSIS',
+      'DeepSeek API not configured on server',
+      '/api/advanced-ai',
+      '/api/auto-analysis',
+    ]) {
+      assert(!text.includes(forbidden), `Package backend runtime contains stale provider-specific code in ${entry}: ${forbidden}`);
+    }
   }
 
   for (const rel of target.binaryRequired) {

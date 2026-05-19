@@ -833,7 +833,7 @@ export class HTMLReportGenerator {
     <!-- Footer -->
     <div class="footer" style="text-align: center; padding: 24px; color: var(--text-light);">
       <p>由 SmartPerfetto AI 分析引擎生成</p>
-      <p style="margin-top: 4px; font-size: 12px;">Powered by Perfetto + DeepSeek</p>
+      <p style="margin-top: 4px; font-size: 12px;">Powered by Perfetto + SmartPerfetto AI</p>
     </div>
   </div>
 

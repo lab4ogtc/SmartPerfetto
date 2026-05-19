@@ -107,6 +107,9 @@ describe('ModelRouter', () => {
   let router: ModelRouter;
   let testModels: ModelProfile[];
   const originalEnterprise = process.env.SMARTPERFETTO_ENTERPRISE;
+  const originalDeepSeekApiKey = process.env.DEEPSEEK_API_KEY;
+  const originalOpenAIApiKey = process.env.OPENAI_API_KEY;
+  const originalAnthropicApiKey = process.env.ANTHROPIC_API_KEY;
 
   beforeEach(() => {
     delete process.env.SMARTPERFETTO_ENTERPRISE;
@@ -128,6 +131,56 @@ describe('ModelRouter', () => {
     } else {
       process.env.SMARTPERFETTO_ENTERPRISE = originalEnterprise;
     }
+    if (originalDeepSeekApiKey === undefined) {
+      delete process.env.DEEPSEEK_API_KEY;
+    } else {
+      process.env.DEEPSEEK_API_KEY = originalDeepSeekApiKey;
+    }
+    if (originalOpenAIApiKey === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = originalOpenAIApiKey;
+    }
+    if (originalAnthropicApiKey === undefined) {
+      delete process.env.ANTHROPIC_API_KEY;
+    } else {
+      process.env.ANTHROPIC_API_KEY = originalAnthropicApiKey;
+    }
+  });
+
+  describe('default provider gating', () => {
+    it('does not enable DeepSeek defaults when DEEPSEEK_API_KEY is absent', () => {
+      delete process.env.DEEPSEEK_API_KEY;
+      delete process.env.OPENAI_API_KEY;
+      delete process.env.ANTHROPIC_API_KEY;
+
+      const defaultRouter = new ModelRouter();
+
+      expect(defaultRouter.getEnabledModels()).toEqual([]);
+      expect(() => defaultRouter.routeByTask('general')).toThrow('No available models');
+    });
+
+    it('routes default calls to OpenAI when only OPENAI_API_KEY is configured', () => {
+      delete process.env.DEEPSEEK_API_KEY;
+      process.env.OPENAI_API_KEY = 'sk-test-openai';
+      delete process.env.ANTHROPIC_API_KEY;
+
+      const defaultRouter = new ModelRouter();
+      const model = defaultRouter.routeByTask('general');
+
+      expect(model.provider).toBe('openai');
+      expect(defaultRouter.getEnabledModels().some(m => m.provider === 'deepseek')).toBe(false);
+    });
+
+    it('enables DeepSeek defaults only when DEEPSEEK_API_KEY is configured', () => {
+      process.env.DEEPSEEK_API_KEY = 'sk-test-deepseek';
+      delete process.env.OPENAI_API_KEY;
+      delete process.env.ANTHROPIC_API_KEY;
+
+      const defaultRouter = new ModelRouter();
+
+      expect(defaultRouter.getEnabledModels().some(m => m.provider === 'deepseek')).toBe(true);
+    });
   });
 
   // ===========================================================================

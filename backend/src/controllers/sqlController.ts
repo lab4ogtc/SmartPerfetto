@@ -3,14 +3,14 @@
 // This file is part of SmartPerfetto. See LICENSE for details.
 
 import { Request, Response } from 'express';
-import AIService from '../services/aiService';
+import EnhancedAIService from '../services/enhancedAIService';
 import { GenerateSqlRequest, GenerateSqlResponse, ErrorResponse } from '../types';
 
 class SqlController {
-  private aiService: AIService;
+  private aiService: EnhancedAIService;
 
   constructor() {
-    this.aiService = new AIService();
+    this.aiService = new EnhancedAIService();
   }
 
   generateSql = async (req: Request, res: Response) => {
@@ -34,10 +34,18 @@ class SqlController {
         return res.status(400).json(error);
       }
 
-      const result: GenerateSqlResponse = await this.aiService.generatePerfettoSQL({
+      const generated = await this.aiService.generatePerfettoSQL({
         query,
         context,
       });
+      const result: GenerateSqlResponse = {
+        sql: generated.sql,
+        explanation: generated.explanation,
+        examples: [
+          ...generated.validation.warnings,
+          ...generated.validation.suggestions,
+        ],
+      };
 
       res.json(result);
     } catch (error) {

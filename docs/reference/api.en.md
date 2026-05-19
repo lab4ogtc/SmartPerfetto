@@ -99,8 +99,5 @@ The following APIs still exist, but new integrations should prefer `/api/agent/v
 
 - `/api/perfetto-sql/*`
 - `/api/template-analysis/*`
-- `/api/advanced-ai/*`
-- `/api/auto-analysis/*`
-- `/api/agent/v1/llm/*`
 
-The legacy agent API base is rejected by `rejectLegacyAgentApi` to avoid new external use of deprecated paths.
+The legacy agent API base is rejected by `rejectLegacyAgentApi` to avoid new external use of deprecated paths. Legacy direct AI routes such as `/api/advanced-ai/*`, `/api/auto-analysis/*`, and `/api/agent/v1/llm/*` have been removed; use `/api/agent/v1/analyze`.

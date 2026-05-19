@@ -72,16 +72,14 @@
 
 ### 2.5 Legacy AI 路径未列入触点
 
-文档第 21 节"代码触点"漏列了几个 legacy AI 入口：
+文档第 21 节"代码触点"曾漏列几个 legacy AI 入口：
 
-- `/api/agent/v1/llm` DeepSeek proxy（`agentRoutes.ts`）
-- `/api/advanced-ai` in-memory OpenAI sessions（`advancedAIRoutes.ts`）
-- `/api/auto-analysis`（`autoAnalysis.ts`）
+- `/api/advanced-ai` in-memory OpenAI sessions（已移除）
+- `/api/auto-analysis`（已移除）
 - `agent/core/ModelRouter` 的 DeepSeek 默认路径
-- `aiChatRoutes.ts`
 
 这些都**没有** RequestContext / ProviderSnapshot / owner guard 概念。在企业版部署时必须明示处置策略：
-- 直接废弃（企业模式下禁用对应 route）
+- 直接废弃（已移除对应 route）
 - 接入新 RequestContext + ProviderSnapshot + owner guard
 
 → **修正第 21 节**：列入所有 legacy 入口，每个都标注处置策略。
@@ -333,13 +331,11 @@ P-C 退役：删除旧 JSON 写入路径，DB 唯一权威
 
 | 入口 | 文件 | 当前状态 | 处置选项 |
 |---|---|---|---|
-| `/api/agent/v1/llm` DeepSeek proxy | `agentRoutes.ts` | 无 RequestContext | 废弃 / 接入 |
-| `/api/advanced-ai` | `advancedAIRoutes.ts` | in-memory OpenAI sessions | 废弃（推荐）|
-| `/api/auto-analysis` | `autoAnalysis.ts` | 无 RequestContext | 废弃 |
-| `/api/agent/v1/aiChat` | `aiChatRoutes.ts` | 无 ProviderSnapshot | 接入 ProviderSnapshot |
+| `/api/advanced-ai` | 已移除 | 原 in-memory OpenAI sessions | 统一走 agent v3 |
+| `/api/auto-analysis` | 已移除 | 原无 RequestContext | 统一走 agent v3 |
 | `agent/core/ModelRouter` DeepSeek 路径 | `agent/core/` | 全局配置 | 接入 ProviderSnapshot |
 
-→ **修正第 21 节代码触点**：列入所有 legacy 入口，每条标注处置策略。**推荐**：v1 全部废弃（企业模式下 route 直接 `404`），减少 surface area。
+→ **修正第 21 节代码触点**：列入所有 legacy 入口，每条标注处置策略。当前 `/api/advanced-ai` 与 `/api/auto-analysis` 已移除，减少 surface area。
 
 ### 5.2 Skill 多租户化【P0】
 

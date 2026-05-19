@@ -62,9 +62,9 @@ describe('legacy API compatibility headers', () => {
       success: false,
       error: 'Legacy agent API has been removed',
       migration: {
-        successor: '/api/agent/v1/llm/completions',
+        successor: '/api/agent/v1/analyze',
         root: '/api/agent/v1',
-        llm: '/api/agent/v1/llm',
+        analyze: '/api/agent/v1/analyze',
       },
     });
 

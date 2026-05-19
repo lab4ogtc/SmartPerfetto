@@ -86,12 +86,11 @@
 - [x] 5.5 Tenant tombstone + 7 天硬删窗口 + async purge + audit proof（§16.3）
 - [x] 5.6 Custom skill v1 处置（§14.3）：禁用 write endpoint 或修 loader 闭环
 - [x] 5.7 Legacy AI route 处置（§14.4 表）
-  - [x] 5.7.1 `/api/agent/v1/llm` DeepSeek proxy
-  - [x] 5.7.2 `/api/advanced-ai`
-  - [x] 5.7.3 `/api/auto-analysis`
-  - [x] 5.7.4 `/api/agent/v1/aiChat`
-  - [x] 5.7.5 `agent/core/ModelRouter` DeepSeek 全局 provider 路径
-  - [x] 5.7.6 `agentv2` fallback
+  - [x] 5.7.1 移除 `/api/agent/v1/llm` direct LLM proxy
+  - [x] 5.7.2 移除 `/api/advanced-ai`
+  - [x] 5.7.3 移除 `/api/auto-analysis`
+  - [x] 5.7.4 `agent/core/ModelRouter` DeepSeek 全局 provider 路径
+  - [x] 5.7.5 `agentv2` fallback
 - [x] 5.8 管理员运行时 dashboard：active leases / RSS / queue length / events / LLM cost
 - [x] 5.9 安全审计：ID 枚举、跨 tenant、无权限 provider/report/memory 访问
 
@@ -944,17 +943,15 @@ v1 要求：
 
 | 入口 | 文件 | v1 处置 |
 |---|---|---|
-| `/api/agent/v1/llm` DeepSeek proxy | `backend/src/routes/agentRoutes.ts` | 企业模式禁用，或接入 ProviderSnapshot 后再开放 |
-| `/api/advanced-ai` | `backend/src/routes/advancedAIRoutes.ts` | 企业模式禁用 |
-| `/api/auto-analysis` | `backend/src/routes/autoAnalysis.ts` | 企业模式禁用 |
-| `/api/agent/v1/aiChat` | `backend/src/routes/aiChatRoutes.ts` | 接入 ProviderSnapshot 和 RequestContext，否则禁用 |
+| `/api/advanced-ai` | 已移除 | 统一走 `/api/agent/v1/analyze` |
+| `/api/auto-analysis` | 已移除 | 统一走 `/api/agent/v1/analyze` |
 | `agent/core/ModelRouter` DeepSeek 路径 | `backend/src/agent/core/` | 接入 ProviderSnapshot，禁止全局 provider config |
 | `agentv2` fallback | `backend/src/agentv2` 已处于 legacy/deprecated 方向 | 企业模式禁用 |
 
 当前实现：
 
-- `/api/agent/v1/llm/*`、`/api/advanced-ai/*`、`/api/auto-analysis/*` 在 `SMARTPERFETTO_ENTERPRISE=true` 时返回 `404` + `disabled_in_enterprise_mode`，不再进入 legacy DeepSeek proxy / advanced AI / auto analysis controller。
-- `backend/src/routes/aiChatRoutes.ts` 是当前 `/api/agent/v1/llm` 的实际挂载实现；代码库中没有独立 `/api/agent/v1/aiChat` 挂载，按同一 legacy chat proxy surface 处置。
+- `/api/agent/v1/llm/*` 已移除；前端选区分析统一走 `/api/agent/v1/analyze`。
+- `/api/advanced-ai/*`、`/api/auto-analysis/*` 已从后端挂载和源码中移除，不再保留 non-agent-v3 direct AI surface。
 - `ModelRouter` 在企业模式下拒绝 `deepseek` provider 调用，避免走 `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL` 这类全局 provider config；企业路径必须走 ProviderSnapshot-backed runtime。
 - 当前源码树无 `backend/src/agentv2` 文件可挂载，保留为已退役状态。
 
@@ -1220,9 +1217,8 @@ request delete
 | `backend/src/services/caseLibrary.ts`, `caseGraph.ts` | tenant/workspace scope |
 | `analysisPatternMemory` / `ragVectorStore` | 隐性全局状态审计与 scope |
 | `backend/src/routes/skillAdminRoutes.ts` | 企业模式禁用 custom skill write 或修 loader 闭环 |
-| `backend/src/routes/advancedAIRoutes.ts` | 企业模式禁用或接入 RequestContext/ProviderSnapshot |
-| `backend/src/routes/autoAnalysis.ts` | 企业模式禁用或接入新模型 |
-| `backend/src/routes/aiChatRoutes.ts` | 接入 ProviderSnapshot 或禁用 |
+| `/api/advanced-ai` | 已移除，统一走 agent v3 |
+| `/api/auto-analysis` | 已移除，统一走 agent v3 |
 | `backend/src/agent/core/ModelRouter` | 禁止全局 DeepSeek provider 路径 |
 
 ## 22. 建议第一里程碑

@@ -165,8 +165,5 @@ Admin path: `/api/admin`
 
 - `/api/perfetto-sql/*`
 - `/api/template-analysis/*`
-- `/api/advanced-ai/*`
-- `/api/auto-analysis/*`
-- `/api/agent/v1/llm/*`
 
-legacy agent API base 会被 `rejectLegacyAgentApi` 拒绝，避免外部继续接入废弃路径。
+legacy agent API base 会被 `rejectLegacyAgentApi` 拒绝，避免外部继续接入废弃路径。`/api/advanced-ai/*`、`/api/auto-analysis/*` 和 `/api/agent/v1/llm/*` 这类旧 direct AI route 已移除；统一使用 `/api/agent/v1/analyze`。

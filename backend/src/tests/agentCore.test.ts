@@ -237,9 +237,19 @@ describe('CircuitBreaker', () => {
 
 describe('ModelRouter', () => {
   let modelRouter: ModelRouter;
+  const originalDeepSeekApiKey = process.env.DEEPSEEK_API_KEY;
 
   beforeEach(() => {
+    process.env.DEEPSEEK_API_KEY = 'test-deepseek-key';
     modelRouter = new ModelRouter();
+  });
+
+  afterEach(() => {
+    if (originalDeepSeekApiKey === undefined) {
+      delete process.env.DEEPSEEK_API_KEY;
+    } else {
+      process.env.DEEPSEEK_API_KEY = originalDeepSeekApiKey;
+    }
   });
 
   describe('task routing', () => {

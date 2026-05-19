@@ -19,8 +19,6 @@ import { resolveFeatureConfig, serverConfig } from './config';
 import sqlRoutes from './routes/sql';
 import simpleTraceRoutes from './routes/simpleTraceRoutes';
 import perfettoLocalRoutes from './routes/perfettoLocalRoutes';
-import aiChatRoutes from './routes/aiChatRoutes';
-import autoAnalysisRoutes from './routes/autoAnalysis';
 import sessionRoutes from './routes/sessionRoutes';
 import perfettoSqlRoutes from './routes/perfettoSqlRoutes';
 import exportRoutes from './routes/exportRoutes';
@@ -30,7 +28,6 @@ import skillAdminRoutes from './routes/skillAdminRoutes';
 import strategyAdminRoutes from './routes/strategyAdminRoutes';
 import reportRoutes from './routes/reportRoutes';
 import agentRoutes from './routes/agentRoutes';
-import advancedAIRoutes from './routes/advancedAIRoutes';
 import providerRoutes from './routes/providerRoutes';
 import flamegraphRoutes from './routes/flamegraphRoutes';
 import criticalPathRoutes from './routes/criticalPathRoutes';
@@ -49,10 +46,6 @@ import comparisonRoutes from './routes/comparisonRoutes';
 import traceProcessorProxyRoutes, { handleTraceProcessorProxyUpgrade } from './routes/traceProcessorProxyRoutes';
 import {authenticate} from './middleware/auth';
 import {
-  assertTraceAnalysisConfiguredForStartup,
-  getTraceAnalysisConfigurationStatus,
-} from './services/traceAnalysisSkill';
-import {
   getClaudeRuntimeDiagnostics,
 } from './agentv3/claudeConfig';
 import {
@@ -66,7 +59,6 @@ import {
 } from './services/legacyApiTelemetry';
 import {
   AGENT_API_V1_BASE,
-  AGENT_API_V1_LLM_BASE,
   LEGACY_AGENT_API_BASE,
   markLegacyApi,
   rejectLegacyAgentApi,
@@ -90,9 +82,6 @@ const workspaceRouteContextMiddleware: express.RequestHandler[] = [
   authenticate,
   requireWorkspaceRouteContext,
 ];
-
-// Fail fast for trace-analysis-specific credentials when strict startup validation is enabled.
-assertTraceAnalysisConfiguredForStartup();
 
 // Middleware — dynamic CORS: allow any origin whose port is 10000 (Perfetto frontend)
 app.use(cors({
@@ -138,7 +127,6 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     environment: NODE_ENV,
     version: getSmartPerfettoVersion(),
-    traceAnalysis: getTraceAnalysisConfigurationStatus(),
     aiEngine: {
       runtime: runtimeSelection.kind,
       model: selectedDiagnostics.model,
@@ -169,9 +157,7 @@ app.get('/health', (req, res) => {
 app.get('/debug', (req, res) => {
   const legacyUsage = getLegacyApiUsageSnapshot(10);
   res.json({
-    hasDeepSeekKey: !!process.env.DEEPSEEK_API_KEY,
-    deepSeekBaseUrl: process.env.DEEPSEEK_BASE_URL,
-    deepSeekModel: process.env.DEEPSEEK_MODEL,
+    aiCredentialSources: collectEnvCredentialSources(process.env, 'health'),
     cwd: process.cwd(),
     legacyAgentApiUsage: legacyUsage,
   });
@@ -225,16 +211,7 @@ app.use(
   ),
   simpleTraceRoutes,
 );
-app.use(
-  AGENT_API_V1_LLM_BASE,
-  markLegacyApi(
-    '/api/workspaces/:workspaceId/agent/llm',
-    'Legacy agent LLM API is deprecated. Migrate to workspace-scoped agent APIs',
-  ),
-  aiChatRoutes,
-);
 app.use('/api/perfetto', perfettoLocalRoutes);
-app.use('/api/auto-analysis', autoAnalysisRoutes);
 app.use('/api/sessions', sessionRoutes);
 app.use('/api/perfetto-sql', perfettoSqlRoutes);
 app.use('/api/export', exportRoutes);
@@ -259,7 +236,6 @@ app.use(
   ),
   agentRoutes,
 );
-app.use('/api/advanced-ai', advancedAIRoutes);
 app.use(
   '/api/v1/providers',
   markLegacyApi(

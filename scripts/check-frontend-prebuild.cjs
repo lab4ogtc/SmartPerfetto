@@ -116,11 +116,29 @@ if (!exists(indexPath)) {
         if (exists(bundlePath) && fileSize(bundlePath) < 100_000) {
           fail(`${path.relative(root, bundlePath)} looks like a stub (${fileSize(bundlePath)} bytes)`);
         }
+        if (bundle === 'engine_bundle.js' && exists(bundlePath)) {
+          const bundleText = readText(bundlePath);
+          if (
+            !bundleText.includes('function requireTrace_processor()') ||
+            !bundleText.includes('return locateFile("trace_processor.wasm")')
+          ) {
+            fail(`${path.relative(root, bundlePath)} is missing classic trace_processor.wasm loader glue`);
+          }
+        }
       }
 
       const bundlePath = path.join(versionDir, 'frontend_bundle.js');
       if (exists(bundlePath)) {
         const bundleText = readText(bundlePath);
+        for (const forbidden of [
+          "regexp_extract(r.name, 'Lock contention on (?:a )?(.*) lock')",
+          'lock_name FROM android_monitor_contention',
+          'SELECT lock_name FROM android_monitor_contention',
+        ]) {
+          if (bundleText.includes(forbidden)) {
+            fail(`frontend bundle contains stale AndroidLockContention SQL: ${forbidden}`);
+          }
+        }
         const requiredTopLevelSyntaqliteAssets = [
           'assets/syntaqlite-perfetto.wasm',
           'assets/syntaqlite-runtime.js',

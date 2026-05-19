@@ -75,6 +75,40 @@ fi
 
 echo "Updating frontend/ ..."
 
+is_usable_runtime_bundle() {
+  local bundle="$1"
+  local candidate="$2"
+
+  if [ ! -f "$candidate" ]; then
+    return 1
+  fi
+  if [ "$(wc -c < "$candidate")" -lt 100000 ]; then
+    return 1
+  fi
+  if [ "$bundle" = "engine_bundle.js" ] && ! grep -q 'function requireTrace_processor()' "$candidate"; then
+    return 1
+  fi
+  if [ "$bundle" = "engine_bundle.js" ] && ! grep -q 'return locateFile("trace_processor.wasm")' "$candidate"; then
+    return 1
+  fi
+
+  return 0
+}
+
+# Keep the current checked-in engine bundles available while rsync replaces the
+# versioned directory. Some --only-wasm-memory64 builds emit a partial
+# engine_bundle.js that is large enough to pass a size-only stub check but lacks
+# the classic trace_processor.wasm JS glue required by older runtime paths.
+BUNDLE_BACKUP_DIR="$(mktemp -d)"
+trap 'rm -rf "$BUNDLE_BACKUP_DIR"' EXIT
+if [ -d "$FRONTEND_DIR/$VERSION" ]; then
+  for BUNDLE in engine_bundle.js traceconv_bundle.js; do
+    if [ -f "$FRONTEND_DIR/$VERSION/$BUNDLE" ]; then
+      cp "$FRONTEND_DIR/$VERSION/$BUNDLE" "$BUNDLE_BACKUP_DIR/$BUNDLE"
+    fi
+  done
+fi
+
 # Copy top-level files
 cp "$DIST_DIR/index.html"          "$FRONTEND_DIR/index.html"
 inject_smartperfetto_static_assets "$FRONTEND_DIR/index.html"
@@ -126,13 +160,35 @@ done
 # --only-wasm-memory64 are ~38KB and must not be used.
 for BUNDLE in engine_bundle.js traceconv_bundle.js; do
   TARGET="$FRONTEND_DIR/$VERSION/$BUNDLE"
+  NEEDS_RESTORE=false
   if [ ! -f "$TARGET" ] || [ "$(wc -c < "$TARGET")" -lt 100000 ]; then
-    PREV=$(find "$FRONTEND_DIR" -maxdepth 2 -name "$BUNDLE" ! -path "$TARGET" 2>/dev/null | head -1)
+    NEEDS_RESTORE=true
+  elif [ "$BUNDLE" = "engine_bundle.js" ] && ! grep -q 'function requireTrace_processor()' "$TARGET"; then
+    NEEDS_RESTORE=true
+  elif [ "$BUNDLE" = "engine_bundle.js" ] && ! grep -q 'return locateFile("trace_processor.wasm")' "$TARGET"; then
+    NEEDS_RESTORE=true
+  elif is_usable_runtime_bundle "$BUNDLE" "$BUNDLE_BACKUP_DIR/$BUNDLE" && ! cmp -s "$TARGET" "$BUNDLE_BACKUP_DIR/$BUNDLE"; then
+    NEEDS_RESTORE=true
+  fi
+  if [ "$NEEDS_RESTORE" = true ]; then
+    PREV=""
+    if is_usable_runtime_bundle "$BUNDLE" "$BUNDLE_BACKUP_DIR/$BUNDLE"; then
+      PREV="$BUNDLE_BACKUP_DIR/$BUNDLE"
+    else
+      while IFS= read -r candidate; do
+        if is_usable_runtime_bundle "$BUNDLE" "$candidate"; then
+          PREV="$candidate"
+          break
+        fi
+      done < <(find "$FRONTEND_DIR" -maxdepth 2 -name "$BUNDLE" ! -path "$TARGET" 2>/dev/null)
+    fi
     if [ -n "$PREV" ]; then
       echo "  Restoring $BUNDLE from previous build: $(basename "$(dirname "$PREV")")"
       cp "$PREV" "$TARGET"
     else
-      echo "  ⚠️  $BUNDLE not found in any previous version — a full GN+ninja build may be required."
+      echo "ERROR: $BUNDLE is incomplete and no usable previous bundle was found." >&2
+      echo "       Run a full frontend build that emits classic wasm loader glue before updating frontend/." >&2
+      exit 1
     fi
   fi
 done

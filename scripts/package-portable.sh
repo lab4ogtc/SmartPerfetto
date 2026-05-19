@@ -241,6 +241,71 @@ copy_backend_payload() {
   cp "$PROJECT_ROOT/backend/LICENSE" "$resources_dir/backend/LICENSE"
 }
 
+assert_backend_runtime_clean() {
+  node - "$PROJECT_ROOT/backend/dist" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+
+const dist = process.argv[2];
+const forbiddenNames = [
+  'traceAnalysisSkill',
+  'traceAnalysisSkillConfig',
+  'advancedAIRoutes',
+  'autoAnalysis',
+  'advancedAIController',
+  'autoAnalysisController',
+  'advancedAIService',
+  'autoAnalysisService',
+  'aiService',
+  'enterpriseLegacyAiGuard',
+];
+const forbiddenText = [
+  'TraceAnalysisSkill',
+  'traceAnalysisSkill',
+  'trace-analysis-system',
+  'TRACE_ANALYSIS',
+  'DeepSeek API not configured on server',
+  '/api/advanced-ai',
+  '/api/auto-analysis',
+];
+
+function fail(message) {
+  console.error(`ERROR: ${message}`);
+  process.exit(1);
+}
+
+if (!fs.existsSync(dist)) {
+  fail(`backend runtime is missing: ${dist}`);
+}
+
+function walk(dir) {
+  const out = [];
+  for (const entry of fs.readdirSync(dir, {withFileTypes: true})) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...walk(full));
+    } else {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+for (const file of walk(dist)) {
+  const rel = path.relative(dist, file);
+  if (forbiddenNames.some(name => rel.includes(name))) {
+    fail(`backend runtime contains stale legacy AI artifact: ${rel}`);
+  }
+  if (!/\.(js|mjs|cjs|json|map|d\.ts)$/.test(rel)) continue;
+  const text = fs.readFileSync(file, 'utf8');
+  const forbidden = forbiddenText.find(value => text.includes(value));
+  if (forbidden) {
+    fail(`backend runtime contains stale provider-specific code in ${rel}: ${forbidden}`);
+  }
+}
+NODE
+}
+
 install_target_dependencies() {
   local target="$1"
   local backend_dir="$2"
@@ -710,6 +775,8 @@ if [ "$SKIP_BACKEND_BUILD" = false ]; then
   echo "Building backend runtime..."
   (cd "$PROJECT_ROOT/backend" && npm run build)
 fi
+echo "Checking backend runtime..."
+assert_backend_runtime_clean
 
 mkdir -p "$OUT_ROOT" "$CACHE_DIR"
 for target in "${TARGETS[@]}"; do
