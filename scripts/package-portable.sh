@@ -313,11 +313,12 @@ install_target_dependencies() {
   local target="$1"
   local backend_dir="$2"
   local node_runtime_version="$3"
-  local npm_os npm_cpu binary_kind claude_rel claude_bin better_sqlite3_node
+  local npm_os npm_cpu binary_kind claude_rel claude_bin claude_pkg_name better_sqlite3_node
   npm_os="$(target_field "$target" npm_os)"
   npm_cpu="$(target_field "$target" npm_cpu)"
   binary_kind="$(target_field "$target" binary_kind)"
   claude_rel="$(target_field "$target" claude_pkg)"
+  claude_pkg_name="$(node -e "const rel=process.argv[1]; console.log(rel.startsWith('@') ? rel.split('/').slice(0, 2).join('/') : rel.split('/')[0]);" "$claude_rel")"
 
   echo "Installing $target production dependencies..."
   (
@@ -352,6 +353,25 @@ install_target_dependencies() {
   assert_binary_kind "$better_sqlite3_node" "better-sqlite3 native module" "$binary_kind"
 
   claude_bin="$backend_dir/node_modules/$claude_rel"
+  if [ ! -f "$claude_bin" ]; then
+    echo "Installing $target Claude Agent SDK native package explicitly..."
+    (
+      cd "$backend_dir"
+      local claude_version pack_dir pack_json pack_file pkg_parent pkg_dest
+      claude_version="$(node -e "console.log(require('./node_modules/@anthropic-ai/claude-agent-sdk/package.json').version)")"
+      pack_dir="$(mktemp -d)"
+      pack_json="$pack_dir/pack.json"
+      npm pack "$claude_pkg_name@$claude_version" --json --pack-destination "$pack_dir" > "$pack_json"
+      pack_file="$(node -e "const path=require('path'); const items=require(process.argv[1]); console.log(path.join(process.argv[2], items[0].filename));" "$pack_json" "$pack_dir")"
+      pkg_parent="$(dirname "node_modules/$claude_pkg_name")"
+      pkg_dest="node_modules/$claude_pkg_name"
+      mkdir -p "$pkg_parent"
+      rm -rf "$pkg_dest"
+      mkdir -p "$pkg_dest"
+      tar -xzf "$pack_file" -C "$pkg_dest" --strip-components=1
+      rm -rf "$pack_dir"
+    )
+  fi
   if [ ! -f "$claude_bin" ]; then
     echo "ERROR: Claude Agent SDK native binary was not installed for $target: $claude_bin" >&2
     exit 1
