@@ -19,7 +19,7 @@ keywords: []
 
 | 用户关注方向 | 推荐路径 | 说明 |
 |-------------|---------|------|
-| **CPU / 调度 / 线程** | `invoke_skill("cpu_analysis")` → 如果发现 throttling → `invoke_skill("thermal_throttling")` | 交叉检查热节流和 CPU 频率 |
+| **CPU / 调度 / 线程** | `invoke_skill("cpu_analysis")` → 需要函数/slice CPU 热点时 `invoke_skill("process_slice_cpu_hotspots", { process_name: "<包名或进程名>" })` → 如果发现 throttling → `invoke_skill("thermal_throttling")` | 用 Running CPU time 区分真实计算热点和 wall-time 阻塞，再交叉检查热节流和 CPU 频率 |
 | **内存 / OOM / 泄漏** | `invoke_skill("memory_analysis")` → 如果有 heap dump → `invoke_skill("android_heap_graph_summary")` → 如果有 LMK → `invoke_skill("lmk_analysis")` → 如果涉及 GPU 内存 → `invoke_skill("dmabuf_analysis")` | 层层深入内存问题；heap graph 用 retained/cumulative size 定位 retainer |
 | **IO / 磁盘 / 存储** | `invoke_skill("block_io_analysis")` 或 `invoke_skill("io_pressure")` | 磁盘 IO 和系统 IO 压力 |
 | **GPU / 渲染** | `invoke_skill("gpu_analysis")` | GPU 频率、利用率、Fence 等待 |

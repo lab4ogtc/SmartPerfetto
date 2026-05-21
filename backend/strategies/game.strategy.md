@@ -100,7 +100,7 @@ invoke_skill("mali_gpu_power_state")
 | CPU 频率下降 | `invoke_skill("thermal_throttling")` | 游戏长时间运行容易触发热节流 |
 | 内存压力 | `invoke_skill("memory_analysis")` | 游戏内存占用大，可能触发 LMK |
 | CPU 调度 | `invoke_skill("cpu_analysis")` | 游戏线程调度到小核会造成帧率波动 |
-| 线程/进程 CPU 利用率 | `invoke_skill("cpu_thread_utilization_period")` / `invoke_skill("cpu_process_utilization_period")` | 判断 UnityMain/GameThread/RenderThread 是否 CPU-bound |
+| 线程/进程 CPU 利用率 | `invoke_skill("cpu_thread_utilization_period")` / `invoke_skill("cpu_process_utilization_period")`；需要函数/slice 级热点时补 `invoke_skill("process_slice_cpu_hotspots", { process_name, start_ts, end_ts })` | 判断 UnityMain/GameThread/RenderThread 是否 CPU-bound，并用 Running CPU time 定位 named slice 热点 |
 | 功耗归因 | `invoke_skill("wattson_thread_power_attribution")` | 仅在 power_rails + cpu_freq_idle 可用时做线程能耗归因 |
 | 独立 GL swap 间隔 | `invoke_skill("gl_standalone_swap_jank")` | NativeActivity/GLSurfaceView 或引擎自管 swap 时检查生产端 present 节奏 |
 

@@ -108,7 +108,7 @@ fetch_artifact(artifactId, detail="rows", offset=0, limit=50)
 |--------|------|------|--------|
 | Q4 Sleeping 极高 | >80% | **主线程被阻塞**（ANR 最常见原因） | → 第二步：用 blocked_functions 定位 |
 | Q3 Runnable 高 | >30% | CPU 饥饿——可运行但得不到 CPU | → 检查 `sched_latency`、`cpu_health`、后台进程抢占 |
-| Q1+Q2 Running 高 | >70% | CPU-bound——主线程在执行重计算 | → 检查 `main_thread_slices`、热点函数 |
+| Q1+Q2 Running 高 | >70% | CPU-bound——主线程在执行重计算 | → 检查 `main_thread_slices`，并调用 `invoke_skill("process_slice_cpu_hotspots", { process_name, start_ts, end_ts, thread_scope: "main" })` 定位主线程热点函数/slice 的 Running CPU time |
 | 混合 | 无明显主导 | 多因素共同导致 | → 依次排查 Q4→Q3→Q1 |
 
 ### 第二步：当 Q4 占比高时 — 用 blocked_functions + 线程状态定位
