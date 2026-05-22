@@ -10,6 +10,15 @@ import {
 } from './pipelineSkillLoader';
 
 type ScopeColumn = 'app_cnt' | 'global_cnt';
+type SignalSource = 't' | 's';
+type SignalOp = 'eq' | 'glob';
+type SignalScope = 'a' | 'g';
+
+interface SignalComponent {
+  source: SignalSource;
+  op: SignalOp;
+  pattern: string;
+}
 
 const DEFAULT_PIPELINE_ID = 'ANDROID_VIEW_STANDARD_BLAST';
 const DEFAULT_DOC_PATH = 'rendering_pipelines/android_view_standard.md';
@@ -50,6 +59,12 @@ function sqlStringLiteral(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
+function sqlValueLiteral(value: string | number | null): string {
+  if (value === null) return 'NULL';
+  if (typeof value === 'number') return String(value);
+  return sqlStringLiteral(value);
+}
+
 function normalizePositiveInt(value: unknown, fallback = 1): number {
   const parsed = typeof value === 'number' ? value : parseInt(String(value ?? ''), 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
@@ -66,77 +81,32 @@ function getScopeColumn(pipelineId: string): ScopeColumn {
   return GLOBAL_SCOPE_PIPELINE_IDS.has(pipelineId) ? 'global_cnt' : 'app_cnt';
 }
 
-function buildCountSubquery(params: {
-  table: 'thread_counts' | 'slice_counts';
-  nameColumn: 'thread_name' | 'slice_name';
-  op: '=' | 'GLOB';
-  pattern: string;
-  scopeColumn: ScopeColumn;
-}): string {
-  return `COALESCE((SELECT SUM(${params.scopeColumn}) FROM ${params.table} WHERE ${params.nameColumn} ${params.op} ${sqlStringLiteral(params.pattern)}), 0)`;
+function getSignalScope(pipelineId: string): SignalScope {
+  return getScopeColumn(pipelineId) === 'global_cnt' ? 'g' : 'a';
 }
 
-function buildSignalCountExpr(
-  signal: {
-    thread?: string;
-    thread_pattern?: string;
-    slice?: string;
-    slice_pattern?: string;
-  },
-  scopeColumn: ScopeColumn
-): string | null {
-  const exprs: string[] = [];
+function buildSignalComponents(signal: {
+  thread?: string;
+  thread_pattern?: string;
+  slice?: string;
+  slice_pattern?: string;
+}): SignalComponent[] {
+  const components: SignalComponent[] = [];
 
   if (signal.thread) {
-    exprs.push(
-      buildCountSubquery({
-        table: 'thread_counts',
-        nameColumn: 'thread_name',
-        op: '=',
-        pattern: signal.thread,
-        scopeColumn,
-      })
-    );
+    components.push({ source: 't', op: 'eq', pattern: signal.thread });
   }
-
   if (signal.thread_pattern) {
-    exprs.push(
-      buildCountSubquery({
-        table: 'thread_counts',
-        nameColumn: 'thread_name',
-        op: 'GLOB',
-        pattern: signal.thread_pattern,
-        scopeColumn,
-      })
-    );
+    components.push({ source: 't', op: 'glob', pattern: signal.thread_pattern });
   }
-
   if (signal.slice) {
-    exprs.push(
-      buildCountSubquery({
-        table: 'slice_counts',
-        nameColumn: 'slice_name',
-        op: '=',
-        pattern: signal.slice,
-        scopeColumn,
-      })
-    );
+    components.push({ source: 's', op: 'eq', pattern: signal.slice });
   }
-
   if (signal.slice_pattern) {
-    exprs.push(
-      buildCountSubquery({
-        table: 'slice_counts',
-        nameColumn: 'slice_name',
-        op: 'GLOB',
-        pattern: signal.slice_pattern,
-        scopeColumn,
-      })
-    );
+    components.push({ source: 's', op: 'glob', pattern: signal.slice_pattern });
   }
 
-  if (exprs.length === 0) return null;
-  return exprs.join(' + ');
+  return components;
 }
 
 function describeSignalKey(signal: {
@@ -154,94 +124,108 @@ function describeSignalKey(signal: {
 
 function buildPipelineListSql(pipelines: PipelineDefinition[]): string {
   if (pipelines.length === 0) {
-    return `SELECT ${sqlStringLiteral(DEFAULT_PIPELINE_ID)} as pipeline_id`;
+    return `(${sqlStringLiteral(DEFAULT_PIPELINE_ID)})`;
   }
   return pipelines
-    .map((p) => `SELECT ${sqlStringLiteral(p.meta.pipeline_id)} as pipeline_id`)
-    .join('\n        UNION ALL\n        ');
+    .map((p) => `(${sqlStringLiteral(p.meta.pipeline_id)})`)
+    .join(',\n        ');
 }
 
 function buildPipelineDocsSql(pipelines: PipelineDefinition[]): string {
   if (pipelines.length === 0) {
-    return `SELECT ${sqlStringLiteral(DEFAULT_PIPELINE_ID)} as pipeline_id, ${sqlStringLiteral(DEFAULT_DOC_PATH)} as doc_path`;
+    return `(${sqlStringLiteral(DEFAULT_PIPELINE_ID)}, ${sqlStringLiteral(DEFAULT_DOC_PATH)})`;
   }
   return pipelines
     .map((p) => {
       const docPath = p.meta.doc_path ? sqlStringLiteral(p.meta.doc_path) : 'NULL';
-      return `SELECT ${sqlStringLiteral(p.meta.pipeline_id)} as pipeline_id, ${docPath} as doc_path`;
+      return `(${sqlStringLiteral(p.meta.pipeline_id)}, ${docPath})`;
     })
-    .join('\n        UNION ALL\n        ');
+    .join(',\n        ');
 }
 
-function buildSignalsRowsSql(pipelines: PipelineDefinition[]): string {
+function buildSignalDefsSql(pipelines: PipelineDefinition[]): string {
   const rows: string[] = [];
+  let signalId = 0;
+
+  const addSignal = (
+    pipelineId: string,
+    signalType: 'r' | 's' | 'e',
+    signalName: string,
+    weight: number,
+    minCount: number,
+    signal: {
+      thread?: string;
+      thread_pattern?: string;
+      slice?: string;
+      slice_pattern?: string;
+    }
+  ): void => {
+    const components = buildSignalComponents(signal);
+    if (components.length === 0) return;
+
+    const currentSignalId = signalId++;
+    const scope = getSignalScope(pipelineId);
+
+    for (const component of components) {
+      rows.push(`(${[
+        currentSignalId,
+        pipelineId,
+        signalType,
+        signalName,
+        weight,
+        minCount,
+        component.source,
+        component.op,
+        component.pattern,
+        scope,
+      ].map(sqlValueLiteral).join(', ')})`);
+    }
+  };
 
   for (const pipeline of pipelines) {
     const pipelineId = pipeline.meta.pipeline_id;
     const detection = pipeline.detection;
     if (!detection) continue;
 
-    const scopeColumn = getScopeColumn(pipelineId);
-
     for (const req of detection.required_signals || []) {
       const minCount = normalizePositiveInt(req.min_count, 1);
-      const cntExpr = buildSignalCountExpr(req, scopeColumn);
-      if (!cntExpr) {
+      if (buildSignalComponents(req).length === 0) {
         console.warn(`[rendering_pipeline_detection] Invalid required_signals entry for ${pipelineId}:`, req);
         continue;
       }
-      rows.push(
-        `SELECT ${sqlStringLiteral(pipelineId)} as pipeline_id, 'required' as signal_type, ${sqlStringLiteral(describeSignalKey(req))} as signal_name, 0 as weight, ${minCount} as min_count, (${cntExpr}) as cnt`
-      );
+      addSignal(pipelineId, 'r', describeSignalKey(req), 0, minCount, req);
     }
 
     for (const sc of detection.scoring_signals || []) {
       const minCount = normalizePositiveInt(sc.min_count, 1);
       const weight = normalizeNonNegativeInt(sc.weight, 0);
-      const cntExpr = buildSignalCountExpr(sc, scopeColumn);
-      if (!cntExpr) {
+      if (buildSignalComponents(sc).length === 0) {
         console.warn(`[rendering_pipeline_detection] Invalid scoring_signals entry for ${pipelineId} (${sc.signal}):`, sc);
         continue;
       }
-      rows.push(
-        `SELECT ${sqlStringLiteral(pipelineId)} as pipeline_id, 'score' as signal_type, ${sqlStringLiteral(sc.signal)} as signal_name, ${weight} as weight, ${minCount} as min_count, (${cntExpr}) as cnt`
-      );
+      addSignal(pipelineId, 's', sc.signal, weight, minCount, sc);
     }
 
     for (const ex of detection.exclude_if || []) {
-      const cntExpr = buildSignalCountExpr(ex, scopeColumn);
-      if (!cntExpr) {
+      if (buildSignalComponents(ex).length === 0) {
         console.warn(`[rendering_pipeline_detection] Invalid exclude_if entry for ${pipelineId}:`, ex);
         continue;
       }
-      rows.push(
-        `SELECT ${sqlStringLiteral(pipelineId)} as pipeline_id, 'exclude' as signal_type, ${sqlStringLiteral(describeSignalKey(ex))} as signal_name, 0 as weight, 1 as min_count, (${cntExpr}) as cnt`
-      );
+      addSignal(pipelineId, 'e', describeSignalKey(ex), 0, 1, ex);
     }
   }
 
   if (rows.length === 0) {
-    return `SELECT ${sqlStringLiteral(DEFAULT_PIPELINE_ID)} as pipeline_id, 'score' as signal_type, 'noop' as signal_name, 0 as weight, 1 as min_count, 0 as cnt`;
+    return `(0, ${sqlStringLiteral(DEFAULT_PIPELINE_ID)}, 's', 'noop', 0, 1, 's', 'eq', '__smartperfetto_noop__', 'a')`;
   }
 
-  return rows.join('\n        UNION ALL\n        ');
+  return rows.join(',\n        ');
 }
 
-function buildDeterminePipelineSql(pipelines: PipelineDefinition[]): string {
+function buildPipelineScoresSql(pipelines: PipelineDefinition[]): string {
   const pipelineListSql = buildPipelineListSql(pipelines);
-  const pipelineDocsSql = buildPipelineDocsSql(pipelines);
-  const signalsRowsSql = buildSignalsRowsSql(pipelines);
+  const signalDefsSql = buildSignalDefsSql(pipelines);
 
-  const primaryExcludeSql = Array.from(NON_PRIMARY_PIPELINE_IDS)
-    .map((id) => sqlStringLiteral(id))
-    .join(', ');
-
-  const featureIdsSql = Array.from(FEATURE_PIPELINE_IDS)
-    .map((id) => sqlStringLiteral(id))
-    .join(', ');
-
-  // NOTE: We intentionally avoid `${stepId}`-as-table substitution because SkillExecutor stores
-  // step results as JS objects, not temp tables. This SQL is self-contained.
   return `
       WITH
       -- Identify a dominant app (when package is not provided) by looking for rendering-related slices,
@@ -320,33 +304,62 @@ function buildDeterminePipelineSql(pipelines: PipelineDefinition[]): string {
         WHERE s.name IS NOT NULL
         GROUP BY s.name
       ),
-      pipeline_list AS (
+      pipeline_list(pipeline_id) AS (
+        VALUES
         ${pipelineListSql}
       ),
-      pipeline_docs AS (
-        ${pipelineDocsSql}
+      signal_defs(signal_id, pipeline_id, signal_type, signal_name, weight, min_count, source, op, pattern, scope) AS (
+        VALUES
+        ${signalDefsSql}
       ),
-      signals AS (
-        ${signalsRowsSql}
+      signal_counts AS (
+        SELECT
+          sd.signal_id,
+          sd.pipeline_id,
+          sd.signal_type,
+          sd.signal_name,
+          sd.weight,
+          sd.min_count,
+          SUM(
+            CASE
+              WHEN sd.source = 't' THEN CASE WHEN sd.scope = 'g' THEN COALESCE(tc.global_cnt, 0) ELSE COALESCE(tc.app_cnt, 0) END
+              WHEN sd.source = 's' THEN CASE WHEN sd.scope = 'g' THEN COALESCE(sc.global_cnt, 0) ELSE COALESCE(sc.app_cnt, 0) END
+              ELSE 0
+            END
+          ) as cnt
+        FROM signal_defs sd
+        LEFT JOIN thread_counts tc
+          ON sd.source = 't'
+         AND (
+           (sd.op = 'eq' AND tc.thread_name = sd.pattern)
+           OR (sd.op = 'glob' AND tc.thread_name GLOB sd.pattern)
+         )
+        LEFT JOIN slice_counts sc
+          ON sd.source = 's'
+         AND (
+           (sd.op = 'eq' AND sc.slice_name = sd.pattern)
+           OR (sd.op = 'glob' AND sc.slice_name GLOB sd.pattern)
+         )
+        GROUP BY sd.signal_id, sd.pipeline_id, sd.signal_type, sd.signal_name, sd.weight, sd.min_count
       ),
       signal_agg AS (
         SELECT
           pipeline_id,
           MIN(
             CASE
-              WHEN signal_type = 'required' THEN CASE WHEN cnt >= min_count THEN 1 ELSE 0 END
+              WHEN signal_type = 'r' THEN CASE WHEN cnt >= min_count THEN 1 ELSE 0 END
               ELSE 1
             END
           ) as required_ok,
           MAX(
             CASE
-              WHEN signal_type = 'exclude' THEN CASE WHEN cnt > 0 THEN 1 ELSE 0 END
+              WHEN signal_type = 'e' THEN CASE WHEN cnt > 0 THEN 1 ELSE 0 END
               ELSE 0
             END
           ) as excluded,
-          SUM(CASE WHEN signal_type = 'score' THEN weight ELSE 0 END) as total_weight,
-          SUM(CASE WHEN signal_type = 'score' AND cnt >= min_count THEN weight ELSE 0 END) as matched_weight
-        FROM signals
+          SUM(CASE WHEN signal_type = 's' THEN weight ELSE 0 END) as total_weight,
+          SUM(CASE WHEN signal_type = 's' AND cnt >= min_count THEN weight ELSE 0 END) as matched_weight
+        FROM signal_counts
         GROUP BY pipeline_id
       ),
       pipeline_scores AS (
@@ -362,19 +375,47 @@ function buildDeterminePipelineSql(pipelines: PipelineDefinition[]): string {
       scores AS (
         SELECT
           pipeline_id,
+          required_ok,
+          excluded,
+          total_weight,
+          matched_weight,
           CASE
             WHEN required_ok = 1 AND excluded = 0 AND total_weight > 0
             THEN matched_weight * 1.0 / total_weight
             ELSE 0
           END as score
         FROM pipeline_scores
+      )
+      SELECT * FROM scores
+    `;
+}
+
+function buildDeterminePipelineSql(pipelines: PipelineDefinition[]): string {
+  const pipelineDocsSql = buildPipelineDocsSql(pipelines);
+
+  const primaryExcludeSql = Array.from(NON_PRIMARY_PIPELINE_IDS)
+    .map((id) => sqlStringLiteral(id))
+    .join(', ');
+
+  const featureIdsSql = Array.from(FEATURE_PIPELINE_IDS)
+    .map((id) => sqlStringLiteral(id))
+    .join(', ');
+
+  return `
+      WITH
+      pipeline_scores AS (
+        SELECT * FROM \${pipeline_scores}
+      ),
+      pipeline_docs(pipeline_id, doc_path) AS (
+        VALUES
+        ${pipelineDocsSql}
       ),
       ranked AS (
         SELECT
           pipeline_id,
           score,
           ROW_NUMBER() OVER (ORDER BY score DESC, pipeline_id ASC) as rank
-        FROM scores
+        FROM pipeline_scores
         WHERE score >= ${SCORE_THRESHOLD}
           ${primaryExcludeSql ? `AND pipeline_id NOT IN (${primaryExcludeSql})` : ''}
       ),
@@ -382,21 +423,33 @@ function buildDeterminePipelineSql(pipelines: PipelineDefinition[]): string {
         SELECT pipeline_id, score FROM ranked WHERE rank = 1
       ),
       candidates AS (
-        SELECT pipeline_id, score FROM ranked WHERE rank <= ${MAX_CANDIDATES}
+        SELECT pipeline_id, score, rank FROM ranked WHERE rank <= ${MAX_CANDIDATES}
       ),
       features AS (
-        SELECT pipeline_id, score FROM scores
+        SELECT
+          pipeline_id,
+          score,
+          ROW_NUMBER() OVER (ORDER BY score DESC, pipeline_id ASC) as rank
+        FROM pipeline_scores
         WHERE pipeline_id IN (${featureIdsSql})
           AND score >= ${SCORE_THRESHOLD}
       ),
       candidate_list AS (
         SELECT GROUP_CONCAT(pipeline_id || ':' || ROUND(score, 2), ',') as candidates_list
-        FROM candidates
+        FROM (
+          SELECT pipeline_id, score
+          FROM candidates
+          ORDER BY rank ASC
+        )
         GROUP BY 'all_candidates'
       ),
       feature_list AS (
         SELECT GROUP_CONCAT(pipeline_id || ':' || ROUND(score, 2), ',') as features_list
-        FROM features
+        FROM (
+          SELECT pipeline_id, score
+          FROM features
+          ORDER BY rank ASC
+        )
         GROUP BY 'all_features'
       ),
       result AS (
@@ -1046,6 +1099,7 @@ export async function generateRenderingPipelineDetectionSkill(): Promise<SkillDe
     .filter((p) => p?.meta?.pipeline_id)
     .sort((a, b) => a.meta.pipeline_id.localeCompare(b.meta.pipeline_id));
 
+  const pipelineScoresSql = buildPipelineScoresSql(pipelines);
   const determinePipelineSql = buildDeterminePipelineSql(pipelines);
   const subvariantsSql = buildSubvariantsSql();
   const traceRequirementsSql = buildTraceRequirementsSql();
@@ -1057,7 +1111,7 @@ export async function generateRenderingPipelineDetectionSkill(): Promise<SkillDe
 
   return {
     name: 'rendering_pipeline_detection',
-    version: '3.2',
+    version: '3.3',
     type: 'composite',
     category: 'rendering',
     meta: {
@@ -1080,6 +1134,17 @@ export async function generateRenderingPipelineDetectionSkill(): Promise<SkillDe
       },
     ],
     steps: [
+      {
+        id: 'score_pipelines',
+        type: 'atomic',
+        name: '计算管线类型评分 (YAML 驱动)',
+        display: {
+          level: 'detail',
+          title: '管线类型评分',
+        },
+        sql: pipelineScoresSql,
+        save_as: 'pipeline_scores',
+      },
       {
         id: 'determine_pipeline',
         type: 'atomic',
@@ -1175,6 +1240,7 @@ export async function generateRenderingPipelineDetectionSkill(): Promise<SkillDe
     ],
     output: {
       fields: [
+        { name: 'pipeline_scores', label: '各管线类型得分 (调试用)' },
         { name: 'pipeline_result', label: '主管线识别结果' },
         { name: 'subvariants', label: '子变体信息' },
         { name: 'trace_requirements', label: '采集完整性检查' },

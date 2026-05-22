@@ -16,16 +16,32 @@ describe('rendering_pipeline_detection generator', () => {
       'android.frames.timeline',
     ]);
 
+    const scoreStep = skill.steps?.find((s) => s.id === 'score_pipelines') as any;
+    expect(scoreStep).toBeTruthy();
+    expect(typeof scoreStep.sql).toBe('string');
+    expect(scoreStep.save_as).toBe('pipeline_scores');
+
     const determineStep = skill.steps?.find((s) => s.id === 'determine_pipeline') as any;
     expect(determineStep).toBeTruthy();
     expect(typeof determineStep.sql).toBe('string');
+    expect(skill.steps?.findIndex((s) => s.id === 'score_pipelines')).toBeLessThan(
+      skill.steps?.findIndex((s) => s.id === 'determine_pipeline') ?? -1
+    );
+    expect(determineStep.save_as).toBe('pipeline_result');
 
     // A representative signal name from pipeline YAML that must appear in generated SQL.
     // This ensures YAML detection is the single source of truth for scoring configuration.
-    expect(determineStep.sql).toContain('has_blast_buffer_queue');
-    expect(determineStep.sql).toContain('ANDROID_VIEW_STANDARD_BLAST');
+    expect(scoreStep.sql).toContain('has_blast_buffer_queue');
+    expect(scoreStep.sql).toContain('ANDROID_VIEW_STANDARD_BLAST');
+    expect(scoreStep.sql).toContain('signal_defs');
+    expect(scoreStep.sql).not.toContain('COALESCE((SELECT SUM(');
+    expect(Buffer.byteLength(scoreStep.sql, 'utf8')).toBeLessThan(45_000);
+    expect(Buffer.byteLength(determineStep.sql, 'utf8')).toBeLessThan(10_000);
+    expect(determineStep.sql).toContain('SELECT * FROM ${pipeline_scores}');
     expect(determineStep.sql).toContain('candidate_list AS');
     expect(determineStep.sql).toContain("GROUP BY 'all_candidates'");
+    expect(determineStep.sql).toContain('SELECT pipeline_id, score, rank FROM ranked');
+    expect(determineStep.sql).toContain('ORDER BY rank ASC');
 
     // Non-primary / feature-only pipelines should not win primary selection.
     // Keep these checks stable to prevent regressions where a backend/impl-detail pipeline
