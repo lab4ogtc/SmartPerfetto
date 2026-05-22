@@ -413,7 +413,18 @@ describe('agent route RBAC', () => {
         eventType: 'analysis_completed',
         eventData: JSON.stringify({
           type: 'analysis_completed',
-          data: { reportUrl: '/api/reports/report-from-db' },
+          data: {
+            conclusion: [
+              '综合结论：',
+              '完成综合结论输出。冷启动TTID=1912ms，主因是主线程模拟负载过重。',
+              '',
+              '分阶段证据摘要：',
+              '启动概览采集: 获取启动概览：冷启动dur=1338ms，TTID=1912ms。',
+            ].join('\n'),
+            confidence: 0.9,
+            findings: [],
+            reportUrl: '/api/reports/report-from-db',
+          },
         }),
         createdAt: 1_777_000_002_000,
       });
@@ -429,6 +440,8 @@ describe('agent route RBAC', () => {
       expect(streamRes.text).toContain('id: 99');
       expect(streamRes.text).toContain('event: analysis_completed');
       expect(streamRes.text).toContain('/api/reports/report-from-db');
+      expect(streamRes.text).toContain('"partial":true');
+      expect(streamRes.text).toContain('最终结果质量闸门');
 
       const legacyQueryStreamRes = await analystHeaders(
         request(makeApp())
@@ -440,6 +453,8 @@ describe('agent route RBAC', () => {
       expect(legacyQueryStreamRes.text).toContain('id: 99');
       expect(legacyQueryStreamRes.text).toContain('event: analysis_completed');
       expect(legacyQueryStreamRes.text).toContain('/api/reports/report-from-db');
+      expect(legacyQueryStreamRes.text).toContain('"partial":true');
+      expect(legacyQueryStreamRes.text).toContain('最终结果质量闸门');
       leaseStore = getTraceProcessorLeaseStore();
       expect(leaseStore.listLeases({
         tenantId: 'tenant-a',
@@ -788,6 +803,146 @@ describe('agent route RBAC', () => {
         traceId,
         restored: true,
         status: 'quota_exceeded',
+      }));
+    } finally {
+      sessionContextManager.remove(sessionId);
+      SessionPersistenceService.resetForTests();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('marks recovered phase-summary results as partial during resume', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'smartperfetto-agent-resume-quality-'));
+    const traceId = 'trace-resume-quality';
+    const sessionId = 'session-resume-quality';
+    try {
+      const tracePath = path.join(tmpDir, `${traceId}.trace`);
+      await fs.writeFile(tracePath, 'trace bytes');
+      delete process.env.SMARTPERFETTO_API_KEY;
+      process.env.SMARTPERFETTO_SSO_TRUSTED_HEADERS = 'true';
+      process.env[ENTERPRISE_FEATURE_FLAG_ENV] = 'true';
+      process.env[ENTERPRISE_DB_PATH_ENV] = path.join(tmpDir, 'enterprise.sqlite');
+      process.env[ENTERPRISE_DATA_DIR_ENV] = path.join(tmpDir, 'data');
+      process.env.UPLOAD_DIR = path.join(tmpDir, 'uploads');
+      SessionPersistenceService.resetForTests();
+
+      await writeTraceMetadata({
+        id: traceId,
+        filename: `${traceId}.trace`,
+        size: 11,
+        uploadedAt: new Date().toISOString(),
+        status: 'ready',
+        path: tracePath,
+        tenantId: 'tenant-a',
+        workspaceId: 'workspace-a',
+        userId: 'analyst-user',
+      });
+      setTraceProcessorServiceForTests({
+        getOrLoadTrace: jest.fn(async () => ({
+          id: traceId,
+          filename: `${traceId}.trace`,
+          size: 11,
+          filePath: tracePath,
+          uploadTime: new Date(),
+          status: 'ready',
+        })),
+        getTrace: jest.fn(() => ({
+          id: traceId,
+          filename: `${traceId}.trace`,
+          size: 11,
+          filePath: tracePath,
+          uploadTime: new Date(),
+          status: 'ready',
+        })),
+        ensureProcessorForLease: jest.fn(async () => undefined),
+        runWithLease: jest.fn(async () => undefined),
+        query: jest.fn(async () => ({ columns: [], rows: [], durationMs: 1 })),
+      } as any);
+
+      const context = new EnhancedSessionContext(sessionId, traceId);
+      context.addTurn(
+        '分析这个启动 trace',
+        {
+          primaryGoal: 'startup_quality_gate',
+          aspects: ['agent_resume'],
+          expectedOutputType: 'diagnosis',
+          complexity: 'moderate',
+        },
+        {
+          success: true,
+          findings: [],
+          message: [
+            '综合结论：',
+            '完成综合结论输出。冷启动TTID=1912ms，主因是主线程模拟负载过重。',
+            '',
+            '分阶段证据摘要：',
+            '启动概览采集: 获取启动概览：冷启动dur=1338ms，TTID=1912ms。',
+            '启动详情分析: 四象限：Q1=62.8%,Q4b=35.1%。',
+          ].join('\n'),
+          confidence: 0.9,
+        },
+      );
+      const persistence = SessionPersistenceService.getInstance();
+      persistence.saveSession({
+        id: sessionId,
+        traceId,
+        traceName: `${traceId}.trace`,
+        question: '分析这个启动 trace',
+        createdAt: Date.now() - 1000,
+        updatedAt: Date.now(),
+        messages: [],
+        metadata: {
+          tenantId: 'tenant-a',
+          workspaceId: 'workspace-a',
+          userId: 'analyst-user',
+        },
+      });
+      expect(persistence.saveSessionStateSnapshot(
+        sessionId,
+        minimalSessionSnapshot(sessionId, traceId, 'completed'),
+        {
+          sessionContext: context,
+          owner: {
+            tenantId: 'tenant-a',
+            workspaceId: 'workspace-a',
+            userId: 'analyst-user',
+          },
+        },
+      )).toBe(true);
+
+      const app = makeApp();
+      const resumeRes = await analystHeaders(request(app).post('/api/agent/v1/resume'))
+        .send({ sessionId, traceId });
+
+      expect(resumeRes.status).toBe(200);
+      expect(resumeRes.body.restoredStats.latestTurn).toEqual(expect.objectContaining({
+        partial: true,
+        terminationMessage: expect.stringContaining('最终结果质量闸门'),
+      }));
+
+      const statusRes = await analystHeaders(request(app).get(`/api/agent/v1/${sessionId}/status`));
+      expect(statusRes.status).toBe(200);
+      expect(statusRes.body.result).toEqual(expect.objectContaining({
+        partial: true,
+        terminationMessage: expect.stringContaining('最终结果质量闸门'),
+      }));
+
+      const turnsRes = await analystHeaders(request(app).get(`/api/agent/v1/${sessionId}/turns`));
+      expect(turnsRes.status).toBe(200);
+      expect(turnsRes.body.latestTurn).toEqual(expect.objectContaining({
+        partial: true,
+        terminationMessage: expect.stringContaining('最终结果质量闸门'),
+      }));
+
+      const turnDetailRes = await analystHeaders(request(app).get(`/api/agent/v1/${sessionId}/turns/latest`));
+      expect(turnDetailRes.status).toBe(200);
+      expect(turnDetailRes.body.turn).toEqual(expect.objectContaining({
+        partial: true,
+        terminationMessage: expect.stringContaining('最终结果质量闸门'),
+        result: expect.objectContaining({
+          partial: true,
+          terminationMessage: expect.stringContaining('最终结果质量闸门'),
+        }),
       }));
     } finally {
       sessionContextManager.remove(sessionId);

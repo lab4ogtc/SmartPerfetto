@@ -10,6 +10,7 @@ import { hasConcreteEnvValue, redactUrlForDiagnostics } from '../agentRuntime/en
 export interface OpenAIAgentConfig {
   model: string;
   lightModel: string;
+  maxOutputTokens: number;
   maxTurns: number;
   quickMaxTurns: number;
   baseURL?: string;
@@ -25,6 +26,7 @@ export interface OpenAIAgentConfig {
 const DEFAULT_MODEL = 'gpt-5.5';
 const DEFAULT_LIGHT_MODEL = 'gpt-5.4-mini';
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
+const DEFAULT_MAX_OUTPUT_TOKENS = 2048;
 const DEFAULT_MAX_TURNS = 60;
 const DEFAULT_QUICK_MAX_TURNS = 10;
 
@@ -70,6 +72,7 @@ export function loadOpenAIConfig(providerId?: string | null, providerScope?: Pro
   return {
     model: env.OPENAI_MODEL || DEFAULT_MODEL,
     lightModel: env.OPENAI_LIGHT_MODEL || DEFAULT_LIGHT_MODEL,
+    maxOutputTokens: parsePositiveIntEnv(env, 'OPENAI_MAX_OUTPUT_TOKENS', DEFAULT_MAX_OUTPUT_TOKENS),
     maxTurns: parsePositiveIntEnv(env, 'OPENAI_MAX_TURNS',
       parsePositiveIntEnv(env, 'CLAUDE_MAX_TURNS', DEFAULT_MAX_TURNS)),
     quickMaxTurns: parsePositiveIntEnv(env, 'OPENAI_QUICK_MAX_TURNS',
@@ -118,6 +121,7 @@ export function getOpenAIRuntimeDiagnostics(providerId?: string | null, provider
     baseUrlConfigured: hasConcreteEnvValue(env.OPENAI_BASE_URL),
     configured: hasOpenAICredentials(providerId, providerScope),
     credentialSources,
+    maxOutputTokens: config.maxOutputTokens,
     outputLanguage: {
       value: config.outputLanguage,
       displayName: outputLanguageDisplayName(config.outputLanguage),

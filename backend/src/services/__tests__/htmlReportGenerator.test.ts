@@ -72,6 +72,35 @@ describe('HTMLReportGenerator', () => {
     expect(html).not.toContain('1,435,508');
   });
 
+  test('renders partial warning for degraded agent results', () => {
+    const generator = new HTMLReportGenerator();
+    const message = '最终结果质量闸门发现 provider 没有产出可独立交付的完整结论';
+    const html = generator.generateAgentDrivenHTML({
+      traceId: 'trace-partial',
+      query: '分析启动慢',
+      timestamp: Date.now(),
+      hypotheses: [],
+      dialogue: [],
+      agentResponses: [],
+      dataEnvelopes: [],
+      result: {
+        sessionId: 'session-partial',
+        success: true,
+        findings: [],
+        hypotheses: [],
+        conclusion: '## 综合结论\n\n阶段摘要',
+        confidence: 0.55,
+        rounds: 1,
+        totalDurationMs: 1000,
+        partial: true,
+        terminationMessage: message,
+      },
+    });
+
+    expect(html).toContain('结果完整性提示');
+    expect(html).toContain(message);
+  });
+
   test('formats layered duration-like keys in ms only', () => {
     const generator = new HTMLReportGenerator() as any;
     expect(generator.formatLayeredCellValue(1338654478, 'dur_ns')).toBe('1338.65ms');
@@ -275,15 +304,12 @@ describe('HTMLReportGenerator', () => {
       },
     });
 
-    expect(html).toContain('逐句数据引用');
+    expect(html).toContain('证据引用摘要');
     expect(html).toContain('Q1 / C1');
     expect(html).toContain('帧 1435508 耗时 45.6ms。');
     expect(html).toContain('报告来源: 数据表 1 · Frame duration table');
-    expect(html).toContain(evidenceRefId);
-    expect(html).toContain(sourceToolCallId);
     expect(html).toContain('行号: 0 / 行选择器: frame_id=1435508');
-    expect(html).toContain('列: <code>dur_ms</code>');
-    expect(html).toContain('值: <code>45.6</code>');
+    expect(html).toContain('<code>dur_ms</code>=45.6');
     expect(html).toContain('已找到来源表');
   });
 

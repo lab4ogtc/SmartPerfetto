@@ -102,11 +102,13 @@ plan_template:
 | 热启动 (hot) | 两者均不存在 → 保留 Perfetto 原始分类 | Activity.onRestart() → onStart() → onResume() |
 
 **判定逻辑（优先级从高到低）：**
-1. 如果 Skill 返回的 `startup_type` 已经过重分类（`startup_events_in_range` 的 SQL 层重分类），直接信任
+1. 如果 Skill 返回的 `startup_type/type_display` 已经过重分类（`startup_events_in_range` 的 SQL 层重分类，或 `startup_quality.issue_codes` 包含 `R009_TYPE_RECLASSIFIED`），直接信任；除非同一条 SQL 明确复现了 Skill 的 overlap 口径并证明修正信号不存在，否则不得推翻。
 2. 否则检查 trace 信号：`bindApplication` 存在 → cold；仅 `performCreate:*` 存在 → warm；均无 → hot
 3. 热启动无正向信号（没有专属的 trace slice），仅靠排除法判定——这是合理的，因为热启动不触发 Activity 重建
 
 **⚠️ LMK 边界场景：** 进程被 LMK 回收后重启时，ActivityManager 可能仍持有 Activity 记录，导致 Perfetto 报告 `warm`。但 `bindApplication` slice 存在说明进程经历了完整初始化（Zygote fork → handleBindApplication），实为 cold start。此时**必须以 `bindApplication` 信号为准**，覆盖 Perfetto 原始分类。
+
+**⚠️ 验证口径陷阱：** `bindApplication` 可能早于 `android_startups.ts` 约几十到数百毫秒开始。用 `thread_slice.ts BETWEEN start_ts AND end_ts` 的窄窗口查询返回 0 行，不能证明 `bindApplication` 不存在。若要自行验证，必须使用 `android_startup_threads` 与 `slice` 的 overlap 条件（`sl.ts + sl.dur > st.ts AND sl.ts < st.ts + st.dur`），或至少把起点扩展到 `start_ts - 500ms`。当 `startup_analysis` 已给出 `type_display=冷启动`、`type_reclassified=1`、`startup_breakdown.reason=bind_application` 或 `R009_TYPE_RECLASSIFIED` 时，结论必须按冷启动写，不得输出“R009 误判/维持温启动”。
 
 #### 启动场景关键 Stdlib 表
 
@@ -131,6 +133,7 @@ invoke_skill("startup_analysis", { enable_startup_details: false })
   可能的根因：异步帧渲染排队、SurfaceFlinger 合成延迟、GPU 渲染耗时、dequeueBuffer 等待。结论中必须量化说明 gap 中各阶段的耗时占比。
 - **R009_TYPE_RECLASSIFIED**（启动类型重分类）：如果温启动存在 bindApplication slice，说明进程实际被重建过，可能是冷启动被误分类。分析时应质疑启动类型并说明重分类依据。
 - **温启动 + bindApplication 矛盾**：即使未触发 R009，如果主线程热点中出现 bindApplication（478ms+），也应主动质疑：温启动不应有 Application 初始化开销。可能原因：① 进程被回收后重启（实为冷启动）；② framework atrace 标记不准确。
+- **禁止反向误判**：如果 `startup_analysis.get_startups` 显示 `type_display=冷启动`，且 `startup_breakdown` 包含 `bind_application` 耗时，后续任何 raw SQL 只有在使用 overlap/扩展窗口并命中同一进程主线程后，才允许挑战冷启动结论。窄窗口 0 行只能写成“该 SQL 口径未覆盖 bindApplication 起点”，不能写成“bindApplication 不存在”。
 
 **Phase 2 — 获取启动详情（需要传参）：**
 ```

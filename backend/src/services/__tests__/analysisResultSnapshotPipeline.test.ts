@@ -147,6 +147,35 @@ describe('analysis result snapshot pipeline', () => {
     expect(snapshot?.summary.partialReasons).toBeUndefined();
   });
 
+  test('preserves runtime partial warning even when startup metrics are present', () => {
+    const message = '最终结果质量闸门发现 provider 没有产出可独立交付的完整结论';
+    const snapshot = buildCompletedAnalysisResultSnapshot({
+      tenantId: 'tenant-a',
+      workspaceId: 'workspace-a',
+      traceId: 'trace-a',
+      sessionId: 'session-a',
+      runId: 'run-a',
+      query: 'startup analysis',
+      conclusion: '启动结论降级。',
+      partial: true,
+      terminationMessage: message,
+      dataEnvelopes: [{
+        ...envelope(),
+        data: {
+          columns: ['startup_id', 'total_ms', 'first_frame_ms'],
+          rows: [[1, 1450.5, 620]],
+        },
+      }],
+      createdAt: 1234,
+    });
+
+    expect(snapshot?.status).toBe('partial');
+    expect(snapshot?.summary.partialReasons).toEqual([message]);
+    expect(snapshot?.metrics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'startup.total_ms', value: 1450.5 }),
+    ]));
+  });
+
   test('extracts scrolling metrics and normalizes fractional jank rate to percent', () => {
     const snapshot = buildCompletedAnalysisResultSnapshot({
       tenantId: 'tenant-a',

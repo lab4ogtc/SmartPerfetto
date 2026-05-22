@@ -34,6 +34,7 @@ import { getHTMLReportGenerator } from '../../services/htmlReportGenerator';
 import { buildAgentDrivenReportData } from '../../services/agentReportData';
 import { normalizeResultForReport } from '../../services/agentResultNormalizer';
 import { persistAgentTurn } from '../../services/persistAgentSession';
+import { applyFinalResultQualityGate } from '../../services/finalResultQualityGate';
 import { runClaimVerification } from '../../services/verifier/claimVerificationRunner';
 import { sessionContextManager } from '../../agent/context/enhancedSessionContext';
 import { backendLogPath } from '../../runtimePaths';
@@ -219,7 +220,9 @@ export class CliAnalyzeService {
     }
     (session as unknown as {codeAwareMode?: CodeAwareMode; codebaseIds?: string[]}).codeAwareMode = input.codeAwareMode;
     (session as unknown as {codeAwareMode?: CodeAwareMode; codebaseIds?: string[]}).codebaseIds = input.codebaseIds;
-    const normalized = normalizeResultForReport(result);
+    const normalized = normalizeResultForReport(result, {
+      dataEnvelopes: session.dataEnvelopes as DataEnvelope[],
+    });
     result.conclusion = normalized.conclusion;
     if (normalized.conclusionContract) {
       result.conclusionContract = normalized.conclusionContract;
@@ -236,7 +239,33 @@ export class CliAnalyzeService {
     session.claimSupport = qualityArtifacts.claimSupport;
     session.claimVerificationResult = qualityArtifacts.claimVerificationResult;
     session.identityResolutions = qualityArtifacts.identityResolutions;
+    const finalQualityIssue = applyFinalResultQualityGate({ result, query: input.query });
+    if (finalQualityIssue) {
+      try {
+        input.onEvent({
+          type: 'degraded',
+          content: {
+            module: 'cliAnalyzeService',
+            fallback: 'final_result_quality_gate',
+            code: finalQualityIssue.code,
+            partial: true,
+            message: result.terminationMessage || finalQualityIssue.message,
+          },
+          timestamp: Date.now(),
+        });
+      } catch (err) {
+        console.error('[CliAnalyzeService] onEvent handler threw:', (err as Error).message);
+      }
+    }
+    session.result = result;
     sessionContextManager.get(sessionId, traceId)?.annotateLatestCompletedTurn({
+      success: result.success,
+      findings: result.findings,
+      message: result.conclusion,
+      confidence: result.confidence,
+      partial: result.partial,
+      terminationReason: result.terminationReason,
+      terminationMessage: result.terminationMessage,
       conclusionContract: normalized.conclusionContract,
       claimSupport: qualityArtifacts.claimSupport,
       claimVerificationResult: qualityArtifacts.claimVerificationResult,
@@ -302,7 +331,9 @@ export class CliAnalyzeService {
     result: AnalysisResult,
   ): { html?: string; error?: string } {
     try {
-      const normalized = normalizeResultForReport(result);
+      const normalized = normalizeResultForReport(result, {
+        dataEnvelopes: session.dataEnvelopes as DataEnvelope[],
+      });
       const reportData = buildAgentDrivenReportData({
         session,
         result: {
@@ -318,6 +349,9 @@ export class CliAnalyzeService {
           confidence: normalized.confidence,
           rounds: normalized.rounds,
           totalDurationMs: normalized.totalDurationMs,
+          partial: normalized.partial,
+          terminationReason: normalized.terminationReason,
+          terminationMessage: normalized.terminationMessage,
         },
       });
       const html = getHTMLReportGenerator().generateAgentDrivenHTML(reportData);

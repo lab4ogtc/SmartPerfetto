@@ -47,7 +47,12 @@ export interface PersistAgentTurnInput {
   sessionId: string;
   traceId: string;
   query: string;
-  result: { conclusion: string; totalDurationMs: number };
+  result: {
+    conclusion: string;
+    totalDurationMs: number;
+    partial?: boolean;
+    terminationMessage?: string;
+  };
   /** Optional structured logger (HTTP route provides SessionLogger; CLI
    *  currently doesn't wire one through — `console` fallback is fine). */
   logger?: {
@@ -58,6 +63,17 @@ export interface PersistAgentTurnInput {
    *  existing log-based alerts keyed on that component; CLI defaults to
    *  logComponent so CLI-only log stream is self-identifying. */
   logComponent?: string;
+}
+
+function buildPersistedAssistantMessage(result: PersistAgentTurnInput['result']): string {
+  const conclusion = result.conclusion || '';
+  if (result.partial !== true) return conclusion.substring(0, 10000);
+  const warning = [
+    '> **结果完整性提示**',
+    `> ${result.terminationMessage || '本次分析结果已标记为 partial，结论可能不完整。'}`,
+    '',
+  ].join('\n');
+  return `${warning}${conclusion}`.substring(0, 10000);
 }
 
 export function persistAgentTurn(input: PersistAgentTurnInput): void {
@@ -188,7 +204,7 @@ export function persistAgentTurn(input: PersistAgentTurnInput): void {
           {
             id: `msg-${sessionId}-turn${turnIndex}-assistant`,
             role: 'assistant',
-            content: (result.conclusion || '').substring(0, 10000),
+            content: buildPersistedAssistantMessage(result),
             timestamp: Date.now(),
           },
         ]);

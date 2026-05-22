@@ -43,10 +43,22 @@ interface VerifyOptions {
   codebaseIds: string[];
   /** Require semantic source-level code references in the final conclusion. */
   requireCodeRef: boolean;
+  /** Require analysis_completed claim verifier output to pass with no unsupported claims. */
+  requireClaimVerifierOk: boolean;
+  /** Require the terminal analysis_completed payload to not be marked partial. */
+  requireNonPartial: boolean;
+  /** Require a final-report heading such as # 性能分析报告 / ## 综合结论 / ## Final Conclusion. */
+  requireFinalReportHeading: boolean;
+  /** Fail if final text contains process narration such as "enter Phase". */
+  forbidProcessNarration: boolean;
+  /** Optional upper bound for the final analysis_completed conclusion text length. */
+  maxAnalysisCompletedConclusionChars?: number;
   /** Literal text that must appear in a conclusion/analysis_completed event. */
   requiredText: string[];
   /** Literal text that must not appear in a conclusion/analysis_completed event. */
   forbiddenText: string[];
+  /** Degraded fallback names that must not be emitted during the run. */
+  forbiddenDegradedFallbacks: string[];
   /** Allow full-mode source/tool checks that intentionally do not emit data envelopes. */
   allowNoDataEnvelopes: boolean;
   /** Tool names that must be dispatched during the run. */
@@ -65,6 +77,8 @@ interface SseSummary {
   dataEnvelopeCount: number;
   planSubmittedCount: number;
   architectureDetectedCount: number;
+  degradedCount: number;
+  degradedFallbackCounts: Record<string, number>;
   errorEvents: string[];
   /** Number of DataEnvelope objects carried by data events, not just event count. */
   dataEnvelopeItemCount: number;
@@ -78,9 +92,17 @@ interface SseSummary {
   analysisCompletedConclusionChars: number;
   analysisCompletedHasConcreteEvidenceRefs: boolean;
   analysisCompletedHasEvidenceIndex: boolean;
+  analysisCompletedHasFinalReportHeading: boolean;
+  analysisCompletedHasProcessNarration: boolean;
+  claimVerifierStatus?: string;
+  claimVerifierPassed?: boolean;
+  claimVerifierCheckedClaimCount?: number;
+  claimVerifierUnsupportedClaimCount?: number;
+  claimVerifierIssueCount?: number;
   conclusionHasConcreteCodeRefs: boolean;
   analysisCompletedHasConcreteCodeRefs: boolean;
   analysisCompletedReportUrl?: string;
+  analysisCompletedPartial?: boolean;
   requiredTextMatches: Record<string, boolean>;
   forbiddenTextMatches: Record<string, boolean>;
   /** Older SSE fields that may still appear in archived sessions/logs. */
@@ -109,8 +131,15 @@ function printUsage(): void {
   console.log('                                      Forward codeAwareMode to the backend');
   console.log('  --codebase-id <id>                 Registered codebase id to expose; repeatable');
   console.log('  --require-code-ref                 Require source-level code refs in conclusion/analysis_completed text');
+  console.log('  --require-claim-verifier-ok        Require analysis_completed claim verifier to pass with no unsupported claims');
+  console.log('  --require-non-partial              Fail if analysis_completed is marked partial');
+  console.log('  --require-final-report-heading     Require a final-report heading in analysis_completed text');
+  console.log('  --forbid-process-narration         Fail if final text contains process narration like entering phases');
+  console.log('  --max-analysis-completed-conclusion-chars <number>');
+  console.log('                                      Fail if analysis_completed conclusion text exceeds this length');
   console.log('  --require-text <text>              Require literal text in conclusion/analysis_completed; repeatable');
   console.log('  --forbid-text <text>               Forbid literal text in conclusion/analysis_completed; repeatable');
+  console.log('  --forbid-degraded-fallback <name>  Fail if a degraded event with this fallback is emitted; repeatable');
   console.log('  --require-tool <name>              Require an agent_task_dispatched tool call; repeatable');
   console.log('  --allow-no-data-envelopes          Do not require data envelopes in full mode');
   console.log('  --output <path>                   JSON report output path');
@@ -132,8 +161,13 @@ function parseArgs(argv: string[]): VerifyOptions {
     requireConclusionEvidence: false,
     codebaseIds: [],
     requireCodeRef: false,
+    requireClaimVerifierOk: false,
+    requireNonPartial: false,
+    requireFinalReportHeading: false,
+    forbidProcessNarration: false,
     requiredText: [],
     forbiddenText: [],
+    forbiddenDegradedFallbacks: [],
     allowNoDataEnvelopes: false,
     requiredTools: [],
   };
@@ -164,6 +198,26 @@ function parseArgs(argv: string[]): VerifyOptions {
 
     if (arg === '--require-code-ref') {
       options.requireCodeRef = true;
+      continue;
+    }
+
+    if (arg === '--require-claim-verifier-ok') {
+      options.requireClaimVerifierOk = true;
+      continue;
+    }
+
+    if (arg === '--require-non-partial') {
+      options.requireNonPartial = true;
+      continue;
+    }
+
+    if (arg === '--require-final-report-heading') {
+      options.requireFinalReportHeading = true;
+      continue;
+    }
+
+    if (arg === '--forbid-process-narration') {
+      options.forbidProcessNarration = true;
       continue;
     }
 
@@ -229,6 +283,19 @@ function parseArgs(argv: string[]): VerifyOptions {
       continue;
     }
 
+    if (arg === '--max-analysis-completed-conclusion-chars') {
+      if (!next) {
+        throw new Error('--max-analysis-completed-conclusion-chars requires a value');
+      }
+      const parsed = Number.parseInt(next, 10);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        throw new Error(`Invalid --max-analysis-completed-conclusion-chars value: ${next}`);
+      }
+      options.maxAnalysisCompletedConclusionChars = parsed;
+      i += 1;
+      continue;
+    }
+
     if (arg === '--mode') {
       if (!next) {
         throw new Error('--mode requires a value');
@@ -276,6 +343,15 @@ function parseArgs(argv: string[]): VerifyOptions {
         throw new Error('--forbid-text requires a value');
       }
       options.forbiddenText.push(next);
+      i += 1;
+      continue;
+    }
+
+    if (arg === '--forbid-degraded-fallback') {
+      if (!next) {
+        throw new Error('--forbid-degraded-fallback requires a value');
+      }
+      options.forbiddenDegradedFallbacks.push(next);
       i += 1;
       continue;
     }
@@ -337,12 +413,44 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return null;
 }
 
+function recordClaimVerifierSummary(summary: SseSummary, payload: Record<string, unknown> | null): void {
+  const direct = asRecord(payload?.claimVerificationResult);
+  const nested = asRecord(asRecord(payload?.qualityArtifacts)?.claimVerificationResult);
+  const verifier = direct ?? nested;
+  if (!verifier) return;
+
+  if (typeof verifier.status === 'string') summary.claimVerifierStatus = verifier.status;
+  if (typeof verifier.passed === 'boolean') summary.claimVerifierPassed = verifier.passed;
+  if (typeof verifier.checkedClaimCount === 'number') {
+    summary.claimVerifierCheckedClaimCount = verifier.checkedClaimCount;
+  }
+  if (typeof verifier.unsupportedClaimCount === 'number') {
+    summary.claimVerifierUnsupportedClaimCount = verifier.unsupportedClaimCount;
+  }
+  if (Array.isArray(verifier.issues)) {
+    summary.claimVerifierIssueCount = verifier.issues.length;
+  }
+}
+
 function hasConcreteEvidenceReferences(text: string): boolean {
   return /art-\d+|data:[a-z0-9_:.:-]+|evidence_ref_id\s*=|evidence\s*(ref|id|source)\s*[:=]|source_ref\s*=|表\s*(?:art-\d+|sql:\d+)|\bsql:\d+\b/i.test(text);
 }
 
 function hasEvidenceIndex(text: string): boolean {
-  return text.includes('证据表索引');
+  return /证据(?:表)?索引/.test(text);
+}
+
+function hasFinalReportHeading(text: string): boolean {
+  return /(^|\n)\s{0,3}#{1,3}\s*(?:(?:[^\n#]{0,40})?分析报告|综合结论|最终结论|最终报告|Final Conclusion|Final Report|Analysis Report)(?=\s|[：:。.!！?\n]|$)/i.test(text);
+}
+
+function hasProcessNarration(text: string): boolean {
+  const compact = text.trim().replace(/\s+/g, ' ');
+  if (!compact) return false;
+  return /^(?:我来|我需要|我将|我会|现在|接下来|下一步|让我|为了完成|I need\b|I will\b|Now I\b|Next\b|Let me\b)/i.test(compact) ||
+    /(?:现在|接下来|下一步).{0,40}(?:完成|进入|继续).{0,20}Phase\s*\d+(?:\.\d+)?/i.test(compact) ||
+    /(?:现在完成|现在进入|进入|继续执行).{0,20}Phase\s*\d+(?:\.\d+)?/i.test(compact) ||
+    /(?:update_plan_phase|submit_plan|resolve_hypothesis|阶段状态更新|执行剩余阶段|继续执行剩余阶段|OpenAI plan|provider 未主动结束 stream|plan 未完成|plan 已完成)/i.test(compact);
 }
 
 function hasConcreteCodeReferences(text: string): boolean {
@@ -416,6 +524,8 @@ function recordConclusionEvidence(
   );
   summary.analysisCompletedHasConcreteEvidenceRefs ||= hasConcreteEvidenceReferences(text);
   summary.analysisCompletedHasEvidenceIndex ||= hasEvidenceIndex(text);
+  summary.analysisCompletedHasFinalReportHeading ||= hasFinalReportHeading(text);
+  summary.analysisCompletedHasProcessNarration ||= hasProcessNarration(text);
   summary.analysisCompletedHasConcreteCodeRefs ||= hasConcreteCodeReferences(text);
 }
 
@@ -435,6 +545,8 @@ async function collectSseSummary(
     dataEnvelopeCount: 0,
     planSubmittedCount: 0,
     architectureDetectedCount: 0,
+    degradedCount: 0,
+    degradedFallbackCounts: {},
     errorEvents: [],
     dataEnvelopeItemCount: 0,
     dataEnvelopeMissingPhaseCount: 0,
@@ -447,6 +559,8 @@ async function collectSseSummary(
     analysisCompletedConclusionChars: 0,
     analysisCompletedHasConcreteEvidenceRefs: false,
     analysisCompletedHasEvidenceIndex: false,
+    analysisCompletedHasFinalReportHeading: false,
+    analysisCompletedHasProcessNarration: false,
     conclusionHasConcreteCodeRefs: false,
     analysisCompletedHasConcreteCodeRefs: false,
     requiredTextMatches: Object.fromEntries(textChecks.requiredText.map((text) => [text, false])),
@@ -566,6 +680,13 @@ async function collectSseSummary(
             case 'architecture_detected':
               summary.architectureDetectedCount += 1;
               break;
+            case 'degraded':
+              summary.degradedCount += 1;
+              if (typeof payload?.fallback === 'string') {
+                summary.degradedFallbackCounts[payload.fallback] =
+                  (summary.degradedFallbackCounts[payload.fallback] ?? 0) + 1;
+              }
+              break;
             default:
               break;
           }
@@ -575,8 +696,12 @@ async function collectSseSummary(
               recordTextChecks(summary, payload.conclusion, textChecks);
               recordConclusionEvidence(summary, payload.conclusion, 'analysis_completed');
             }
+            recordClaimVerifierSummary(summary, payload);
             if (typeof payload?.reportUrl === 'string') {
               summary.analysisCompletedReportUrl = payload.reportUrl;
+            }
+            if (typeof payload?.partial === 'boolean') {
+              summary.analysisCompletedPartial = payload.partial;
             }
           }
 
@@ -737,7 +862,7 @@ async function main(): Promise<void> {
     const requiredChecks = {
       hasProgressEvents: sse.progressCount > 0,
       hasAgentResponses: sse.agentResponseCount > 0,
-      hasConclusionEvent: sse.conclusionCount > 0,
+      hasTerminalConclusionPayload: sse.conclusionCount > 0 || sse.analysisCompletedConclusionChars > 0,
       hasAnalysisCompletedEvent: sse.terminalEvent === 'analysis_completed' || sse.terminalEvent === 'end',
       hasNoSseErrors: sse.errorEvents.length === 0,
     };
@@ -768,6 +893,34 @@ async function main(): Promise<void> {
           sse.conclusionHasConcreteCodeRefs || sse.analysisCompletedHasConcreteCodeRefs,
       }
       : {};
+    const claimVerifierChecks = options.requireClaimVerifierOk
+      ? {
+        hasClaimVerifierResult: Boolean(sse.claimVerifierStatus),
+        claimVerifierPassed: sse.claimVerifierStatus === 'passed' && sse.claimVerifierPassed !== false,
+        claimVerifierHasNoUnsupportedClaims: (sse.claimVerifierUnsupportedClaimCount ?? 0) === 0,
+      }
+      : {};
+    const partialChecks = options.requireNonPartial
+      ? {
+        analysisCompletedNotPartial: sse.analysisCompletedPartial !== true,
+      }
+      : {};
+    const finalReportHeadingChecks = options.requireFinalReportHeading
+      ? {
+        analysisCompletedHasFinalReportHeading: sse.analysisCompletedHasFinalReportHeading,
+      }
+      : {};
+    const processNarrationChecks = options.forbidProcessNarration
+      ? {
+        analysisCompletedHasNoProcessNarration: !sse.analysisCompletedHasProcessNarration,
+      }
+      : {};
+    const conclusionLengthChecks = options.maxAnalysisCompletedConclusionChars !== undefined
+      ? {
+        analysisCompletedConclusionWithinMaxChars:
+          sse.analysisCompletedConclusionChars <= options.maxAnalysisCompletedConclusionChars,
+      }
+      : {};
     const requiredTextChecks = Object.fromEntries(
       options.requiredText.map((text) => [`requiresText:${text}`, sse.requiredTextMatches[text] === true]),
     );
@@ -777,23 +930,41 @@ async function main(): Promise<void> {
     const requiredToolChecks = Object.fromEntries(
       options.requiredTools.map((toolName) => [`requiresTool:${toolName}`, (sse.toolCallCounts[toolName] ?? 0) > 0]),
     );
+    const degradedFallbackChecks = Object.fromEntries(
+      options.forbiddenDegradedFallbacks.map((fallback) => [
+        `forbidsDegradedFallback:${fallback}`,
+        (sse.degradedFallbackCounts[fallback] ?? 0) === 0,
+      ]),
+    );
     const checks = {
       ...requiredChecks,
       ...fullModeChecks,
       ...modeExpectationChecks,
       ...conclusionEvidenceChecks,
       ...codeReferenceChecks,
+      ...claimVerifierChecks,
+      ...partialChecks,
+      ...finalReportHeadingChecks,
+      ...processNarrationChecks,
+      ...conclusionLengthChecks,
       ...requiredTextChecks,
       ...forbiddenTextChecks,
       ...requiredToolChecks,
+      ...degradedFallbackChecks,
     };
     const passed = Object.values(requiredChecks).every(Boolean)
       && Object.values(modeExpectationChecks).every(Boolean)
       && Object.values(conclusionEvidenceChecks).every(Boolean)
       && Object.values(codeReferenceChecks).every(Boolean)
+      && Object.values(claimVerifierChecks).every(Boolean)
+      && Object.values(partialChecks).every(Boolean)
+      && Object.values(finalReportHeadingChecks).every(Boolean)
+      && Object.values(processNarrationChecks).every(Boolean)
+      && Object.values(conclusionLengthChecks).every(Boolean)
       && Object.values(requiredTextChecks).every(Boolean)
       && Object.values(forbiddenTextChecks).every(Boolean)
       && Object.values(requiredToolChecks).every(Boolean)
+      && Object.values(degradedFallbackChecks).every(Boolean)
       && (isQuickMode || Object.values(fullModeChecks).every(Boolean));
     const sessionLogFile = findSessionLogFile(sessionId);
 

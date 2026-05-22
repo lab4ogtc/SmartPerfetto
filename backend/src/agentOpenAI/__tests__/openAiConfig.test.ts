@@ -6,13 +6,14 @@ import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
 import { promises as fsp } from 'fs';
 import os from 'os';
 import path from 'path';
-import { createOpenAIEnv, getOpenAIRuntimeDiagnostics } from '../openAiConfig';
+import { createOpenAIEnv, getOpenAIRuntimeDiagnostics, loadOpenAIConfig } from '../openAiConfig';
 import { getProviderService, resetProviderService } from '../../services/providerManager';
 
 const ORIGINAL_ENV = {
   PROVIDER_DATA_DIR_OVERRIDE: process.env.PROVIDER_DATA_DIR_OVERRIDE,
   OPENAI_API_KEY: process.env.OPENAI_API_KEY,
   OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
+  OPENAI_MAX_OUTPUT_TOKENS: process.env.OPENAI_MAX_OUTPUT_TOKENS,
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
   ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL,
   CLAUDE_MODEL: process.env.CLAUDE_MODEL,
@@ -174,5 +175,16 @@ describe('createOpenAIEnv', () => {
     const diagnostics = getOpenAIRuntimeDiagnostics(null);
 
     expect(diagnostics.baseUrl).toBe('https://example.com/v1');
+  });
+
+  it('limits OpenAI model output tokens by default and allows env override', () => {
+    delete process.env.OPENAI_MAX_OUTPUT_TOKENS;
+    expect(loadOpenAIConfig(null).maxOutputTokens).toBe(2048);
+
+    process.env.OPENAI_MAX_OUTPUT_TOKENS = '2048';
+    expect(loadOpenAIConfig(null).maxOutputTokens).toBe(2048);
+
+    const diagnostics = getOpenAIRuntimeDiagnostics(null);
+    expect(diagnostics.maxOutputTokens).toBe(2048);
   });
 });

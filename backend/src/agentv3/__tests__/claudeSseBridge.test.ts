@@ -83,6 +83,28 @@ describe('createSseBridge', () => {
     }));
   });
 
+  it('can flush pending streamed answer text when a stream is cancelled before assistant/result', () => {
+    const updates: StreamingUpdate[] = [];
+    const bridge = createSseBridge((update) => updates.push(update));
+
+    bridge.handleMessage({
+      type: 'stream_event',
+      event: {
+        type: 'content_block_delta',
+        delta: { type: 'text_delta', text: '完整修正报告' },
+      },
+    });
+
+    expect(bridge.getAccumulatedAnswer()).toBe('');
+    bridge.flushPendingAnswer();
+
+    expect(bridge.getAccumulatedAnswer()).toBe('完整修正报告');
+    expect(updates).toContainEqual(expect.objectContaining({
+      type: 'answer_token',
+      content: { token: '完整修正报告' },
+    }));
+  });
+
   it('maps parallel tool results back to their SDK tool_use_id', () => {
     const updates: StreamingUpdate[] = [];
     const bridge = createSseBridge((update) => updates.push(update));

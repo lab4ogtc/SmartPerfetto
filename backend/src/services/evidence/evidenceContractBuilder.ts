@@ -137,7 +137,7 @@ function normalizeSourceRef(value: string): string {
   return text.toLowerCase();
 }
 
-function sourceRefAliases(envelope: DataEnvelope, ordinal: number): string[] {
+function sourceRefAliases(envelope: DataEnvelope, ordinal: number): Array<string | undefined> {
   const format = envelope.display?.format;
   const kind = format === 'summary'
     ? 'summary'
@@ -169,18 +169,34 @@ function sourceRefAliases(envelope: DataEnvelope, ordinal: number): string[] {
   return [
     ...(zhPrefix[kind] || []).map(prefix => `${prefix} ${ordinal}`),
     ...(enPrefix[kind] || []).map(prefix => `${prefix} ${ordinal}`),
+    envelope.display?.title,
+    envelope.meta?.source,
+    envelope.meta?.skillId,
+    envelope.meta?.stepId,
   ];
+}
+
+function refEvidenceIdMatchesEnvelope(env: DataEnvelope, ref: ConclusionContractClaimReference): boolean {
+  if (!ref.evidenceRefId) return false;
+  const meta = env.meta || {};
+  const metaArtifactId = (meta as any).artifactId;
+  const metaSourceArtifactId = (meta as any).sourceArtifactId;
+  return meta.evidenceRefId === ref.evidenceRefId
+    || metaArtifactId === ref.evidenceRefId
+    || metaSourceArtifactId === ref.evidenceRefId;
 }
 
 function refMatchesSourceRef(env: DataEnvelope, ref: ConclusionContractClaimReference, ordinal: number): boolean {
   if (!ref.sourceRef) return false;
   const target = normalizeSourceRef(ref.sourceRef);
-  return sourceRefAliases(env, ordinal).some(alias => normalizeSourceRef(alias) === target);
+  return sourceRefAliases(env, ordinal)
+    .filter((alias): alias is string => typeof alias === 'string' && alias.trim().length > 0)
+    .some(alias => normalizeSourceRef(alias) === target);
 }
 
 function refMatchesAnyEnvelopeIdentifier(env: DataEnvelope, ref: ConclusionContractClaimReference, ordinal: number): boolean {
   const meta = env.meta || {};
-  if (ref.evidenceRefId && meta.evidenceRefId === ref.evidenceRefId) return true;
+  if (refEvidenceIdMatchesEnvelope(env, ref)) return true;
   if (ref.sourceToolCallId && meta.sourceToolCallId === ref.sourceToolCallId) return true;
   if (refMatchesSourceRef(env, ref, ordinal)) return true;
   const metaArtifactId = (meta as any).artifactId;
@@ -192,7 +208,7 @@ function refMatchesAnyEnvelopeIdentifier(env: DataEnvelope, ref: ConclusionContr
 
 function refMatchesAllProvidedEnvelopeIdentifiers(env: DataEnvelope, ref: ConclusionContractClaimReference, ordinal: number): boolean {
   const meta = env.meta || {};
-  if (ref.evidenceRefId && meta.evidenceRefId !== ref.evidenceRefId) return false;
+  if (ref.evidenceRefId && !refEvidenceIdMatchesEnvelope(env, ref)) return false;
   if (ref.sourceToolCallId && meta.sourceToolCallId !== ref.sourceToolCallId) return false;
   if (ref.sourceRef && !refMatchesSourceRef(env, ref, ordinal)) return false;
   const metaArtifactId = (meta as any).artifactId;

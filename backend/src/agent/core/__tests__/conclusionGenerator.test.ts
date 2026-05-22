@@ -478,6 +478,36 @@ clusters: S1: 初始化阶段（3帧, 75%）
       column: 'dur_ms',
       value: 45.6,
     });
+
+    const compressedReferences = deriveConclusionContract([
+      '## 逐句数据引用（结构化来源）',
+      '- Q1 / C1: 热点 self_ms 排名。',
+      '  - evidence_ref_id=art-30; source_ref=可操作热点; row_index=0-1; column=slice_name,self_ms,self_percent; value=ChaosTask/456.32/34.1, LoadSimulator_ActivityInit/249.8/18.7',
+      '- Q2 / C1: 热点状态。',
+      '  - evidence_ref_id=art-35; source_ref=hot_slice_states; row_selector=slice_name=ChaosTask AND state=Running; column=state,state_pct; value=Running,100; row_selector=slice_name=SimulateInflation; column=state,state_pct; value=Running,98.4',
+      '- Q3 / C1: 慢因。',
+      '  - evidence_ref_id=art-39; source_ref=检测到的慢启动原因; row_index=0; column=reason_id,severity,evidence; value=SR12,critical,非框架 slice 占 bindApplication 98.8%, 总耗时 568.8 ms',
+    ].join('\n'));
+
+    expect(compressedReferences?.claims?.[0]?.references).toEqual([
+      expect.objectContaining({ evidenceRefId: 'art-30', sourceRef: '可操作热点', rowIndex: 0, column: 'slice_name', value: 'ChaosTask' }),
+      expect.objectContaining({ evidenceRefId: 'art-30', sourceRef: '可操作热点', rowIndex: 0, column: 'self_ms', value: 456.32 }),
+      expect.objectContaining({ evidenceRefId: 'art-30', sourceRef: '可操作热点', rowIndex: 0, column: 'self_percent', value: 34.1 }),
+      expect.objectContaining({ evidenceRefId: 'art-30', sourceRef: '可操作热点', rowIndex: 1, column: 'slice_name', value: 'LoadSimulator_ActivityInit' }),
+      expect.objectContaining({ evidenceRefId: 'art-30', sourceRef: '可操作热点', rowIndex: 1, column: 'self_ms', value: 249.8 }),
+      expect.objectContaining({ evidenceRefId: 'art-30', sourceRef: '可操作热点', rowIndex: 1, column: 'self_percent', value: 18.7 }),
+    ]);
+    expect(compressedReferences?.claims?.[1]?.references).toEqual([
+      expect.objectContaining({ evidenceRefId: 'art-35', sourceRef: 'hot_slice_states', rowSelector: { slice_name: 'ChaosTask', state: 'Running' }, column: 'state', value: 'Running' }),
+      expect.objectContaining({ evidenceRefId: 'art-35', sourceRef: 'hot_slice_states', rowSelector: { slice_name: 'ChaosTask', state: 'Running' }, column: 'state_pct', value: 100 }),
+      expect.objectContaining({ evidenceRefId: 'art-35', sourceRef: 'hot_slice_states', rowSelector: { slice_name: 'SimulateInflation' }, column: 'state', value: 'Running' }),
+      expect.objectContaining({ evidenceRefId: 'art-35', sourceRef: 'hot_slice_states', rowSelector: { slice_name: 'SimulateInflation' }, column: 'state_pct', value: 98.4 }),
+    ]);
+    expect(compressedReferences?.claims?.[2]?.references).toEqual([
+      expect.objectContaining({ evidenceRefId: 'art-39', sourceRef: '检测到的慢启动原因', rowIndex: 0, column: 'reason_id', value: 'SR12' }),
+      expect.objectContaining({ evidenceRefId: 'art-39', sourceRef: '检测到的慢启动原因', rowIndex: 0, column: 'severity', value: 'critical' }),
+      expect.objectContaining({ evidenceRefId: 'art-39', sourceRef: '检测到的慢启动原因', rowIndex: 0, column: 'evidence', value: '非框架 slice 占 bindApplication 98.8%, 总耗时 568.8 ms' }),
+    ]);
   });
 
   test('injects system-context action item with owner/priority/verification for system skills', async () => {

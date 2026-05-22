@@ -384,6 +384,45 @@ describe('runClaimVerification', () => {
     expect(result.claimVerificationResult.status).toBe('passed');
   });
 
+  it('treats artifact ids in evidence_ref_id as aliases and accepts display-title source refs', () => {
+    const envelope = createDataEnvelope({
+      columns: ['type_display', 'ttid_ms'],
+      rows: [['冷启动', 1912.202655]],
+    }, {
+      type: 'skill_result',
+      source: 'startup_events_in_range',
+      title: '检测到的启动事件',
+      layer: 'overview',
+      format: 'table',
+      evidenceRefId: 'data:skill:startup_events_in_range',
+      artifactId: 'art-2',
+      traceId: 'trace-a',
+      traceSide: 'current',
+    });
+    const c = contract(120);
+    c.claims![0] = {
+      id: 'claim-startup-type',
+      kind: 'categorical',
+      text: '启动类型为冷启动',
+      references: [{
+        evidenceRefId: 'art-2',
+        sourceRef: '检测到的启动事件',
+        rowIndex: 0,
+        column: 'type_display',
+        value: '冷启动',
+      }],
+    };
+
+    const result = runClaimVerification({
+      conclusionContract: c,
+      dataEnvelopes: [envelope],
+    });
+
+    expect(result.claimSupport[0].anchors[0].evidenceRefId).toBe('data:skill:startup_events_in_range');
+    expect(result.claimSupport[0].anchors[0].context.artifactId).toBe('art-2');
+    expect(result.claimVerificationResult.status).toBe('passed');
+  });
+
   it('does not fully verify matched cells when trace provenance is missing', () => {
     const envelope = createDataEnvelope({
       columns: ['blocked_ms'],

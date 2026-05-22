@@ -38,6 +38,7 @@ import {
   buildQuickSystemPrompt,
   buildSystemPrompt,
 } from '../agentv3/claudeSystemPrompt';
+import { loadPromptTemplate } from '../agentv3/strategyLoader';
 import { extractFindingsFromText } from '../agentv3/claudeFindingExtractor';
 import { detectFocusApps } from '../agentv3/focusAppDetector';
 import { classifyScene, type SceneType } from '../agentv3/sceneClassifier';
@@ -76,6 +77,11 @@ import {
   shouldUseMimoReasoningContentCompat,
 } from './mimoReasoningCompat';
 import { createOpenAIToolsFromMcpDefinitions } from './openAiToolAdapter';
+import {
+  applyFinalResultQualityGate,
+  hasDeliverableFinalReportHeading,
+  looksLikePhaseSummaryFallback,
+} from '../services/finalResultQualityGate';
 import type { ProviderScope } from '../services/providerManager';
 import type { KnowledgeScope } from '../services/scopedKnowledgeStore';
 
@@ -88,6 +94,7 @@ interface OpenAISessionEntry {
 
 const OPENAI_SESSION_FRESHNESS_MS = 4 * 60 * 60 * 1000;
 const OPENAI_MAX_PLAN_CONTINUATIONS = 3;
+const OPENAI_MAX_FINAL_REPORT_CONTINUATIONS = 1;
 const OPENAI_PLAN_COMPLETE_IDLE_ABORT_MS = 8_000;
 
 interface PlanCompletionStatus {
@@ -243,13 +250,54 @@ function looksLikeProcessNarrationParagraph(paragraph: string): boolean {
   const compact = paragraph.trim().replace(/\s+/g, ' ');
   if (!compact) return false;
   return /^(?:我来|我需要|我将|我会|现在|接下来|下一步|首先[，,]?.*提交|调用\s*`?[\w-]+`?|记录关键发现|数据量充足|非常丰富的数据|让我|为了完成|I need\b|I will\b|Now I\b|Next\b|Let me\b)/i.test(compact)
-    || /阶段状态更新|执行剩余阶段|继续执行剩余阶段|update_plan_phase|submit_plan|resolve_hypothesis|provider 未主动结束 stream|plan 未完成|plan 已完成/i.test(compact);
+    || /现在进入\s*Phase|Phase\s*\d+(?:\.\d+)?.*返回|关键概览|阶段状态更新|执行剩余阶段|继续执行剩余阶段|update_plan_phase|submit_plan|resolve_hypothesis|provider 未主动结束 stream|plan 未完成|plan 已完成/i.test(compact);
 }
 
 function hasReportMarkers(text: string): boolean {
   return /(^|\n)\s{0,3}#{1,3}\s+\S/.test(text)
     || /(^|\n)\s{0,3}\*\*[^*\n]{2,80}\*\*/.test(text)
     || /(^|\n)\s{0,3}\|/.test(text);
+}
+
+function normalizeConclusionForComparison(text: string): string {
+  return text.trim().replace(/\s+/g, ' ');
+}
+
+function isSameConclusionText(a: string | undefined, b: string | undefined): boolean {
+  const normalizedA = normalizeConclusionForComparison(a || '');
+  const normalizedB = normalizeConclusionForComparison(b || '');
+  return normalizedA.length > 0 && normalizedA === normalizedB;
+}
+
+function cleanPlanSummaryForFinalReport(summary: string): string {
+  return summary
+    .trim()
+    .replace(/^(?:完成综合结论输出|完整结构化报告已(?:输出|生成))[。:：\s]*/i, '')
+    .replace(/^核心发现[：:\s]*/i, '')
+    .replace(/^所有关键artifact已在Phase\s*\d+(?:\.\d+)?中获取完毕[：:。\s]*/i, '')
+    .trim();
+}
+
+function isSubstantialReportText(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length < 200 || !hasDeliverableFinalReportHeading(trimmed)) return false;
+  if (looksLikeProcessNarrationParagraph(trimmed)) return false;
+  return !looksLikeProcessNarrationParagraph(trimmed.split(/\n{2,}/)[0] || '');
+}
+
+function isRicherReportCandidate(candidate: string, baseline: string): boolean {
+  const candidateTrimmed = candidate.trim();
+  const baselineTrimmed = baseline.trim();
+  if (!isSubstantialReportText(candidateTrimmed)) return false;
+  if (!baselineTrimmed || !isSubstantialReportText(baselineTrimmed)) return true;
+  return candidateTrimmed.length > Math.max(200, baselineTrimmed.length * 1.25);
+}
+
+function selectOpenAiRecoveryAnswer(input: {
+  runAnswer: string;
+  accumulatedAnswer: string;
+}): string {
+  return input.runAnswer.trim() ? input.runAnswer : input.accumulatedAnswer;
 }
 
 function findEmbeddedFinalReportStart(text: string): number {
@@ -302,14 +350,15 @@ function sanitizeOpenAiConclusionText(
     ? paragraphs.slice(firstReportParagraph).join('\n\n').trim()
     : trimmed;
   const strippedStillProcess = looksLikeProcessNarrationParagraph(stripped.split(/\n{2,}/)[0] || '');
-  if (firstReportParagraph > 0 && stripped.length >= 80 && !strippedStillProcess) {
+  const strippedHasProcessNarration = looksLikeProcessNarrationParagraph(stripped);
+  if (firstReportParagraph > 0 && stripped.length >= 80 && !strippedStillProcess && !strippedHasProcessNarration) {
     return stripped;
   }
 
   if (
     fallback &&
     (options.completedByPlanIdle || options.planComplete) &&
-    (firstReportParagraph > 0 || strippedStillProcess || !hasReportMarkers(trimmed))
+    (firstReportParagraph > 0 || strippedStillProcess || strippedHasProcessNarration || !hasReportMarkers(trimmed))
   ) {
     return fallback;
   }
@@ -331,15 +380,31 @@ function chooseOpenAiConclusionText(input: {
   });
   const fallback = input.fallbackConclusion?.trim();
   const accumulated = input.accumulatedAnswer.trim();
-  if (!input.completedByPlanIdle || !accumulated || accumulated === input.candidate.trim()) {
-    return selected;
-  }
+  const selectedIsFallback = fallback ? isSameConclusionText(selected, fallback) : false;
+  const selectedNeedsRecovery =
+    selectedIsFallback ||
+    looksLikePhaseSummaryFallback(selected) ||
+    !isSubstantialReportText(selected) ||
+    looksLikeProcessNarrationParagraph(selected.split(/\n{2,}/)[0] || '');
+  const mayRecoverAccumulated =
+    accumulated.length > 0 &&
+    !isSameConclusionText(accumulated, input.candidate) &&
+    (input.completedByPlanIdle || (input.planComplete && selectedNeedsRecovery));
+  if (!mayRecoverAccumulated) return selected;
 
-  const recovered = sanitizeOpenAiConclusionText(accumulated);
-  if (hasReportMarkers(recovered) && recovered.length > Math.max(200, selected.length * 1.25)) {
+  const recovered = sanitizeOpenAiConclusionText(accumulated, {
+    completedByPlanIdle: input.completedByPlanIdle,
+    planComplete: input.planComplete,
+    fallbackConclusion: input.fallbackConclusion,
+  });
+
+  if (isRicherReportCandidate(recovered, selected)) {
     return recovered;
   }
-  if (fallback && selected === fallback && hasReportMarkers(recovered) && recovered.length > selected.length) {
+  if (hasDeliverableFinalReportHeading(recovered) && recovered.length > Math.max(200, selected.length * 1.25)) {
+    return recovered;
+  }
+  if (fallback && selectedIsFallback && hasDeliverableFinalReportHeading(recovered) && recovered.length > selected.length) {
     return recovered;
   }
   return selected;
@@ -350,6 +415,7 @@ export const __testing = {
   readCompletedStreamFinalOutput,
   sanitizeOpenAiConclusionText,
   chooseOpenAiConclusionText,
+  selectOpenAiRecoveryAnswer,
   isRecoverableOpenAIStreamTermination,
   compactProviderErrorMessage,
 };
@@ -528,17 +594,19 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
         tools: context.tools,
         toolUseBehavior: 'run_llm_again',
         modelSettings: {
+          maxTokens: config.maxOutputTokens,
           parallelToolCalls: false,
         },
       });
 
-      const controller = new AbortController();
+      let activeController: AbortController | undefined;
       const timeoutMs = (quickMode ? config.quickPathPerTurnMs : config.fullPathPerTurnMs)
         * (quickMode ? config.quickMaxTurns : config.maxTurns);
+      const deadlineAt = Date.now() + timeoutMs;
       let timedOut = false;
       const timeout = setTimeout(() => {
         timedOut = true;
-        controller.abort();
+        activeController?.abort();
       }, timeoutMs);
 
       this.emitUpdate({
@@ -566,8 +634,37 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
         let partial = false;
         let terminationReason: AnalysisTerminationReason | undefined;
         let terminationMessage: string | undefined;
+        let finalReportContinuations = 0;
+        const markTimeoutPartial = (planStatus: PlanCompletionStatus) => {
+          partial = true;
+          terminationReason = 'timeout';
+          terminationMessage = localize(
+            config.outputLanguage,
+            `OpenAI 分析超过 ${Math.round(timeoutMs / 1000)} 秒超时，结果可能不完整。`,
+            `OpenAI analysis timed out after ${Math.round(timeoutMs / 1000)} seconds; the result may be incomplete.`,
+          );
+          conclusion = this.withIncompletePlanWarning(conclusion, planStatus, config.outputLanguage);
+          this.emitUpdate({
+            type: 'degraded',
+            content: {
+              module: 'openAiRuntime',
+              fallback: 'partial_result_after_timeout',
+              partial: true,
+              terminationReason,
+              message: terminationMessage,
+            },
+            timestamp: Date.now(),
+          });
+        };
 
         for (let continuation = 0; ; continuation++) {
+          if (timedOut || Date.now() >= deadlineAt) {
+            timedOut = true;
+            markTimeoutPartial(this.getPlanCompletionStatus(sessionId, quickMode));
+            break;
+          }
+          const controller = new AbortController();
+          activeController = controller;
           let runAnswer = '';
           let runTurns = 0;
           let completedByPlanIdle = false;
@@ -632,6 +729,9 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
             }
           } finally {
             clearPlanCompleteIdleTimer();
+            if (activeController === controller) {
+              activeController = undefined;
+            }
           }
 
           rounds += runTurns || stream.currentTurn || 0;
@@ -645,13 +745,14 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
             : (streamFinalOutput ? JSON.stringify(streamFinalOutput) : runAnswer);
           const planStatus = this.getPlanCompletionStatus(sessionId, quickMode);
           const fallbackConclusion = this.buildCompletedPlanFallbackConclusion(sessionId, quickMode, config.outputLanguage);
+          const recoveryAnswer = selectOpenAiRecoveryAnswer({ runAnswer, accumulatedAnswer });
           conclusion = chooseOpenAiConclusionText({
             candidate: finalOutput ||
               runAnswer ||
               accumulatedAnswer ||
               fallbackConclusion ||
               '',
-            accumulatedAnswer,
+            accumulatedAnswer: recoveryAnswer,
             completedByPlanIdle,
             planComplete: planStatus.complete,
             fallbackConclusion,
@@ -663,28 +764,43 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
           }
 
           if (timedOut && !completedByPlanIdle) {
-            partial = true;
-            terminationReason = 'timeout';
-            terminationMessage = localize(
-              config.outputLanguage,
-              `OpenAI 分析超过 ${Math.round(timeoutMs / 1000)} 秒超时，结果可能不完整。`,
-              `OpenAI analysis timed out after ${Math.round(timeoutMs / 1000)} seconds; the result may be incomplete.`,
-            );
-            conclusion = this.withIncompletePlanWarning(conclusion, planStatus, config.outputLanguage);
-            this.emitUpdate({
-              type: 'degraded',
-              content: {
-                module: 'openAiRuntime',
-                fallback: 'partial_result_after_timeout',
-                partial: true,
-                terminationReason,
-                message: terminationMessage,
-              },
-              timestamp: Date.now(),
-            });
+            markTimeoutPartial(planStatus);
             break;
           }
-          if (planStatus.complete) break;
+          if (planStatus.complete) {
+            const streamHistory = Array.isArray(stream.history)
+              ? stream.history as AgentInputItem[]
+              : [];
+            if (this.shouldRequestFinalReportAfterPlanComplete({
+              quickMode,
+              planStatus,
+              conclusion,
+              fallbackConclusion,
+              completedByPlanIdle,
+              timedOut,
+              finalReportContinuations,
+            }) && streamHistory.length > 0) {
+              finalReportContinuations++;
+              this.emitUpdate({
+                type: 'progress',
+                content: {
+                  phase: 'concluding',
+                  message: this.formatPlanCompleteReportContinuationMessage(config.outputLanguage),
+                },
+                timestamp: Date.now(),
+              });
+              currentInput = [
+                ...streamHistory,
+                {
+                  role: 'user',
+                  content: this.buildFinalReportAfterPlanCompletePrompt(config.outputLanguage),
+                } as AgentInputItem,
+              ];
+              currentPreviousResponseId = undefined;
+              continue;
+            }
+            break;
+          }
 
           if (continuation >= OPENAI_MAX_PLAN_CONTINUATIONS) {
             partial = true;
@@ -727,43 +843,35 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
         if (options.codeAwareMode && options.codeAwareMode !== 'off') {
           conclusion = sanitizeCodeAwareText(sessionId, conclusion);
         }
+        const finalFallbackConclusion = this.buildCompletedPlanFallbackConclusion(sessionId, quickMode, config.outputLanguage);
+        if (
+          finalFallbackConclusion &&
+          (isSameConclusionText(conclusion, finalFallbackConclusion) ||
+            looksLikePhaseSummaryFallback(conclusion)) &&
+          !partial
+        ) {
+          partial = true;
+          terminationMessage = localize(
+            config.outputLanguage,
+            'OpenAI plan 已完成，但 provider 没有输出独立最终报告；已退回到阶段摘要，结果信息密度可能不足。',
+            'The OpenAI plan completed, but the provider did not produce an independent final report; falling back to phase summaries, which may be less informative.',
+          );
+          this.emitUpdate({
+            type: 'degraded',
+            content: {
+              module: 'openAiRuntime',
+              fallback: 'completed_plan_summary_fallback',
+              partial: true,
+              message: terminationMessage,
+            },
+            timestamp: Date.now(),
+          });
+        }
         const findings = extractFindingsFromText(conclusion);
         const confidence = partial
           ? Math.min(0.55, this.estimateConfidence(findings, conclusion))
           : this.estimateConfidence(findings, conclusion);
-
-        this.sessionMap.set(context.sessionMapKey, {
-          history: finalHistory,
-          lastResponseId: finalLastResponseId,
-          runState: finalRunState,
-          updatedAt: Date.now(),
-        });
-
-        this.recordTurn({
-          query,
-          sessionId,
-          conclusion,
-          findings,
-          confidence,
-          sessionContext: context.sessionContext,
-          previousTurnCount: context.previousTurns.length,
-          quickMode,
-        });
-
-        this.emitUpdate({
-          type: 'conclusion',
-          content: { conclusion, durationMs: Date.now() - startTime, turns: rounds },
-          timestamp: Date.now(),
-        });
-        this.emitUpdate({
-          type: 'answer_token',
-          content: { done: true, totalChars: conclusion.length },
-          timestamp: Date.now(),
-        });
-
-        await provider.close().catch(() => undefined);
-
-        return {
+        const result: AnalysisResult = {
           sessionId,
           success: true,
           findings,
@@ -776,6 +884,50 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
           terminationReason,
           terminationMessage,
         };
+        const gateIssue = applyFinalResultQualityGate({ result, query });
+        if (gateIssue) {
+          this.emitUpdate({
+            type: 'degraded',
+            content: {
+              module: 'openAiRuntime',
+              fallback: gateIssue.code,
+              partial: true,
+              message: gateIssue.message,
+            },
+            timestamp: Date.now(),
+          });
+        }
+
+        this.sessionMap.set(context.sessionMapKey, {
+          history: finalHistory,
+          lastResponseId: finalLastResponseId,
+          runState: finalRunState,
+          updatedAt: Date.now(),
+        });
+
+        this.recordTurn({
+          query,
+          sessionId,
+          result,
+          sessionContext: context.sessionContext,
+          previousTurnCount: context.previousTurns.length,
+          quickMode,
+        });
+
+        this.emitUpdate({
+          type: 'conclusion',
+          content: { conclusion: result.conclusion, durationMs: Date.now() - startTime, turns: rounds },
+          timestamp: Date.now(),
+        });
+        this.emitUpdate({
+          type: 'answer_token',
+          content: { done: true, totalChars: result.conclusion.length },
+          timestamp: Date.now(),
+        });
+
+        await provider.close().catch(() => undefined);
+
+        return result;
       } catch (error) {
         clearTimeout(timeout);
         await provider.close().catch(() => undefined);
@@ -1356,6 +1508,54 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
       this.buildCompletedPlanFallbackConclusion(sessionId, quickMode, DEFAULT_OUTPUT_LANGUAGE) !== undefined;
   }
 
+  private shouldRequestFinalReportAfterPlanComplete(input: {
+    quickMode: boolean;
+    planStatus: PlanCompletionStatus;
+    conclusion: string;
+    fallbackConclusion?: string;
+    completedByPlanIdle: boolean;
+    timedOut: boolean;
+    finalReportContinuations: number;
+  }): boolean {
+    if (
+      input.quickMode ||
+      !input.planStatus.complete ||
+      input.timedOut ||
+      input.finalReportContinuations >= OPENAI_MAX_FINAL_REPORT_CONTINUATIONS
+    ) {
+      return false;
+    }
+
+    const conclusion = input.conclusion.trim();
+    const fallback = input.fallbackConclusion?.trim();
+    if (!fallback) return false;
+    if (!conclusion) return true;
+    if (isSameConclusionText(conclusion, fallback)) return true;
+    if (looksLikePhaseSummaryFallback(conclusion)) return true;
+    if (!hasDeliverableFinalReportHeading(conclusion)) return true;
+    if (looksLikeProcessNarrationParagraph(conclusion)) return true;
+    return looksLikeProcessNarrationParagraph(conclusion.split(/\n{2,}/)[0] || '');
+  }
+
+  private buildFinalReportAfterPlanCompletePrompt(outputLanguage: OutputLanguage): string {
+    const templateName = outputLanguage === 'en'
+      ? 'prompt-openai-final-report-continuation-en'
+      : 'prompt-openai-final-report-continuation-zh';
+    const template = loadPromptTemplate(templateName);
+    if (!template) {
+      throw new Error(`Missing OpenAI final-report continuation prompt template: ${templateName}`);
+    }
+    return template;
+  }
+
+  private formatPlanCompleteReportContinuationMessage(outputLanguage: OutputLanguage): string {
+    return localize(
+      outputLanguage,
+      'OpenAI plan 已完成，但最终正文仍是阶段摘要，继续请求完整最终报告。',
+      'The OpenAI plan is complete, but the final body is still a phase summary; requesting the complete final report.',
+    );
+  }
+
   private buildCompletedPlanFallbackConclusion(
     sessionId: string,
     quickMode: boolean,
@@ -1366,24 +1566,78 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
     if (!plan || plan.phases.length === 0) return undefined;
     if (!this.getPlanCompletionStatus(sessionId, quickMode).complete) return undefined;
 
+    const isFinalReportPhase = (phase: PlanPhase) =>
+      /(综合结论|最终结论|结论|报告|conclusion|final report)/i.test(`${phase.name} ${phase.goal}`);
+
     const summaries = plan.phases
       .filter(hasAdequateClosedPhaseSummary)
       .map(phase => {
         const name = phase.name || phase.id;
-        return `- ${name}: ${phase.summary?.trim()}`;
+        return `- ${name}: ${cleanPlanSummaryForFinalReport(phase.summary || '')}`;
       });
     if (summaries.length === 0) return undefined;
 
     const finalPhase = [...plan.phases]
       .reverse()
       .find(phase => hasAdequateClosedPhaseSummary(phase) &&
-        /(综合结论|最终结论|结论|报告|conclusion|final report)/i.test(`${phase.name} ${phase.goal}`));
-    const finalSummary = finalPhase?.summary?.trim() || summaries[summaries.length - 1]?.replace(/^-\s*[^:]+:\s*/, '') || '';
+        isFinalReportPhase(phase));
+    const finalSummary = cleanPlanSummaryForFinalReport(
+      finalPhase?.summary?.trim() || summaries[summaries.length - 1]?.replace(/^-\s*[^:]+:\s*/, '') || '',
+    );
+    const evidenceBullets = plan.phases
+      .filter(phase => hasAdequateClosedPhaseSummary(phase) && !isFinalReportPhase(phase))
+      .map(phase => {
+        const name = phase.name || phase.id;
+        return `- ${name}: ${cleanPlanSummaryForFinalReport(phase.summary || '')}`;
+      })
+      .filter(line => line.trim().length > 4)
+      .slice(0, 8)
+      .join('\n');
 
     return localize(
       outputLanguage,
-      `## 综合结论\n\n${finalSummary}\n\n## 分阶段证据摘要\n\n${summaries.join('\n')}`,
-      `## Final Conclusion\n\n${finalSummary}\n\n## Evidence Summary By Phase\n\n${summaries.join('\n')}`,
+      [
+        '## 综合结论',
+        '',
+        finalSummary || '分析计划已完成，以下结论基于已采集的结构化证据收敛。',
+        '',
+        '## 关键证据链',
+        '',
+        evidenceBullets || '- 已完成的计划阶段均有结构化证据支撑。',
+        '',
+        '## 根因拆解',
+        '',
+        '- 以上证据按阶段产出、关键指标、已确认假设和已排除因素归并；优化优先级以已验证且可执行的瓶颈为准。',
+        '',
+        '## 优化建议',
+        '',
+        '- 优先处理证据支持的可操作瓶颈；对已排除但风险较高的因素保留必要监控。',
+        '',
+        '## 置信度/限制',
+        '',
+        '- 结论基于已完成计划阶段的结构化证据收敛；若需要代码级 owner 定位，应结合源码符号继续分析。',
+      ].join('\n'),
+      [
+        '## Final Conclusion',
+        '',
+        finalSummary || 'The analysis plan completed; this conclusion is synthesized from the collected structured evidence.',
+        '',
+        '## Key Evidence',
+        '',
+        evidenceBullets || '- Completed plan phases contain structured evidence.',
+        '',
+        '## Root Cause Breakdown',
+        '',
+        '- The evidence is grouped by phase outputs, key metrics, confirmed hypotheses, and excluded factors; optimization priority should follow verified and actionable bottlenecks.',
+        '',
+        '## Recommendations',
+        '',
+        '- Prioritize actionable bottlenecks supported by evidence; keep monitoring excluded factors that still carry residual risk.',
+        '',
+        '## Confidence / Limits',
+        '',
+        '- This conclusion is synthesized from structured evidence collected by the completed plan phases. Use source-code symbol lookup for owner-level fixes.',
+      ].join('\n'),
     );
   }
 
@@ -1477,9 +1731,19 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
     this.recordTurn({
       query: params.query,
       sessionId: params.sessionId,
-      conclusion,
-      findings,
-      confidence,
+      result: {
+        sessionId: params.sessionId,
+        success: true,
+        findings,
+        hypotheses: params.context.hypotheses.map(h => this.toProtocolHypothesis(h)),
+        conclusion,
+        confidence,
+        rounds: params.rounds,
+        totalDurationMs: Date.now() - params.startTime,
+        partial: true,
+        terminationReason,
+        terminationMessage,
+      },
       sessionContext: params.context.sessionContext,
       previousTurnCount: params.context.previousTurns.length,
       quickMode: params.quickMode,
@@ -1659,9 +1923,7 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
   private recordTurn(input: {
     query: string;
     sessionId: string;
-    conclusion: string;
-    findings: Finding[];
-    confidence: number;
+    result: AnalysisResult;
     sessionContext: ReturnType<typeof sessionContextManager.getOrCreate>;
     previousTurnCount: number;
     quickMode: boolean;
@@ -1677,19 +1939,23 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
       },
       {
         agentId: 'openai-agent',
-        success: true,
-        findings: input.findings,
-        confidence: input.confidence,
-        message: input.conclusion,
+        success: input.result.success,
+        findings: input.result.findings,
+        confidence: input.result.confidence,
+        message: input.result.conclusion,
+        partial: input.result.partial,
+        terminationReason: input.result.terminationReason,
+        terminationMessage: input.result.terminationMessage,
       },
-      input.findings,
+      input.result.findings,
     );
 
+    if (input.result.partial === true) return;
     input.sessionContext.updateWorkingMemoryFromConclusion({
       turnIndex: input.previousTurnCount,
       query: input.query,
-      conclusion: input.conclusion,
-      confidence: input.confidence,
+      conclusion: input.result.conclusion,
+      confidence: input.result.confidence,
     });
   }
 

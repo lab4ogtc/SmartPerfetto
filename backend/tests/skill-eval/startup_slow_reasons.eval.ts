@@ -47,6 +47,19 @@ describe('startup_slow_reasons skill', () => {
       expect(s.startup_type).toBeDefined();
       expect(s.dur_ms).toBeGreaterThan(0);
     }, 30000);
+
+    it('should reclassify the lacunh startup as cold before slow-reason checks consume it', async () => {
+      const result = await evaluator.executeStep('startup_overview', {});
+
+      expect(result.success).toBe(true);
+      expect(result.data.length).toBeGreaterThan(0);
+      expect(result.data[0].startup_type).toBe('cold');
+      expect(result.data[0].dur_ms).toBeGreaterThan(1000);
+      expect(result.data[0].ttid_ms).toBeGreaterThan(1800);
+      expect(result.data[0].ts).toBeDefined();
+      expect(result.data[0].dur).toBeDefined();
+      expect(result.data[0].upid).toBeDefined();
+    }, 30000);
   });
 
   // =========================================================================

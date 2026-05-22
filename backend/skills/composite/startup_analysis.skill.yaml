@@ -131,6 +131,22 @@ steps:
         - name: type_display
           label: "启动类型"
           type: string
+        - name: startup_type
+          label: "修正后类型"
+          type: string
+          hidden: true
+        - name: original_type
+          label: "原始类型"
+          type: string
+          hidden: true
+        - name: type_reclassified
+          label: "类型已修正"
+          type: number
+          hidden: true
+        - name: type_confidence
+          label: "类型置信度"
+          type: string
+          hidden: true
         - name: dur_ms
           label: "耗时"
           type: duration

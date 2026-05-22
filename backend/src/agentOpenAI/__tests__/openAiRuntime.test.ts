@@ -202,8 +202,28 @@ describe('OpenAIRuntime plan completion guard', () => {
     )).toBe('分析计划已完成，基于已完成阶段摘要输出。');
   });
 
+  it('treats startup-type validation scratch text as process narration', () => {
+    const fallback = '## 综合结论\n\n冷启动 TTID=1912ms，主因是主线程模拟负载。\n\n## 关键证据链\n\n- startup_analysis type_display=冷启动，R009 已修正。';
+
+    const chosen = __testing.chooseOpenAiConclusionText({
+      candidate:
+        '验证逻辑：\n' +
+        '- **bindApplication 不存在** → 没有 Application 初始化阶段\n' +
+        '- **performCreate 存在** → 有 Activity 重建\n\n' +
+        '但 Skill 将其重分类为冷启动（R009），可能是因为该应用行为特殊。实际上根据框架信号，**应维持温启动分类**。\n\n' +
+        '现在进入 Phase 2，调用 startup_detail：Phase 2 返回了丰富数据。关键概览：Q1=62.8%, Q4b=35.1%。',
+      accumulatedAnswer: '',
+      completedByPlanIdle: true,
+      planComplete: true,
+      fallbackConclusion: fallback,
+    });
+
+    expect(chosen).toBe(fallback);
+  });
+
   it('recovers the accumulated report when the plan-idle candidate is only bookkeeping', () => {
-    const report = '## 概览\n\n' +
+    const report = '# 启动性能分析报告\n\n' +
+      '## 综合结论\n\n' +
       '启动诊断完成，主线程 Running=63%，ChaosTask self=456ms，结论引用 art-10 和 data:sql_summary:current:abc。\n\n' +
       '## 根因\n\n' +
       '模拟负载是主要瓶颈，LoadSimulator_ActivityInit=250ms，相关数据来自 art-32。';
@@ -217,6 +237,194 @@ describe('OpenAIRuntime plan completion guard', () => {
     });
 
     expect(chosen).toBe(report);
+  });
+
+  it('does not treat phase process narration as a valid final report', () => {
+    const fallback = '## 综合结论\n\n阶段证据已收敛。\n\n## 关键证据链\n\n- TTID=1912ms。';
+    const leaked = [
+      '1. **冷启动**，dur=1338.65ms，原分类warm已被重分类为cold（R009）',
+      '2. **TTID=1912.20ms > dur=1338.65ms**，差距573.55ms（R008触发）',
+      '',
+      '现在完成Phase 1，进入Phase 1.5验证启动类型，然后进入Phase 2深钻。',
+    ].join('\n');
+
+    const chosen = __testing.chooseOpenAiConclusionText({
+      candidate: leaked,
+      accumulatedAnswer: leaked,
+      completedByPlanIdle: true,
+      planComplete: true,
+      fallbackConclusion: fallback,
+    });
+
+    expect(chosen).toBe(fallback);
+  });
+
+  it('recovers the accumulated report after natural plan completion when finalOutput collapses to fallback', () => {
+    const fallback = '## 综合结论\n\n' +
+      '完成综合结论输出。冷启动 TTID=1912ms，主因是主线程模拟负载。\n\n' +
+      '## 分阶段证据摘要\n\n' +
+      '- 启动概览采集: 获取启动概览，TTID=1912ms。\n' +
+      '- 综合结论: 完成综合结论输出。';
+    const report = '# 启动性能分析报告\n\n' +
+      '## 综合结论\n\n' +
+      '冷启动 TTID=1912ms，主线程模拟负载是主因；ChaosTask self=456ms，LoadSimulator_ActivityInit self=249.8ms，SimulateInflation self=175.5ms。' +
+      '四象限 Q1=62.8%、Q4b=35.1%，CPU-bound 为主，证据引用 art-10、art-32 和 data:sql_table:current:abc。\n\n' +
+      '## 关键证据链\n\n' +
+      '- startup_detail 显示主线程 Running=63%，S=35%，D=1.7%。\n' +
+      '- hot_slice_states 显示 ChaosTask/SimulateInflation Running >98%。\n' +
+      '- memory_pressure_in_range 显示 pressure_level=none，排除内存压力。\n\n' +
+      '## 优化建议\n\n' +
+      '降低启动期模拟负载，拆分 Activity 初始化中的同步等待，并把 inflate 成本移出首帧关键路径。';
+
+    const chosen = __testing.chooseOpenAiConclusionText({
+      candidate: '我需要完成剩余的阶段状态更新。现在继续调用 update_plan_phase。',
+      accumulatedAnswer: report,
+      completedByPlanIdle: false,
+      planComplete: true,
+      fallbackConclusion: fallback,
+    });
+
+    expect(chosen).toBe(report);
+  });
+
+  it('keeps a valid finalOutput report instead of preferring stale accumulated text', () => {
+    const staleInterimReport = '# 启动性能分析报告\n\n' +
+      '## 综合结论\n\n' +
+      '这是较早的阶段性报告，包含还没有被后续 SQL 校正的初步判断，文本更长但不是最终答案。\n\n' +
+      '## 早期证据\n\n' +
+      '- 初步估算 TTID=2100ms，ChaosTask=500ms。\n' +
+      '- 初步估算内存压力可疑，但后续阶段尚未验证。\n\n' +
+      '## 待验证项\n\n' +
+      '仍需要继续执行内存压力、Binder、CPU 频率和 WebView 排除检查。\n\n' +
+      '## 临时建议\n\n' +
+      '先降低模拟负载，并继续收集证据。'.repeat(8);
+    const finalReport = '# 启动性能分析报告\n\n' +
+      '## 综合结论\n\n' +
+      '最终校正后 TTID=1912ms，主因是主线程模拟负载；内存压力、CPU 频率和 Binder 均可排除。\n\n' +
+      '## 关键证据链\n\n' +
+      '- startup_detail 显示 ChaosTask self=456ms。\n' +
+      '- memory_pressure_in_range 显示 pressure_level=none。\n\n' +
+      '## 优化建议\n\n' +
+      '拆分主线程同步负载。';
+
+    const chosen = __testing.chooseOpenAiConclusionText({
+      candidate: finalReport,
+      accumulatedAnswer: `${staleInterimReport}\n\n${finalReport}`,
+      completedByPlanIdle: false,
+      planComplete: true,
+      fallbackConclusion: '## 综合结论\n\n阶段摘要。\n\n## 分阶段证据摘要\n\n- p1: 采集摘要。',
+    });
+
+    expect(chosen).toBe(finalReport);
+  });
+
+  it('uses the current run answer before cross-continuation accumulated text for recovery', () => {
+    expect(__testing.selectOpenAiRecoveryAnswer({
+      runAnswer: '## 当前最终报告\n\n证据已完成校正。',
+      accumulatedAnswer: '## 早期阶段报告\n\n这是上一轮 continuation 的阶段性内容。',
+    })).toBe('## 当前最终报告\n\n证据已完成校正。');
+
+    expect(__testing.selectOpenAiRecoveryAnswer({
+      runAnswer: '   ',
+      accumulatedAnswer: '## 累计报告\n\n只有当前 run 为空时才使用累计文本。',
+    })).toBe('## 累计报告\n\n只有当前 run 为空时才使用累计文本。');
+  });
+
+  it('requests one final-report continuation when a completed plan only has summary fallback', () => {
+    const runtime = new OpenAIRuntime({} as any) as any;
+    const planStatus = { complete: true, hasPlan: true, pendingPhases: [] };
+    const fallback = '## 综合结论\n\n阶段摘要。\n\n## 分阶段证据摘要\n\n- p1: 采集摘要。';
+    const summaryLikeFallback = '## 综合结论\n\n完成综合结论输出。冷启动 TTID=1912ms。\n\n' +
+      '## 分阶段证据摘要\n\n' +
+      '- 启动概览采集: 获取启动概览，TTID=1912ms。\n' +
+      '- 启动详情分析: 四象限 Q1=62.8%、Q4b=35.1%。';
+    const fullReport = '# 启动性能分析报告\n\n' +
+      '## 综合结论\n\n' +
+      '这是面向用户的完整最终报告，包含 TTID=1912ms、ChaosTask=456ms、LoadSimulator_ActivityInit=249.8ms 等证据。\n\n' +
+      '## 关键证据链\n\n' +
+      '- 引用 art-10 和 data:sql_table:current:abc。\n' +
+      '- 排除 CPU 频率、内存压力、Binder 等系统因素。\n\n' +
+      '## 优化建议\n\n' +
+      '拆分主线程同步负载，延后非首帧必要工作。';
+
+    expect(runtime.shouldRequestFinalReportAfterPlanComplete({
+      quickMode: false,
+      planStatus,
+      conclusion: fallback,
+      fallbackConclusion: fallback,
+      completedByPlanIdle: false,
+      timedOut: false,
+      finalReportContinuations: 0,
+    })).toBe(true);
+
+    expect(runtime.shouldRequestFinalReportAfterPlanComplete({
+      quickMode: false,
+      planStatus,
+      conclusion: fallback,
+      fallbackConclusion: fallback,
+      completedByPlanIdle: true,
+      timedOut: false,
+      finalReportContinuations: 0,
+    })).toBe(true);
+
+    expect(runtime.shouldRequestFinalReportAfterPlanComplete({
+      quickMode: false,
+      planStatus,
+      conclusion: summaryLikeFallback,
+      fallbackConclusion: fallback,
+      completedByPlanIdle: false,
+      timedOut: false,
+      finalReportContinuations: 0,
+    })).toBe(true);
+
+    expect(runtime.shouldRequestFinalReportAfterPlanComplete({
+      quickMode: false,
+      planStatus,
+      conclusion: [
+        '1. **冷启动**，dur=1338.65ms。',
+        '',
+        '现在完成Phase 1，进入Phase 1.5验证启动类型。',
+      ].join('\n'),
+      fallbackConclusion: fallback,
+      completedByPlanIdle: false,
+      timedOut: false,
+      finalReportContinuations: 0,
+    })).toBe(true);
+
+    expect(runtime.shouldRequestFinalReportAfterPlanComplete({
+      quickMode: false,
+      planStatus,
+      conclusion: [
+        '### Phase 1 关键发现记录',
+        '',
+        '- 冷启动 dur=1338.65ms，TTID=1912.20ms。',
+        '- 主线程 Running=63%。',
+      ].join('\n'),
+      fallbackConclusion: fallback,
+      completedByPlanIdle: false,
+      timedOut: false,
+      finalReportContinuations: 0,
+    })).toBe(true);
+
+    expect(runtime.shouldRequestFinalReportAfterPlanComplete({
+      quickMode: false,
+      planStatus,
+      conclusion: fallback,
+      fallbackConclusion: fallback,
+      completedByPlanIdle: false,
+      timedOut: false,
+      finalReportContinuations: 1,
+    })).toBe(false);
+
+    expect(runtime.shouldRequestFinalReportAfterPlanComplete({
+      quickMode: false,
+      planStatus,
+      conclusion: fullReport,
+      fallbackConclusion: fallback,
+      completedByPlanIdle: false,
+      timedOut: false,
+      finalReportContinuations: 0,
+    })).toBe(false);
   });
 
   it('builds a user-facing structured fallback when a completed plan has no final answer text', () => {
@@ -237,8 +445,10 @@ describe('OpenAIRuntime plan completion guard', () => {
 
     expect(fallback).toContain('## 综合结论');
     expect(fallback).toContain('主要瓶颈是 ChaosTask self=456ms');
-    expect(fallback).toContain('## 分阶段证据摘要');
+    expect(fallback).toContain('## 关键证据链');
+    expect(fallback).toContain('## 根因拆解');
     expect(fallback).toContain('art-30');
+    expect(fallback).not.toContain('## 分阶段证据摘要');
     expect(fallback).not.toContain('模型未生成独立最终段落');
   });
 

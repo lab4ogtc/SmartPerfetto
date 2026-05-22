@@ -641,6 +641,8 @@ export interface AnalysisCompletedEvent {
     rounds?: number;
     totalDurationMs?: number;
     partial?: boolean;
+    terminationReason?: string;
+    terminationMessage?: string;
     findings: DiagnosticFinding[];
     suggestions: string[];
   };

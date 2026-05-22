@@ -24,8 +24,9 @@ import { getHTMLReportGenerator } from '../services/htmlReportGenerator';
 import { buildAgentDrivenReportData } from '../services/agentReportData';
 import { persistAgentTurn } from '../services/persistAgentSession';
 import { buildRawTraceComparisonReportSection } from '../services/comparisonAppendixService';
+import { applyFinalResultQualityGate } from '../services/finalResultQualityGate';
 import {
-  deriveConclusionContractForNarrative,
+  deriveEvidenceBackedConclusionContractForNarrative,
   normalizeNarrativeForClient as sharedNormalizeNarrative,
 } from '../services/agentResultNormalizer';
 import { reportStore, persistReport } from './reportRoutes';
@@ -94,6 +95,7 @@ import {
   parseLastEventId,
   TERMINAL_SSE_EVENT_TYPES,
 } from '../assistant/stream/sessionSseReplay';
+
 import {
   listSerializedAgentEventsAfter,
   persistSerializedAgentEvent,
@@ -142,6 +144,8 @@ import {
 } from '../agentv3/toolNarration';
 import { applyFeedbackToPattern } from '../agentv3/analysisPatternMemory';
 import { backendLogPath } from '../runtimePaths';
+
+const COMPLETED_ANALYSIS_SSE_EVENTS_QUALITY_GATE_VERSION = 1;
 
 const router = express.Router();
 
@@ -547,6 +551,65 @@ function persistBufferedAgentEvent(session: AnalysisSession, event: SerializedAg
   }
 }
 
+function sanitizePersistedAnalysisCompletedEvent(
+  session: AnalysisSession,
+  event: SerializedAgentEvent,
+): SerializedAgentEvent {
+  if (event.eventType !== 'analysis_completed') return event;
+
+  let payload: any;
+  try {
+    payload = JSON.parse(event.eventData || '{}');
+  } catch {
+    return event;
+  }
+  const data = payload?.data && typeof payload.data === 'object'
+    ? payload.data
+    : payload;
+  const conclusion = typeof data?.conclusion === 'string'
+    ? data.conclusion
+    : typeof data?.answer === 'string'
+      ? data.answer
+      : '';
+  if (!conclusion.trim()) return event;
+
+  const result: AgentRuntimeAnalysisResult = {
+    sessionId: session.sessionId,
+    success: data?.success !== false,
+    findings: Array.isArray(data?.findings) ? data.findings : [],
+    hypotheses: Array.isArray(data?.hypotheses) ? data.hypotheses : [],
+    conclusion,
+    confidence: typeof data?.confidence === 'number' ? data.confidence : 0.5,
+    rounds: typeof data?.rounds === 'number' ? data.rounds : 1,
+    totalDurationMs: typeof data?.totalDurationMs === 'number' ? data.totalDurationMs : 0,
+    partial: data?.partial === true ? true : undefined,
+    terminationReason: data?.terminationReason,
+    terminationMessage: data?.terminationMessage,
+    conclusionContract: data?.conclusionContract,
+    claimSupport: data?.claimSupport,
+    claimVerificationResult: data?.claimVerificationResult,
+    identityResolutions: data?.identityResolutions,
+  };
+
+  const issue = applyFinalResultQualityGate({ result, query: session.query });
+  if (!issue) return event;
+
+  const nextData = {
+    ...data,
+    confidence: result.confidence,
+    partial: result.partial,
+    terminationReason: result.terminationReason,
+    terminationMessage: result.terminationMessage,
+  };
+  const nextPayload = payload?.data && typeof payload.data === 'object'
+    ? { ...payload, data: nextData }
+    : { ...payload, ...nextData };
+  return {
+    ...event,
+    eventData: JSON.stringify(nextPayload),
+  };
+}
+
 function replayPersistedAgentEvents(
   session: AnalysisSession,
   res: express.Response,
@@ -573,9 +636,10 @@ function replayPersistedAgentEvents(
   let lastCursor = lastEventId;
   for (const event of events) {
     try {
+      const replayEvent = sanitizePersistedAnalysisCompletedEvent(session, event);
       res.write(`id: ${event.cursor}\n`);
-      res.write(`event: ${event.eventType}\n`);
-      res.write(`data: ${event.eventData}\n\n`);
+      res.write(`event: ${replayEvent.eventType}\n`);
+      res.write(`data: ${replayEvent.eventData}\n\n`);
       replayed++;
       lastCursor = event.cursor;
       if (TERMINAL_SSE_EVENT_TYPES.has(event.eventType)) {
@@ -635,6 +699,7 @@ function loadPersistedCompletedAnalysisSseEvents(session: AnalysisSession): Buff
       event.eventType === 'analysis_completed' ||
       event.eventType === 'scene_reconstruction_completed' ||
       event.eventType === 'end')
+    .map(event => sanitizePersistedAnalysisCompletedEvent(session, event))
     .map(event => ({
       seqId: event.cursor,
       eventType: event.eventType,
@@ -806,13 +871,45 @@ function toJsonSafe<T>(value: T): T {
   ) as T;
 }
 
+function buildDisplayTurnResult(turn: ConversationTurn): ConversationTurn['result'] {
+  if (!turn.result) return turn.result;
+  const message = typeof turn.result.message === 'string' ? turn.result.message : '';
+  const resultForGate: AgentRuntimeAnalysisResult = {
+    sessionId: turn.id,
+    success: turn.result.success !== false,
+    findings: Array.isArray(turn.findings) ? turn.findings : [],
+    hypotheses: [],
+    conclusion: message,
+    confidence: typeof turn.result.confidence === 'number' ? turn.result.confidence : 0.5,
+    rounds: 1,
+    totalDurationMs: 0,
+    partial: turn.result.partial,
+    terminationReason: turn.result.terminationReason as AgentRuntimeAnalysisResult['terminationReason'],
+    terminationMessage: turn.result.terminationMessage,
+    conclusionContract: turn.result.conclusionContract as AgentRuntimeAnalysisResult['conclusionContract'],
+    claimSupport: turn.result.claimSupport,
+    claimVerificationResult: turn.result.claimVerificationResult,
+    identityResolutions: turn.result.identityResolutions,
+  };
+  applyFinalResultQualityGate({ result: resultForGate, query: turn.query });
+  return {
+    ...turn.result,
+    message: resultForGate.conclusion,
+    confidence: resultForGate.confidence,
+    partial: resultForGate.partial,
+    terminationReason: resultForGate.terminationReason,
+    terminationMessage: resultForGate.terminationMessage,
+  };
+}
+
 function buildTurnSummary(turn: ConversationTurn) {
+  const displayResult = buildDisplayTurnResult(turn);
   const confidence =
-    typeof turn.result?.confidence === 'number'
-      ? turn.result.confidence
+    typeof displayResult?.confidence === 'number'
+      ? displayResult.confidence
       : undefined;
-  const sanitizedConclusion = typeof turn.result?.message === 'string'
-    ? normalizeNarrativeForClient(turn.result.message)
+  const sanitizedConclusion = typeof displayResult?.message === 'string'
+    ? normalizeNarrativeForClient(displayResult.message)
     : '';
   const conclusionPreview = sanitizedConclusion
     ? sanitizedConclusion.replace(/\s+/g, ' ').slice(0, 240)
@@ -829,7 +926,10 @@ function buildTurnSummary(turn: ConversationTurn) {
       aspects: Array.isArray(turn.intent?.aspects) ? turn.intent.aspects : [],
     },
     completed: !!turn.completed,
-    success: typeof turn.result?.success === 'boolean' ? turn.result.success : null,
+    success: typeof displayResult?.success === 'boolean' ? displayResult.success : null,
+    partial: displayResult?.partial === true,
+    terminationReason: displayResult?.terminationReason,
+    terminationMessage: displayResult?.terminationMessage,
     confidence,
     findingCount: Array.isArray(turn.findings) ? turn.findings.length : 0,
     severityCounts: buildTurnSeverityCounts(turn),
@@ -839,16 +939,17 @@ function buildTurnSummary(turn: ConversationTurn) {
 
 function buildTurnDetail(turn: ConversationTurn) {
   const summary = buildTurnSummary(turn);
+  const displayResult = buildDisplayTurnResult(turn);
   return {
     ...summary,
     intent: toJsonSafe(turn.intent),
-    result: turn.result
+    result: displayResult
       ? toJsonSafe({
-          ...turn.result,
+          ...displayResult,
           message:
-            typeof turn.result.message === 'string'
-              ? normalizeNarrativeForClient(turn.result.message)
-              : turn.result.message,
+            typeof displayResult.message === 'string'
+              ? normalizeNarrativeForClient(displayResult.message)
+              : displayResult.message,
         })
       : null,
     findings: toJsonSafe(turn.findings || []),
@@ -902,8 +1003,38 @@ function buildRecoveredResultFromContext(
   };
 }
 
+function annotateRecoveredResultQuality(
+  sessionId: string,
+  session: AnalysisSession,
+  result: AgentRuntimeAnalysisResult,
+  query?: string,
+): void {
+  const issue = applyFinalResultQualityGate({
+    result,
+    query: query || session.query,
+  });
+  if (!issue) return;
+
+  const context = sessionContextManager.get(sessionId, session.traceId) ||
+    sessionContextManager.get(sessionId);
+  context?.annotateLatestCompletedTurn({
+    success: result.success,
+    findings: result.findings,
+    message: result.conclusion,
+    confidence: result.confidence,
+    partial: result.partial,
+    terminationReason: result.terminationReason,
+    terminationMessage: result.terminationMessage,
+    conclusionContract: result.conclusionContract,
+    claimSupport: result.claimSupport,
+    claimVerificationResult: result.claimVerificationResult,
+    identityResolutions: result.identityResolutions,
+  });
+}
+
 function recoverResultForSessionIfNeeded(sessionId: string, session: AnalysisSession): AgentRuntimeAnalysisResult | null {
   if (session.result) {
+    annotateRecoveredResultQuality(sessionId, session, session.result);
     return session.result;
   }
 
@@ -923,6 +1054,7 @@ function recoverResultForSessionIfNeeded(sessionId: string, session: AnalysisSes
   if (latestTurn?.query) {
     session.query = latestTurn.query;
   }
+  annotateRecoveredResultQuality(sessionId, session, recovered, latestTurn?.query);
   return recovered;
 }
 
@@ -1583,6 +1715,18 @@ function handleSessionStream(req: express.Request, res: express.Response, sessio
     ...buildStreamObservability(session),
   });
 
+  if (
+    lastEventId !== null &&
+    (session.status === 'completed' || session.status === 'quota_exceeded')
+  ) {
+    recoverResultForSessionIfNeeded(sessionId, session);
+    if (session.result) {
+      sendAgentDrivenResult(res, session);
+      res.end();
+      return;
+    }
+  }
+
   let ringReplayAfter = lastEventId;
   if (lastEventId !== null) {
     const persistedReplay = replayPersistedAgentEvents(session, res, lastEventId);
@@ -1718,8 +1862,8 @@ router.get('/:sessionId/status', (req, res) => {
         findings: recoveredResult.findings,
       });
       const conclusionContract =
-        recoveredResult.conclusionContract ||
-        deriveConclusionContractForNarrative(recoveredResult.conclusion, {
+        deriveEvidenceBackedConclusionContractForNarrative(recoveredResult.conclusion, session.dataEnvelopes || [], {
+          existingContract: recoveredResult.conclusionContract as ConclusionContract | undefined,
           mode: recoveredResult.rounds > 1 ? 'focused_answer' : 'initial_report',
           sceneId: sceneIdHint,
         }) ||
@@ -3131,8 +3275,8 @@ async function runAgentDrivenAnalysis(
         findings: result.findings,
       });
       const normalizedConclusionContract = (
-        result.conclusionContract ||
-        deriveConclusionContractForNarrative(result.conclusion, {
+        deriveEvidenceBackedConclusionContractForNarrative(result.conclusion, session.dataEnvelopes || [], {
+          existingContract: result.conclusionContract as ConclusionContract | undefined,
           mode: result.rounds > 1 ? 'focused_answer' : 'initial_report',
           sceneId: sceneIdHint,
         }) ||
@@ -3143,6 +3287,55 @@ async function runAgentDrivenAnalysis(
       }
       ensureAnalysisQualityArtifacts(session, normalizedConclusionContract);
     }
+
+    const finalQualityIssue = applyFinalResultQualityGate({ result, query });
+    if (finalQualityIssue) {
+      const message = result.terminationMessage || finalQualityIssue.message;
+      logger.warn('AgentDrivenAnalysis', 'Final result quality gate marked result partial', {
+        code: finalQualityIssue.code,
+        conclusionChars: result.conclusion.length,
+        findingsCount: result.findings.length,
+        hasConclusionContract: !!result.conclusionContract,
+        claimVerifierStatus: result.claimVerificationResult?.status,
+        runId: session.activeRun?.runId,
+        requestId: session.activeRun?.requestId,
+      });
+      const update: StreamingUpdate = {
+        type: 'degraded',
+        content: {
+          module: 'agentRoutes',
+          fallback: 'final_result_quality_gate',
+          code: finalQualityIssue.code,
+          partial: true,
+          message,
+        },
+        timestamp: Date.now(),
+      };
+      broadcastToAgentDrivenClients(sessionId, update);
+      const conversationStep = buildConversationStepUpdate(session, update);
+      if (conversationStep) {
+        appendConversationStep(session, conversationStep);
+        broadcastToAgentDrivenClients(sessionId, conversationStep);
+      }
+    }
+    const currentTurn = session.runSequence || 1;
+    const latestConclusionHistory = session.conclusionHistory?.[session.conclusionHistory.length - 1];
+    if (latestConclusionHistory?.turn === currentTurn) {
+      latestConclusionHistory.confidence = result.confidence ?? latestConclusionHistory.confidence;
+    }
+    sessionContextManager.get(sessionId, traceId)?.annotateLatestCompletedTurn({
+      success: result.success,
+      findings: result.findings,
+      message: result.conclusion,
+      confidence: result.confidence,
+      partial: result.partial,
+      terminationReason: result.terminationReason,
+      terminationMessage: result.terminationMessage,
+      conclusionContract: result.conclusionContract,
+      claimSupport: result.claimSupport,
+      claimVerificationResult: result.claimVerificationResult,
+      identityResolutions: result.identityResolutions,
+    });
 
     session.status = terminalRunStatus === 'quota_exceeded'
       ? 'quota_exceeded'
@@ -4754,7 +4947,7 @@ function normalizeNarrativeForClient(narrative: string): string {
 
 function conclusionHasEvidenceIndex(conclusion: string): boolean {
   const text = conclusion || '';
-  return /(^|\n)\s*##\s*证据表索引\b/.test(text);
+  return /(^|\n)\s*##\s*证据(?:表)?索引\b/.test(text);
 }
 
 function markdownCell(value: unknown, maxLen = 80): string {
@@ -4765,23 +4958,11 @@ function markdownCell(value: unknown, maxLen = 80): string {
     .slice(0, maxLen) || '-';
 }
 
-function envelopeRowCount(env: DataEnvelope): string {
-  const rows = (env as any)?.data?.rows;
-  if (Array.isArray(rows)) return String(rows.length);
-
-  const summaryContent = (env as any)?.data?.summary?.content;
-  if (typeof summaryContent === 'string') {
-    const matched = summaryContent.match(/Total rows:\s*(\d+)/i);
-    if (matched) return matched[1];
-  }
-  return '-';
-}
-
-function buildConclusionEvidenceIndex(envelopes: DataEnvelope[], maxItems = 8): string {
+function buildConclusionEvidenceIndex(envelopes: DataEnvelope[], maxItems = 3): string {
   if (!Array.isArray(envelopes) || envelopes.length === 0) return '';
 
   const seen = new Set<string>();
-  const candidates: string[] = [];
+  const candidates: Array<{ title: string; source: string; evidence: string }> = [];
   for (const env of envelopes) {
     const meta = (env as any)?.meta || {};
     const display = (env as any)?.display || {};
@@ -4794,22 +4975,21 @@ function buildConclusionEvidenceIndex(envelopes: DataEnvelope[], maxItems = 8): 
     if (seen.has(key)) continue;
     seen.add(key);
 
-    const phase = markdownCell(meta.planPhaseTitle || meta.planPhaseId || '-');
     const source = markdownCell(meta.source || meta.skillId || 'execute_sql');
-    const evidence = markdownCell(meta.evidenceRefId || meta.sourceToolCallId || '-', 48);
-    candidates.push(`| ${phase} | ${title} | ${source} | ${envelopeRowCount(env)} | ${evidence} |`);
+    const evidence = markdownCell(meta.evidenceRefId || meta.sourceToolCallId || '-', 36);
+    candidates.push({ title, source, evidence });
   }
 
   if (candidates.length === 0) return '';
   const rows = candidates.slice(0, maxItems);
   const omitted = Math.max(0, candidates.length - rows.length);
+  const summary = rows
+    .map(item => `${item.title}（${item.source} / ${item.evidence}）`)
+    .join('；');
   return [
-    '## 证据表索引',
+    '## 证据索引',
     '',
-    '| 阶段 | 表/摘要 | 来源 | 行数 | 证据 ID |',
-    '|---|---|---|---:|---|',
-    ...rows,
-    omitted > 0 ? `| - | 其余 ${omitted} 份证据 | - | - | - |` : '',
+    `关键数据来源：${summary}${omitted > 0 ? `；其余 ${omitted} 份结构化证据见报告数据详情。` : '。'}`,
   ].filter(Boolean).join('\n');
 }
 
@@ -5125,8 +5305,8 @@ function ensureCompletedAnalysisResultPayload(session: AnalysisSession): Complet
   const normalizedConclusionContract = replayOnlyScene
     ? undefined
     : hasEvidenceBackedConclusion ? (
-      result.conclusionContract ||
-      deriveConclusionContractForNarrative(result.conclusion, {
+      deriveEvidenceBackedConclusionContractForNarrative(result.conclusion, session.dataEnvelopes || [], {
+        existingContract: result.conclusionContract as ConclusionContract | undefined,
         mode: result.rounds > 1 ? 'focused_answer' : 'initial_report',
         sceneId: sceneIdHint,
       }) ||
@@ -5135,6 +5315,27 @@ function ensureCompletedAnalysisResultPayload(session: AnalysisSession): Complet
   const qualityArtifacts = hasEvidenceBackedConclusion && !replayOnlyScene
     ? ensureAnalysisQualityArtifacts(session, normalizedConclusionContract)
     : {};
+  if (normalizedConclusionContract) {
+    result.conclusionContract = normalizedConclusionContract;
+  }
+  if (!replayOnlyScene) {
+    const readPathQualityIssue = applyFinalResultQualityGate({ result, query: session.query });
+    if (readPathQualityIssue) {
+      sessionContextManager.get(session.sessionId, session.traceId)?.annotateLatestCompletedTurn({
+        success: result.success,
+        findings: result.findings,
+        message: result.conclusion,
+        confidence: result.confidence,
+        partial: result.partial,
+        terminationReason: result.terminationReason,
+        terminationMessage: result.terminationMessage,
+        conclusionContract: result.conclusionContract,
+        claimSupport: result.claimSupport,
+        claimVerificationResult: result.claimVerificationResult,
+        identityResolutions: result.identityResolutions,
+      });
+    }
+  }
   const resultForClient =
     normalizedConclusion === result.conclusion &&
       normalizedConclusionContract === result.conclusionContract &&
@@ -5175,15 +5376,24 @@ function ensureCompletedAnalysisResultPayload(session: AnalysisSession): Complet
  */
 function ensureCompletedAnalysisSseEvents(session: AnalysisSession): BufferedSseEvent[] {
   const cached = (session as any).completedAnalysisSseEvents as BufferedSseEvent[] | undefined;
-  if (cached?.length) return cached;
-  const persisted = loadPersistedCompletedAnalysisSseEvents(session);
-  if (persisted.length > 0) {
-    (session as any).completedAnalysisSseEvents = persisted;
-    return persisted;
+  if (
+    cached?.length &&
+    (session as any).completedAnalysisSseEventsQualityGateVersion ===
+      COMPLETED_ANALYSIS_SSE_EVENTS_QUALITY_GATE_VERSION
+  ) {
+    return cached;
   }
 
   const completedPayload = ensureCompletedAnalysisResultPayload(session);
-  if (!completedPayload) return [];
+  if (!completedPayload) {
+    const persisted = loadPersistedCompletedAnalysisSseEvents(session);
+    if (persisted.length > 0) {
+      (session as any).completedAnalysisSseEvents = persisted;
+      delete (session as any).completedAnalysisSseEventsQualityGateVersion;
+      return persisted;
+    }
+    return [];
+  }
   const {
     result,
     normalizedConclusion,
@@ -5292,6 +5502,8 @@ function ensureCompletedAnalysisSseEvents(session: AnalysisSession): BufferedSse
     ...observability,
   }));
   (session as any).completedAnalysisSseEvents = events;
+  (session as any).completedAnalysisSseEventsQualityGateVersion =
+    COMPLETED_ANALYSIS_SSE_EVENTS_QUALITY_GATE_VERSION;
   return events;
 }
 

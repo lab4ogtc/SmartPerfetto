@@ -74,6 +74,10 @@ import { SkillNotesBudget } from './selfImprove/skillNotesInjector';
 import { runSnapshots } from './selfImprove/strategyFingerprint';
 import { verifyConclusion, generateCorrectionPrompt, isConclusionIncomplete } from './claudeVerifier';
 import { backendLogPath } from '../runtimePaths';
+import {
+  applyFinalResultQualityGate,
+  looksLikePhaseSummaryFallback,
+} from '../services/finalResultQualityGate';
 
 function parseQuickBudgetEnv(): number | undefined {
   const v = process.env.SELF_IMPROVE_QUICK_NOTES_BUDGET;
@@ -140,6 +144,21 @@ function extractPlanPhaseIdFromToolResult(resultStr: string): string | undefined
     if (typeof planPhaseId === 'string' && planPhaseId.trim()) return planPhaseId.trim();
   }
   return undefined;
+}
+
+function looksLikeProcessNarration(text: string): boolean {
+  return /(?:我需要|我将|接下来|先重新|重新读取|继续调用|工具|tool|let me|i need to|i will|next i)/i
+    .test(text.slice(0, 500));
+}
+
+function correctionResultLooksUsable(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length < 100) return false;
+  if (looksLikePhaseSummaryFallback(trimmed)) return false;
+  const hasFinalReportMarker =
+    /(^|\n)\s*#{1,3}\s*(?:综合结论|Final Conclusion|关键证据链|Evidence|优化建议|Recommendations)(?:\s|[：:]|$)/i.test(trimmed);
+  if (looksLikeProcessNarration(trimmed) && !hasFinalReportMarker) return false;
+  return hasFinalReportMarker || !isConclusionIncomplete(trimmed);
 }
 import { probeTraceCompleteness } from './traceCompletenessProber';
 import {
@@ -1458,6 +1477,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       // Run unconditionally when enabled — plan adherence, hypothesis resolution,
       // and conclusion-length checks must fire even when zero findings are extracted.
       console.log(`[ClaudeRuntime] Pre-verification: conclusionText=${conclusionText.length} chars, sdkSessionId=${sdkSessionId ? 'set' : 'MISSING'}, enableVerification=${runtimeConfig.enableVerification}`);
+      let verificationDegradedMessage: string | undefined;
       if (runtimeConfig.enableVerification) {
         const MAX_CORRECTION_ATTEMPTS = 2;
         let previousErrorSignatures = new Set<string>();
@@ -1578,11 +1598,13 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
               }, correctionTimeoutMs);
 
               let correctedResult = '';
+              const correctionAnswerBridge = createSseBridge(() => undefined, this.config.outputLanguage);
               try {
                 for await (const msg of correctionStream) {
                   if (correctionTimedOut) break;
+                  correctionAnswerBridge.handleMessage(msg);
                   if (msg.type === 'result' && (msg as any).subtype === 'success') {
-                    correctedResult = (msg as any).result || '';
+                    correctedResult = (msg as any).result || correctionAnswerBridge.getAccumulatedAnswer() || '';
                     rounds += (msg as any).num_turns || 0;
                   }
                   // Bridge tool call events (agent_task_dispatched, agent_response)
@@ -1599,9 +1621,23 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
                 // closed on every exit (success, break, throw). Idempotent.
                 closeCorrection();
               }
+              if (!correctionTimedOut) {
+                correctionAnswerBridge.flushPendingAnswer();
+              }
+              if (!correctedResult && !correctionTimedOut) {
+                correctedResult = correctionAnswerBridge.getAccumulatedAnswer();
+              }
 
               if (correctionTimedOut) {
                 console.warn(`[ClaudeRuntime] Correction attempt ${attempt + 1} timed out, using partial result (${correctedResult.length} chars)`);
+                if (!correctionResultLooksUsable(correctedResult)) {
+                  correctedResult = '';
+                  verificationDegradedMessage = localize(
+                    this.config.outputLanguage,
+                    'Claude 修正重试超时，且没有产出可独立交付的修正报告；已保留原结论并标记为 partial。',
+                    'Claude correction retry timed out without a deliverable corrected report; keeping the previous conclusion and marking the result partial.',
+                  );
+                }
               }
 
               // P2-G13: Compare correction quality by finding count and coverage, not text length.
@@ -1683,6 +1719,32 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
           timestamp: Date.now(),
         });
       }
+      let isRuntimePartialResult = isPartialResult;
+      if (verificationDegradedMessage && !isRuntimePartialResult) {
+        isRuntimePartialResult = true;
+        terminationMessage = terminationMessage
+          ? `${terminationMessage}\n\n${verificationDegradedMessage}`
+          : verificationDegradedMessage;
+        conclusionText = conclusionText.trim()
+          ? prependPartialNotice(conclusionText, verificationDegradedMessage, this.config.outputLanguage)
+          : buildMaxTurnsFallbackConclusion({
+              mode: 'full',
+              turns: rounds,
+              maxTurns: this.config.maxTurns,
+              outputLanguage: this.config.outputLanguage,
+            });
+        mergedFindings = mergeFindings([extractFindingsFromText(conclusionText)]);
+        this.emitUpdate({
+          type: 'degraded',
+          content: {
+            module: 'claudeRuntime',
+            fallback: 'correction_timeout_without_deliverable_report',
+            message: verificationDegradedMessage,
+            partial: true,
+          },
+          timestamp: Date.now(),
+        });
+      }
 
       if (options.codeAwareMode && options.codeAwareMode !== 'off') {
         conclusionText = sanitizeCodeAwareText(sessionId, conclusionText);
@@ -1690,9 +1752,35 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       }
 
       const baseConfidence = this.estimateConfidence(mergedFindings);
-      const turnConfidence = isPartialResult
+      const turnConfidence = isRuntimePartialResult
         ? capPartialConfidence(baseConfidence, mergedFindings.length > 0)
         : baseConfidence;
+      const finalAnalysisResult: AnalysisResult = {
+        sessionId,
+        success: true,
+        findings: mergedFindings,
+        hypotheses: (this.sessionHypotheses.get(sessionId) || []).map(h => this.toProtocolHypothesis(h)),
+        conclusion: conclusionText,
+        confidence: turnConfidence,
+        rounds,
+        totalDurationMs: Date.now() - startTime,
+        partial: isRuntimePartialResult || undefined,
+        terminationReason,
+        terminationMessage,
+      };
+      const gateIssue = applyFinalResultQualityGate({ result: finalAnalysisResult, query });
+      if (gateIssue) {
+        this.emitUpdate({
+          type: 'degraded',
+          content: {
+            module: 'claudeRuntime',
+            fallback: gateIssue.code,
+            message: gateIssue.message,
+            partial: true,
+          },
+          timestamp: Date.now(),
+        });
+      }
 
       ctx.sessionContext.addTurn(
         query,
@@ -1705,23 +1793,25 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
         },
         {
           agentId: 'claude-agent',
-          success: true,
-          findings: mergedFindings,
-          confidence: turnConfidence,
-          message: conclusionText,
-          partial: isPartialResult || undefined,
-          terminationReason,
-          terminationMessage,
+          success: finalAnalysisResult.success,
+          findings: finalAnalysisResult.findings,
+          confidence: finalAnalysisResult.confidence,
+          message: finalAnalysisResult.conclusion,
+          partial: finalAnalysisResult.partial,
+          terminationReason: finalAnalysisResult.terminationReason,
+          terminationMessage: finalAnalysisResult.terminationMessage,
         },
-        mergedFindings,
+        finalAnalysisResult.findings,
       );
 
-      ctx.sessionContext.updateWorkingMemoryFromConclusion({
-        turnIndex: ctx.previousTurns.length,
-        query,
-        conclusion: conclusionText,
-        confidence: turnConfidence,
-      });
+      if (finalAnalysisResult.partial !== true) {
+        ctx.sessionContext.updateWorkingMemoryFromConclusion({
+          turnIndex: ctx.previousTurns.length,
+          query,
+          conclusion: finalAnalysisResult.conclusion,
+          confidence: finalAnalysisResult.confidence,
+        });
+      }
 
       // P2-2: Save analysis pattern to long-term memory (fire-and-forget)
       // Note: sceneType is from the outer analyze() scope (classified before context prep)
@@ -1729,14 +1819,14 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
         architectureType: ctx.architecture?.type,
         sceneType,
         packageName: options.packageName,
-        findingTitles: mergedFindings.map(f => f.title),
-        findingCategories: mergedFindings.map(f => f.category).filter(Boolean) as string[],
+        findingTitles: finalAnalysisResult.findings.map(f => f.title),
+        findingCategories: finalAnalysisResult.findings.map(f => f.category).filter(Boolean) as string[],
       });
       // Per Self-Improving v3.3 §4.4: full-path patterns now save as
       // 'provisional' regardless of confidence. The state machine + 24h
       // auto-confirm decides whether they earn injection weight.
-      if (!isPartialResult && mergedFindings.length > 0) {
-        const insights = extractKeyInsights(mergedFindings, conclusionText);
+      if (finalAnalysisResult.partial !== true && finalAnalysisResult.findings.length > 0) {
+        const insights = extractKeyInsights(finalAnalysisResult.findings, finalAnalysisResult.conclusion);
         const patternExtras = {
           status: 'provisional' as const,
           provenance: {
@@ -1745,7 +1835,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
           },
           knowledgeScope: knowledgeScopeFromOptions(options),
         };
-        saveAnalysisPattern(fullFeatures, insights, sceneType, ctx.architecture?.type, turnConfidence, patternExtras)
+        saveAnalysisPattern(fullFeatures, insights, sceneType, ctx.architecture?.type, finalAnalysisResult.confidence, patternExtras)
           .catch(err => console.warn('[ClaudeRuntime] Pattern save failed:', (err as Error).message));
 
         // Try to promote any matching quick-path pattern that has been waiting
@@ -1781,23 +1871,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
           .catch(err => console.warn('[ClaudeRuntime] Negative pattern save failed:', (err as Error).message));
       }
 
-      // P0-1: Export actual hypotheses from this turn (not hardcoded empty array)
-      // Convert agentv3 Hypothesis to agentProtocol Hypothesis format for AnalysisResult
-      const turnHypotheses = (this.sessionHypotheses.get(sessionId) || []).map(h => this.toProtocolHypothesis(h));
-
-      return {
-        sessionId,
-        success: true,
-        findings: mergedFindings,
-        hypotheses: turnHypotheses,
-        conclusion: conclusionText,
-        confidence: turnConfidence,
-        rounds,
-        totalDurationMs: Date.now() - startTime,
-        partial: isPartialResult || undefined,
-        terminationReason,
-        terminationMessage,
-      };
+      return finalAnalysisResult;
     } catch (error) {
       const rawErrorMessage = (error as Error).message || 'Unknown error';
       const errMsg = explainClaudeRuntimeError(
@@ -2146,9 +2220,35 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       const quickConfidence = isPartialResult
         ? capPartialConfidence(quickConfidenceBase, mergedFindings.length > 0)
         : quickConfidenceBase;
+      const quickResult: AnalysisResult = {
+        sessionId,
+        success: true,
+        findings: mergedFindings,
+        hypotheses: [],
+        conclusion: conclusionText,
+        confidence: quickConfidence,
+        rounds: quickRounds,
+        totalDurationMs: Date.now() - startTime,
+        partial: isPartialResult || undefined,
+        terminationReason,
+        terminationMessage,
+      };
+      const quickGateIssue = applyFinalResultQualityGate({ result: quickResult, query });
+      if (quickGateIssue) {
+        this.emitUpdate({
+          type: 'degraded',
+          content: {
+            module: 'claudeRuntime',
+            fallback: quickGateIssue.code,
+            message: quickGateIssue.message,
+            partial: true,
+          },
+          timestamp: Date.now(),
+        });
+      }
 
-      if (conclusionText.length > 0 && conclusionText.length < 20) {
-        console.warn(`[ClaudeRuntime] Quick: suspiciously short answer (${conclusionText.length} chars)`);
+      if (quickResult.conclusion.length > 0 && quickResult.conclusion.length < 20) {
+        console.warn(`[ClaudeRuntime] Quick: suspiciously short answer (${quickResult.conclusion.length} chars)`);
       }
 
       // Record turn in session context
@@ -2163,31 +2263,31 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
         },
         {
           agentId: 'claude-agent',
-          success: true,
-          findings: mergedFindings,
-          confidence: quickConfidence,
-          message: conclusionText,
-          partial: isPartialResult || undefined,
-          terminationReason,
-          terminationMessage,
+          success: quickResult.success,
+          findings: quickResult.findings,
+          confidence: quickResult.confidence,
+          message: quickResult.conclusion,
+          partial: quickResult.partial,
+          terminationReason: quickResult.terminationReason,
+          terminationMessage: quickResult.terminationMessage,
         },
-        mergedFindings,
+        quickResult.findings,
       );
 
-      console.log(`[ClaudeRuntime] Quick analysis completed: ${quickRounds} rounds, ${Date.now() - startTime}ms, ${conclusionText.length} chars`);
+      console.log(`[ClaudeRuntime] Quick analysis completed: ${quickRounds} rounds, ${Date.now() - startTime}ms, ${quickResult.conclusion.length} chars`);
 
       // Quick path writes to a separate 7-day bucket — see Self-Improving v3.3 §6.
       // Insights are weaker (no verifier, 10-turn budget), so they only surface
       // as fallbacks at injection time. A future full-path run on similar
       // features may promote the bucket entry to long-term memory.
-      if (!isPartialResult && mergedFindings.length > 0) {
-        const insights = extractKeyInsights(mergedFindings, conclusionText);
+      if (quickResult.partial !== true && quickResult.findings.length > 0) {
+        const insights = extractKeyInsights(quickResult.findings, quickResult.conclusion);
         const quickFeatures = extractTraceFeatures({
           architectureType: cachedArch?.type,
           sceneType,
           packageName: effectivePackageName,
-          findingTitles: mergedFindings.map(f => f.title),
-          findingCategories: mergedFindings.map(f => f.category).filter(Boolean) as string[],
+          findingTitles: quickResult.findings.map(f => f.title),
+          findingCategories: quickResult.findings.map(f => f.category).filter(Boolean) as string[],
         });
         saveQuickPathPattern(quickFeatures, insights, sceneType, cachedArch?.type, {
           status: 'provisional',
@@ -2196,19 +2296,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
         }).catch(err => console.warn('[ClaudeRuntime] Quick pattern save failed:', (err as Error).message));
       }
 
-      return {
-        sessionId,
-        success: true,
-        findings: mergedFindings,
-        hypotheses: [],
-        conclusion: conclusionText,
-        confidence: quickConfidence,
-        rounds: quickRounds,
-        totalDurationMs: Date.now() - startTime,
-        partial: isPartialResult || undefined,
-        terminationReason,
-        terminationMessage,
-      };
+      return quickResult;
     } catch (error) {
       const rawErrorMessage = (error as Error).message || 'Unknown error';
       const errMsg = explainClaudeRuntimeError(

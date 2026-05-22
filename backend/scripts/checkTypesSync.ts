@@ -177,6 +177,8 @@ interface AnalysisQualitySyncExpectation {
   analysisCompletedHasClaimSupport: boolean;
   analysisCompletedHasVerifier: boolean;
   analysisCompletedHasIdentityResolutions: boolean;
+  analysisCompletedHasTerminationReason: boolean;
+  analysisCompletedHasTerminationMessage: boolean;
   claimReferencesHaveArtifactIds: boolean;
 }
 
@@ -244,6 +246,8 @@ function extractAnalysisQualityExpectations(content: string): AnalysisQualitySyn
     analysisCompletedHasClaimSupport: /\bclaimSupport\s*\?:\s*ClaimSupportV1\[\]\s*;/.test(analysisCompletedBlock),
     analysisCompletedHasVerifier: /\bclaimVerificationResult\s*\?:\s*ClaimVerificationResult\s*;/.test(analysisCompletedBlock),
     analysisCompletedHasIdentityResolutions: /\bidentityResolutions\s*\?:\s*IdentityResolutionV1\[\]\s*;/.test(analysisCompletedBlock),
+    analysisCompletedHasTerminationReason: /\bterminationReason\s*\?:\s*string\s*;/.test(analysisCompletedBlock),
+    analysisCompletedHasTerminationMessage: /\bterminationMessage\s*\?:\s*string\s*;/.test(analysisCompletedBlock),
     claimReferencesHaveArtifactIds:
       /\bartifactId\s*\?:\s*string\s*;/.test(claimRefBlock) &&
       /\bsourceArtifactId\s*\?:\s*string\s*;/.test(claimRefBlock),

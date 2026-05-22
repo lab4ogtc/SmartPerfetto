@@ -42,6 +42,12 @@ export interface SseBridge {
   /** Returns all text classified as answer_token during this stream.
    *  Used as fallback when the SDK terminal `result` message is empty (e.g. timeout). */
   getAccumulatedAnswer: () => string;
+  /**
+   * Forces any pending text buffer into answer_token mode.
+   * Useful when a stream is cancelled before the SDK emits the assistant/result
+   * message that would normally disambiguate and flush the final answer text.
+   */
+  flushPendingAnswer: () => void;
 }
 
 /**
@@ -433,5 +439,6 @@ export function createSseBridge(
   return {
     handleMessage: handleSdkMessage,
     getAccumulatedAnswer: () => accumulatedAnswerText,
+    flushPendingAnswer: flushBufferAsAnswer,
   };
 }

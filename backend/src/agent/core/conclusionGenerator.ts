@@ -2097,7 +2097,7 @@ function parseClaimRowSelector(value: unknown): Record<string, string | number |
       }
     } else {
       const parsed: Record<string, string | number | boolean> = {};
-      for (const part of text.split(/[,，]/)) {
+      for (const part of text.split(/\s+(?:AND|and)\s+|[,，]/)) {
         const match = part.trim().match(/^([^=：:]+)\s*(?:=|:|：)\s*(.+)$/);
         if (!match) continue;
         const key = match[1].trim();
@@ -2120,7 +2120,69 @@ function parseClaimRowSelector(value: unknown): Record<string, string | number |
   return Object.keys(selector).length > 0 ? selector : undefined;
 }
 
-function parseClaimReferenceFromRecord(record: Record<string, unknown>): ConclusionContractClaimReference | null {
+function splitClaimList(value: unknown): string[] {
+  if (value === undefined || value === null) return [];
+  return String(value)
+    .split(/[,，]/)
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+
+function parseClaimRowIndices(value: unknown): number[] {
+  if (value === undefined || value === null || value === '') return [];
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 0) return [value];
+  const text = String(value).trim();
+  const range = text.match(/^(\d+)\s*(?:-|\.\.|~|至|到)\s*(\d+)$/);
+  if (range) {
+    const start = Number(range[1]);
+    const end = Number(range[2]);
+    if (Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end >= start && end - start <= 50) {
+      return Array.from({ length: end - start + 1 }, (_, index) => start + index);
+    }
+  }
+  const parsed = parseNumberFromUnknown(value);
+  return parsed !== undefined && Number.isInteger(parsed) && parsed >= 0 ? [parsed] : [];
+}
+
+function parseClaimTupleValues(
+  rawValue: unknown,
+  rowCount: number,
+  columnCount: number,
+): unknown[][] {
+  if (rawValue === undefined) return [];
+  if (rowCount > 1) {
+    const rowGroups = splitClaimList(rawValue);
+    if (rowGroups.length === rowCount) {
+      return rowGroups.map(group => {
+        const slashParts = String(group)
+          .split('/')
+          .map(item => item.trim())
+          .filter(Boolean);
+        if (columnCount > 1 && slashParts.length === columnCount) {
+          return slashParts.map(parseClaimScalar);
+        }
+        return [parseClaimScalar(group)];
+      });
+    }
+  }
+
+  if (columnCount > 1) {
+    const values = splitClaimList(rawValue);
+    if (values.length >= columnCount) {
+      const normalizedValues = values.length === columnCount
+        ? values
+        : [
+            ...values.slice(0, columnCount - 1),
+            values.slice(columnCount - 1).join(', '),
+          ];
+      return [normalizedValues.map(parseClaimScalar)];
+    }
+  }
+
+  return [[parseClaimScalar(rawValue)]];
+}
+
+function parseClaimReferencesFromRecord(record: Record<string, unknown>): ConclusionContractClaimReference[] {
   const evidenceRefId = String(readValueFromAliases(record, [
     'evidenceRefId', 'evidence_ref_id', 'evidenceId', 'evidence_id',
   ]) || '').trim();
@@ -2131,26 +2193,44 @@ function parseClaimReferenceFromRecord(record: Record<string, unknown>): Conclus
     'sourceToolCallId', 'source_tool_call_id', 'toolCallId', 'tool_call_id',
   ]) || '').trim();
   const rowIndexRaw = readValueFromAliases(record, ['rowIndex', 'row_index']);
-  const rowIndex = parseNumberFromUnknown(rowIndexRaw);
+  const rowIndices = parseClaimRowIndices(rowIndexRaw);
   const rowSelector = parseClaimRowSelector(readValueFromAliases(record, ['rowSelector', 'row_selector']));
-  const column = String(readValueFromAliases(record, ['column', 'col']) || '').trim();
-  const value = parseClaimScalar(readValueFromAliases(record, ['value']));
+  const columnRaw = readValueFromAliases(record, ['column', 'col']);
+  const columns = splitClaimList(columnRaw);
+  const rawValue = readValueFromAliases(record, ['value']);
   const artifactId = String(readValueFromAliases(record, ['artifactId', 'artifact_id']) || '').trim();
   const sourceArtifactId = String(readValueFromAliases(record, ['sourceArtifactId', 'source_artifact_id']) || '').trim();
 
-  if (!evidenceRefId && !sourceRef && !sourceToolCallId && !artifactId && !sourceArtifactId) return null;
+  if (!evidenceRefId && !sourceRef && !sourceToolCallId && !artifactId && !sourceArtifactId) return [];
 
-  return {
+  const base = {
     ...(evidenceRefId ? { evidenceRefId } : {}),
-    ...(rowIndex !== undefined ? { rowIndex } : {}),
-    ...(rowSelector ? { rowSelector } : {}),
-    ...(column ? { column } : {}),
-    ...(value !== undefined ? { value } : {}),
     ...(sourceRef ? { sourceRef } : {}),
     ...(sourceToolCallId ? { sourceToolCallId } : {}),
     ...(artifactId ? { artifactId } : {}),
     ...(sourceArtifactId ? { sourceArtifactId } : {}),
   };
+
+  const rowTargets = rowIndices.length > 0 ? rowIndices : [undefined];
+  const columnTargets = columns.length > 0 ? columns : [undefined];
+  const tupleValues = parseClaimTupleValues(rawValue, rowTargets.length, columnTargets.length);
+  const refs: ConclusionContractClaimReference[] = [];
+
+  rowTargets.forEach((rowIndex, rowOffset) => {
+    columnTargets.forEach((column, columnOffset) => {
+      const value = tupleValues[rowOffset]?.[columnOffset]
+        ?? (rowTargets.length === 1 ? tupleValues[0]?.[columnOffset] : undefined);
+      refs.push({
+        ...base,
+        ...(rowIndex !== undefined ? { rowIndex } : {}),
+        ...(rowSelector ? { rowSelector } : {}),
+        ...(column ? { column } : {}),
+        ...(value !== undefined ? { value: value as string | number | boolean } : {}),
+      });
+    });
+  });
+
+  return refs;
 }
 
 function parseClaimKind(value: unknown): ConclusionClaimKind | undefined {
@@ -2226,8 +2306,7 @@ function parseClaimItemsFromUnknown(value: unknown): ConclusionContractClaimItem
       ? referencesSource
           .map(ref => toRecord(ref))
           .filter((ref): ref is Record<string, unknown> => Boolean(ref))
-          .map(ref => parseClaimReferenceFromRecord(ref))
-          .filter((ref): ref is ConclusionContractClaimReference => Boolean(ref))
+          .flatMap(ref => parseClaimReferencesFromRecord(ref))
       : [];
     const artifactRefs = parseClaimArtifactRefs(readValueFromAliases(record, ['artifactRefs', 'artifact_refs']));
     if (references.length === 0 && (!artifactRefs || artifactRefs.length === 0)) return;
@@ -2270,14 +2349,58 @@ function formatClaimReferenceMarkdown(ref: ConclusionContractClaimReference): st
   return parts.join('; ');
 }
 
-function parseClaimReferenceFromMarkdownLine(line: string): ConclusionContractClaimReference | null {
-  const record: Record<string, unknown> = {};
+function parseClaimReferencesFromMarkdownLine(line: string): ConclusionContractClaimReference[] {
+  const identifierKeys = new Set([
+    'evidence_ref_id',
+    'evidenceRefId',
+    'evidence_id',
+    'evidenceId',
+    'source_ref',
+    'sourceRef',
+    'ref',
+    'source_tool_call_id',
+    'sourceToolCallId',
+    'tool_call_id',
+    'toolCallId',
+    'artifact_id',
+    'artifactId',
+    'source_artifact_id',
+    'sourceArtifactId',
+  ]);
+  const localKeys = new Set(['row_index', 'rowIndex', 'row_selector', 'rowSelector', 'column', 'col', 'value']);
+  const base: Record<string, unknown> = {};
+  const groups: Record<string, unknown>[] = [];
+  let current: Record<string, unknown> = {};
+
+  const flush = () => {
+    if (Object.keys(current).length === 0) return;
+    groups.push({ ...base, ...current });
+    current = {};
+  };
+
   for (const part of String(line || '').split(';')) {
     const match = part.trim().match(/^([a-zA-Z_]+)\s*=\s*(.*)$/);
     if (!match) continue;
-    record[match[1]] = match[2].trim();
+    const key = match[1];
+    const value = match[2].trim();
+    if (identifierKeys.has(key)) {
+      base[key] = value;
+      continue;
+    }
+    if (
+      localKeys.has(key) &&
+      (Object.prototype.hasOwnProperty.call(current, key)
+        || ((key === 'row_index' || key === 'rowIndex' || key === 'row_selector' || key === 'rowSelector')
+          && (current.column !== undefined || current.col !== undefined || current.value !== undefined))
+        || ((key === 'column' || key === 'col') && current.value !== undefined))
+    ) {
+      flush();
+    }
+    current[key] = value;
   }
-  return parseClaimReferenceFromRecord(record);
+  flush();
+  if (groups.length === 0 && Object.keys(base).length > 0) groups.push({ ...base });
+  return groups.flatMap(group => parseClaimReferencesFromRecord(group));
 }
 
 function parseClaimItemsFromMarkdownSection(sectionBody: string): ConclusionContractClaimItem[] {
@@ -2307,8 +2430,8 @@ function parseClaimItemsFromMarkdownSection(sectionBody: string): ConclusionCont
     }
 
     const refLine = line.replace(/^[-*]\s+/, '').trim();
-    const ref = parseClaimReferenceFromMarkdownLine(refLine);
-    if (ref) {
+    const refs = parseClaimReferencesFromMarkdownLine(refLine);
+    if (refs.length > 0) {
       if (!current) {
         current = {
           id: `Q${claims.length + 1}`,
@@ -2316,7 +2439,7 @@ function parseClaimItemsFromMarkdownSection(sectionBody: string): ConclusionCont
           references: [],
         };
       }
-      current.references.push(ref);
+      current.references.push(...refs);
     }
   }
   flush();

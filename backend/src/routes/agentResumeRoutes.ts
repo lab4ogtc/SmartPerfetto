@@ -18,6 +18,7 @@ import {
   sendResourceNotFound,
 } from '../services/resourceOwnership';
 import { readTraceMetadataForContext } from '../services/traceMetadataStore';
+import { applyFinalResultQualityGate } from '../services/finalResultQualityGate';
 
 interface AssistantSessionStore {
   getSession(sessionId: string): any;
@@ -202,6 +203,27 @@ export function registerAgentResumeRoutes(
       const restoredTurns = restoredContext.getAllTurns();
       const latestTurn = restoredTurns.length > 0 ? restoredTurns[restoredTurns.length - 1] : null;
       const recoveredResult = deps.buildRecoveredResultFromContext(sessionId, restoredContext);
+      if (recoveredResult) {
+        const qualityIssue = applyFinalResultQualityGate({
+          result: recoveredResult,
+          query: latestTurn?.query || persistedSession.question,
+        });
+        if (qualityIssue && typeof restoredContext.annotateLatestCompletedTurn === 'function') {
+          restoredContext.annotateLatestCompletedTurn({
+            success: recoveredResult.success,
+            findings: recoveredResult.findings,
+            message: recoveredResult.conclusion,
+            confidence: recoveredResult.confidence,
+            partial: recoveredResult.partial,
+            terminationReason: recoveredResult.terminationReason,
+            terminationMessage: recoveredResult.terminationMessage,
+            conclusionContract: recoveredResult.conclusionContract,
+            claimSupport: recoveredResult.claimSupport,
+            claimVerificationResult: recoveredResult.claimVerificationResult,
+            identityResolutions: recoveredResult.identityResolutions,
+          });
+        }
+      }
       const restoredRunSequence = Math.max(0, restoredTurns.length);
       const fallbackRestoredRun: AnalyzeSessionRunContext | undefined = restoredRunSequence > 0
         ? {

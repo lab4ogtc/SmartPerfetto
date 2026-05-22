@@ -4116,6 +4116,20 @@ export class HTMLReportGenerator {
       conversationTimeline || [],
       dialogue || []
     );
+    const partialWarningHtml = result.partial
+      ? `
+    <div class="section partial-warning">
+      <h2 class="section-title">${localize(outputLanguage, '结果完整性提示', 'Result Completeness Notice')}</h2>
+      <div class="warning-card">
+        <div class="warning-title">${localize(outputLanguage, '本次分析结果已标记为部分完成', 'This analysis result is marked partial')}</div>
+        <div class="warning-body">${this.escapeHtml(
+          result.terminationMessage ||
+          result.terminationReason ||
+          localize(outputLanguage, '分析已降级，结果可能不完整。', 'The analysis was degraded and may be incomplete.'),
+        )}</div>
+      </div>
+    </div>`
+      : '';
 
     return `<!DOCTYPE html>
 <html lang="${htmlLang}">
@@ -4250,6 +4264,14 @@ export class HTMLReportGenerator {
       font-size: 11px; color: #475569; background: #e2e8f0; border-radius: 999px; padding: 2px 8px;
     }
     .claim-source-text { color: #1f2937; line-height: 1.5; }
+    .claim-source-compact {
+      list-style: none; margin: 0; padding: 0 12px 12px; display: grid; gap: 8px;
+    }
+    .claim-source-ref {
+      display: flex; gap: 8px; align-items: flex-start; font-size: 12px; color: #334155; line-height: 1.45;
+    }
+    .claim-source-ref-text { min-width: 0; }
+    .claim-source-ref-detail { color: #64748b; margin-top: 2px; word-break: break-word; }
     .claim-source-table { width: 100%; border-collapse: collapse; font-size: 12px; }
     .claim-source-table th {
       padding: 7px 9px; background: #f1f5f9; border-bottom: 1px solid #e2e8f0;
@@ -4389,17 +4411,21 @@ export class HTMLReportGenerator {
     .answer-box h3, .finding-description h3 { margin: 10px 0 3px; font-size: 14px; color: #1f2937; }
     .answer-box h4, .finding-description h4 { margin: 8px 0 2px; font-size: 13.5px; color: #374151; }
     .answer-box h5, .finding-description h5 { margin: 6px 0 2px; font-size: 13px; color: #374151; font-weight: 600; }
-    .answer-box table, .finding-description table {
-      width: 100%; border-collapse: collapse; margin: 6px 0; font-size: 13px;
-    }
+	    .answer-box table, .finding-description table {
+	      width: 100%; border-collapse: collapse; margin: 6px 0; font-size: 13px;
+	    }
     .answer-box th, .finding-description th {
       padding: 6px 10px; border: 1px solid #e2e8f0; text-align: left;
       font-weight: 600; color: #374151; background: #f8fafc;
     }
-    .answer-box td, .finding-description td {
-      padding: 5px 10px; border: 1px solid #e2e8f0;
-    }
-  </style>
+	    .answer-box td, .finding-description td {
+	      padding: 5px 10px; border: 1px solid #e2e8f0;
+	    }
+	    .partial-warning { border-left: 4px solid #f59e0b; }
+	    .warning-card { background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 14px 16px; color: #78350f; }
+	    .warning-title { font-weight: 700; margin-bottom: 6px; }
+	    .warning-body { font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
+	  </style>
 </head>
 <body>
   <div class="container">
@@ -4415,8 +4441,9 @@ export class HTMLReportGenerator {
 	        <span class="report-save-status" id="report-save-status"></span>
 	      </div>
 	    </div>
+	    ${partialWarningHtml}
 
-    <div class="section">
+	    <div class="section">
       <h2 class="section-title">${localize(outputLanguage, '执行概览', 'Execution Overview')}</h2>
       <div class="metrics">
         <div class="metric-card">
@@ -4822,8 +4849,12 @@ export class HTMLReportGenerator {
     if (claims.length === 0) return '';
 
     const sourceLookup = this.buildClaimSourceLookup(envelopes, outputLanguage);
-    const maxClaims = 30;
-    const maxReferencesPerClaim = 6;
+    const metadata = this.asReportRecord(contractRecord.metadata);
+    const derivedFromNarrativeEvidenceMatch = metadata?.derivedFromNarrativeEvidenceMatch === true ||
+      metadata?.claimDerivation === 'narrative_evidence_match' ||
+      metadata?.claimVerificationScope === 'sampled_narrative_evidence';
+    const maxClaims = 3;
+    const maxReferencesPerClaim = 1;
     const visibleClaims = claims.slice(0, maxClaims);
     const omittedClaims = claims.length - visibleClaims.length;
 
@@ -4843,23 +4874,10 @@ export class HTMLReportGenerator {
 
       const referencesHtml = visibleReferences.length
         ? `
-        <table class="claim-source-table">
-          <thead>
-            <tr>
-              <th>${this.escapeHtml(localize(outputLanguage, '来源', 'Source'))}</th>
-              <th>${this.escapeHtml(localize(outputLanguage, '定位', 'Locator'))}</th>
-              <th>${this.escapeHtml(localize(outputLanguage, '列和值', 'Column / Value'))}</th>
-              <th>${this.escapeHtml(localize(outputLanguage, '状态', 'Status'))}</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${visibleReferences.map(ref => this.renderClaimReferenceRow(ref, sourceLookup, outputLanguage)).join('')}
-            ${omittedReferences > 0 ? `
-            <tr>
-              <td colspan="4">${this.escapeHtml(localize(outputLanguage, `还有 ${omittedReferences} 条引用未展开`, `${omittedReferences} more references omitted`))}</td>
-            </tr>` : ''}
-          </tbody>
-        </table>`
+        <ul class="claim-source-compact">
+          ${visibleReferences.map(ref => this.renderClaimReferenceSummaryItem(ref, sourceLookup, outputLanguage)).join('')}
+          ${omittedReferences > 0 ? `<li class="claim-source-ref"><span class="claim-source-ref-detail">${this.escapeHtml(localize(outputLanguage, `还有 ${omittedReferences} 条引用未展开`, `${omittedReferences} more references omitted`))}</span></li>` : ''}
+        </ul>`
         : `<div class="empty-state">${this.escapeHtml(localize(outputLanguage, '该断言没有结构化数据引用', 'This claim has no structured data references'))}</div>`;
 
       return `
@@ -4874,12 +4892,16 @@ export class HTMLReportGenerator {
 
     return `
     <div class="section">
-      <h2 class="section-title">${localize(outputLanguage, '逐句数据引用', 'Claim Data References')}</h2>
+      <h2 class="section-title">${localize(outputLanguage, '证据引用摘要', 'Evidence Reference Summary')}</h2>
       <div class="claim-source-note">
         ${this.escapeHtml(localize(
           outputLanguage,
-          '以下内容来自已生成的结构化结论契约，用于把结论断言对齐到报告中的数据表、摘要或工具输出；不会再次调用模型。',
-          'The entries below come from the generated structured conclusion contract and map each claim to report tables, summaries, or tool outputs; no additional model call is made.',
+          derivedFromNarrativeEvidenceMatch
+            ? `以下为抽样证据摘要：展示 ${visibleClaims.length}/${claims.length} 条自动匹配断言，每条最多 ${maxReferencesPerClaim} 个来源；完整机器可读契约保留在报告数据中。`
+            : `以下为证据摘要：展示 ${visibleClaims.length}/${claims.length} 条结构化断言，每条最多 ${maxReferencesPerClaim} 个来源；完整机器可读契约保留在报告数据中。`,
+          derivedFromNarrativeEvidenceMatch
+            ? `Sampled evidence summary: showing ${visibleClaims.length}/${claims.length} automatically matched claims with at most ${maxReferencesPerClaim} sources each; the full machine-readable contract remains in the report data.`
+            : `Evidence summary: showing ${visibleClaims.length}/${claims.length} structured claims with at most ${maxReferencesPerClaim} sources each; the full machine-readable contract remains in the report data.`,
         ))}
       </div>
       ${claimCards}
@@ -4963,7 +4985,7 @@ export class HTMLReportGenerator {
     </div>`;
   }
 
-  private renderClaimReferenceRow(
+  private renderClaimReferenceSummaryItem(
     ref: Record<string, unknown>,
     sourceLookup: {
       byEvidenceAndTool: Map<string, ClaimSourceLookupEntry>;
@@ -5017,27 +5039,28 @@ export class HTMLReportGenerator {
       sourceRef ? `${this.escapeHtml(localize(outputLanguage, '模型标签', 'Model label'))}: <code>${this.escapeHtml(sourceRef)}</code>` : '',
       matchedSource && !isAmbiguousSource ? `${this.escapeHtml(localize(outputLanguage, '报告来源', 'Report source'))}: ${this.escapeHtml(matchedSource.label)}` : '',
       matchedSource && isAmbiguousSource ? `${this.escapeHtml(localize(outputLanguage, '报告来源', 'Report source'))}: ${this.escapeHtml(localize(outputLanguage, `匹配到 ${matchedSource.count} 个来源，需补充更精确的工具调用 ID`, `${matchedSource.count} sources matched; add a more specific tool call ID`))}` : '',
-      evidenceRefId ? `${this.escapeHtml(localize(outputLanguage, '证据 ID', 'Evidence ID'))}: <code>${this.escapeHtml(evidenceRefId)}</code>` : '',
-      sourceToolCallId ? `${this.escapeHtml(localize(outputLanguage, '工具调用', 'Tool call'))}: <code>${this.escapeHtml(sourceToolCallId)}</code>` : '',
+      !sourceRef && !matchedSource && (evidenceRefId || sourceToolCallId) ? this.escapeHtml(localize(outputLanguage, '机器 ID 已记录，完整 ID 见报告数据', 'Machine IDs recorded in report data')) : '',
     ].filter(Boolean);
 
     const column = this.readReportAliasedString(ref, ['column', 'col']);
     const value = this.readReportAliasedValue(ref, ['value']);
     const valueText = value === undefined
       ? ''
-      : this.stringifyValueForDisplay(value, 160);
-    const columnValueParts = [
-      column ? `${this.escapeHtml(localize(outputLanguage, '列', 'Column'))}: <code>${this.escapeHtml(column)}</code>` : '',
-      valueText ? `${this.escapeHtml(localize(outputLanguage, '值', 'Value'))}: <code>${this.escapeHtml(valueText)}</code>` : '',
+      : this.stringifyValueForDisplay(value, 80);
+    const locator = this.formatClaimReferenceLocator(ref, outputLanguage);
+    const detailParts = [
+      locator && locator !== '-' ? this.escapeHtml(locator) : '',
+      column ? `<code>${this.escapeHtml(column)}</code>${valueText ? `=${this.escapeHtml(valueText)}` : ''}` : '',
     ].filter(Boolean);
 
     return `
-      <tr>
-        <td>${sourceParts.length ? sourceParts.map(part => `<div>${part}</div>`).join('') : '-'}</td>
-        <td>${this.escapeHtml(this.formatClaimReferenceLocator(ref, outputLanguage))}</td>
-        <td>${columnValueParts.length ? columnValueParts.map(part => `<div>${part}</div>`).join('') : '-'}</td>
-        <td><span class="claim-source-status ${statusClass}">${this.escapeHtml(statusLabel)}</span></td>
-      </tr>`;
+      <li class="claim-source-ref">
+        <span class="claim-source-status ${statusClass}">${this.escapeHtml(statusLabel)}</span>
+        <span class="claim-source-ref-text">
+          ${sourceParts.length ? sourceParts.map(part => `<span>${part}</span>`).join(' · ') : '-'}
+          ${detailParts.length ? `<div class="claim-source-ref-detail">${detailParts.join(' · ')}</div>` : ''}
+        </span>
+      </li>`;
   }
 
   private buildClaimSourceLookup(

@@ -124,6 +124,13 @@ npx tsx src/scripts/verifyAgentSseScrolling.ts \
   --keep-session
 ```
 
+OpenAI runtime startup final-report gate:
+
+```bash
+cd backend
+npm run verify:e2e:openai-startup
+```
+
 Scrolling:
 
 ```bash
