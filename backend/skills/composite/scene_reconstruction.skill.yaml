@@ -573,6 +573,9 @@ steps:
         - name: gesture_id
           label: "手势ID"
           type: number
+        - name: app_package
+          label: "前台应用"
+          type: string
         - name: category
           label: "类别"
           type: string
@@ -633,6 +636,7 @@ steps:
           ELSE ''
         END AS event,
         gesture_id,
+        app AS app_package,
         'scroll_start' AS category,
         '💡 此时刻手指已移动足够距离，系统开始响应滑动' AS explanation
       FROM scroll_starts

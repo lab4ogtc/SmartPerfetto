@@ -160,6 +160,56 @@ describe('FileSystemSceneReportStore', () => {
       expect(loaded?.reportId).toBe(second.reportId);
       expect(loaded?.reportId).not.toBe(first.reportId);
     });
+
+    it('isolates reports with the same hash by route profile', async () => {
+      const legacy = makeReport({ hash: 'same-trace', expiresAt: Date.now() + 60_000 });
+      const smart = makeReport({ hash: 'same-trace', expiresAt: Date.now() + 60_000 });
+      await store.save(legacy, 'legacy');
+      await store.save(smart, 'smart');
+
+      expect((await store.loadByHash('same-trace', 'legacy'))?.reportId).toBe(legacy.reportId);
+      expect((await store.loadByHash('same-trace', 'smart'))?.reportId).toBe(smart.reportId);
+      expect((await store.loadByHash('same-trace'))?.reportId).toBe(legacy.reportId);
+    });
+
+    it('can persist a reportId without making it a hash cache hit', async () => {
+      const full = makeReport({ hash: 'smart-selection-trace', expiresAt: Date.now() + 60_000 });
+      const selected = makeReport({ hash: 'smart-selection-trace', expiresAt: Date.now() + 60_000 });
+      await store.save(full, 'smart');
+      await store.save(selected, 'smart', { indexByHash: false });
+
+      expect((await store.loadById(selected.reportId))?.reportId).toBe(selected.reportId);
+      expect((await store.loadByHash('smart-selection-trace', 'smart'))?.reportId).toBe(full.reportId);
+    });
+
+    it('keeps pre-profile hash index entries as legacy-only cache hits', async () => {
+      await fsp.mkdir(dir, { recursive: true });
+      const legacy = makeReport({ reportId: 'legacy-old', hash: 'old-hash', expiresAt: Date.now() + 60_000 });
+      await fsp.writeFile(
+        path.join(dir, `${legacy.reportId}.json`),
+        JSON.stringify(legacy),
+        'utf8',
+      );
+      await fsp.writeFile(
+        path.join(dir, 'index.json'),
+        JSON.stringify({
+          version: 1,
+          byHash: { 'old-hash': legacy.reportId },
+          byReport: {
+            [legacy.reportId]: {
+              hash: 'old-hash',
+              expiresAt: legacy.expiresAt,
+              createdAt: legacy.createdAt,
+              filename: `${legacy.reportId}.json`,
+            },
+          },
+        }),
+        'utf8',
+      );
+
+      expect((await store.loadByHash('old-hash', 'legacy'))?.reportId).toBe(legacy.reportId);
+      expect(await store.loadByHash('old-hash', 'smart')).toBeNull();
+    });
   });
 
   // -------------------------------------------------------------------------

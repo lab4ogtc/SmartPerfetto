@@ -366,8 +366,17 @@ export const sceneStoryConfig = {
   /** Disk store directory for SceneReport JSON (relative to backend cwd) */
   reportDir: process.env.SCENE_REPORT_DIR || 'data/scene-reports',
 
+  /** Disk store directory for out-of-band Smart job artifacts */
+  jobArtifactDir: process.env.SCENE_JOB_ARTIFACT_DIR || 'data/scene-job-artifacts',
+
   /** Process-memory LRU size for external RPC trace reports where no content hash is available */
   memoryCacheMaxSize: parseIntEnv('SCENE_REPORT_MEMORY_CACHE_MAX', 50),
+
+  /** Optional lightweight LLM double-check for ambiguous Smart scene reconstruction */
+  llmVerify: parseBoolEnv('SCENE_RECONSTRUCTION_LLM_VERIFY', false),
+
+  /** Timeout for optional scene reconstruction LLM verifier */
+  llmVerifyTimeoutMs: parseIntEnv('SCENE_RECONSTRUCTION_LLM_VERIFY_TIMEOUT_MS', 30_000),
 } as const;
 
 // =============================================================================

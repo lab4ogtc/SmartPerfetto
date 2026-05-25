@@ -21,6 +21,7 @@
  */
 
 import type { SceneReport } from '../../agent/scene/types';
+import type { SceneRouteProfile } from '../../agent/config/domainManifest';
 
 export class SceneReportMemoryCache {
   private readonly store = new Map<string, SceneReport>();
@@ -37,11 +38,12 @@ export class SceneReportMemoryCache {
    * Return the cached report for `traceId` and mark it as most-recently-used
    * by re-inserting it at the tail of the Map. Returns `undefined` on miss.
    */
-  get(traceId: string): SceneReport | undefined {
-    const report = this.store.get(traceId);
+  get(traceId: string, routeProfile: SceneRouteProfile = 'legacy'): SceneReport | undefined {
+    const key = this.cacheKey(traceId, routeProfile);
+    const report = this.store.get(key);
     if (report === undefined) return undefined;
-    this.store.delete(traceId);
-    this.store.set(traceId, report);
+    this.store.delete(key);
+    this.store.set(key, report);
     return report;
   }
 
@@ -50,20 +52,25 @@ export class SceneReportMemoryCache {
    * evict the least-recently-used entry (the first one in insertion order).
    * Re-setting an existing key refreshes its position without evicting.
    */
-  set(traceId: string, report: SceneReport): void {
-    if (this.store.has(traceId)) {
-      this.store.delete(traceId);
+  set(
+    traceId: string,
+    report: SceneReport,
+    routeProfile: SceneRouteProfile = 'legacy',
+  ): void {
+    const key = this.cacheKey(traceId, routeProfile);
+    if (this.store.has(key)) {
+      this.store.delete(key);
     } else if (this.store.size >= this.maxSize) {
       const oldestKey = this.store.keys().next().value as string | undefined;
       if (oldestKey !== undefined) {
         this.store.delete(oldestKey);
       }
     }
-    this.store.set(traceId, report);
+    this.store.set(key, report);
   }
 
-  delete(traceId: string): boolean {
-    return this.store.delete(traceId);
+  delete(traceId: string, routeProfile: SceneRouteProfile = 'legacy'): boolean {
+    return this.store.delete(this.cacheKey(traceId, routeProfile));
   }
 
   clear(): void {
@@ -72,5 +79,9 @@ export class SceneReportMemoryCache {
 
   get size(): number {
     return this.store.size;
+  }
+
+  private cacheKey(traceId: string, routeProfile: SceneRouteProfile): string {
+    return `${traceId}::${routeProfile}`;
   }
 }

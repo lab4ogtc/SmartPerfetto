@@ -48,6 +48,7 @@ import path from 'path';
 import { promises as fsp } from 'fs';
 import { atomicWriteFile } from '../../utils/atomicFileWriter';
 import type { SceneReport } from '../../agent/scene/types';
+import type { SceneRouteProfile } from '../../agent/config/domainManifest';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -71,6 +72,8 @@ interface IndexEntry {
   expiresAt: number | null;
   createdAt: number;
   filename: string;
+  /** Cache profile. Stored in index metadata, not in SceneReport JSON. */
+  routeProfile?: SceneRouteProfile;
 }
 
 interface IndexFile {
@@ -80,9 +83,13 @@ interface IndexFile {
 }
 
 export interface SceneReportStore {
-  save(report: SceneReport): Promise<void>;
+  save(
+    report: SceneReport,
+    routeProfile?: SceneRouteProfile,
+    options?: { indexByHash?: boolean },
+  ): Promise<void>;
   loadById(reportId: string): Promise<SceneReport | null>;
-  loadByHash(hash: string): Promise<SceneReport | null>;
+  loadByHash(hash: string, routeProfile?: SceneRouteProfile): Promise<SceneReport | null>;
   delete(reportId: string): Promise<boolean>;
   cleanupExpired(nowMs: number): Promise<number>;
 }
@@ -94,6 +101,10 @@ export interface SceneReportStore {
 const INDEX_FILENAME = 'index.json';
 const REPORT_EXT = '.json';
 const SUPPORTED_PIPELINE_VERSION: SceneReport['generatedBy']['pipelineVersion'] = 'v2';
+
+function hashProfileKey(hash: string, routeProfile: SceneRouteProfile): string {
+  return `${hash}::${routeProfile}`;
+}
 
 // ---------------------------------------------------------------------------
 // Implementation
@@ -178,7 +189,11 @@ export class FileSystemSceneReportStore implements SceneReportStore {
 
   // -- public API -----------------------------------------------------------
 
-  async save(report: SceneReport): Promise<void> {
+  async save(
+    report: SceneReport,
+    routeProfile: SceneRouteProfile = 'legacy',
+    options: { indexByHash?: boolean } = {},
+  ): Promise<void> {
     return this.enqueue(async () => {
       await this.ensureDir();
       const filename = `${report.reportId}${REPORT_EXT}`;
@@ -195,8 +210,10 @@ export class FileSystemSceneReportStore implements SceneReportStore {
       // We deliberately don't unlink the old report file here — a concurrent
       // caller may still hold the old reportId for a loadById; the next
       // cleanupExpired sweep will pick it up via TTL.
-      if (report.traceHash) {
-        const previousId = index.byHash[report.traceHash];
+      const indexByHash = options.indexByHash !== false;
+      if (indexByHash && report.traceHash) {
+        const profileKey = hashProfileKey(report.traceHash, routeProfile);
+        const previousId = index.byHash[profileKey];
         if (previousId && previousId !== report.reportId) {
           delete index.byReport[previousId];
         }
@@ -207,9 +224,10 @@ export class FileSystemSceneReportStore implements SceneReportStore {
         expiresAt: report.expiresAt,
         createdAt: report.createdAt,
         filename,
+        routeProfile,
       };
-      if (report.traceHash) {
-        index.byHash[report.traceHash] = report.reportId;
+      if (indexByHash && report.traceHash) {
+        index.byHash[hashProfileKey(report.traceHash, routeProfile)] = report.reportId;
       }
 
       await this.writeIndex(index);
@@ -241,9 +259,14 @@ export class FileSystemSceneReportStore implements SceneReportStore {
     }
   }
 
-  async loadByHash(hash: string): Promise<SceneReport | null> {
+  async loadByHash(
+    hash: string,
+    routeProfile: SceneRouteProfile = 'legacy',
+  ): Promise<SceneReport | null> {
     const index = await this.readIndex();
-    const reportId = index.byHash[hash];
+    const reportId = index.byHash[hashProfileKey(hash, routeProfile)]
+      // Backward compatibility for pre-profile legacy cache entries.
+      ?? (routeProfile === 'legacy' ? index.byHash[hash] : undefined);
     if (!reportId) return null;
 
     const entry = index.byReport[reportId];
@@ -267,6 +290,12 @@ export class FileSystemSceneReportStore implements SceneReportStore {
       delete index.byReport[reportId];
       if (entry.hash && index.byHash[entry.hash] === reportId) {
         delete index.byHash[entry.hash];
+      }
+      if (entry.hash) {
+        const profileKey = hashProfileKey(entry.hash, entry.routeProfile ?? 'legacy');
+        if (index.byHash[profileKey] === reportId) {
+          delete index.byHash[profileKey];
+        }
       }
       await this.writeIndex(index);
 
@@ -301,6 +330,12 @@ export class FileSystemSceneReportStore implements SceneReportStore {
         delete index.byReport[reportId];
         if (entry?.hash && index.byHash[entry.hash] === reportId) {
           delete index.byHash[entry.hash];
+        }
+        if (entry?.hash) {
+          const profileKey = hashProfileKey(entry.hash, entry.routeProfile ?? 'legacy');
+          if (index.byHash[profileKey] === reportId) {
+            delete index.byHash[profileKey];
+          }
         }
         try {
           await fsp.unlink(this.reportPath(reportId));

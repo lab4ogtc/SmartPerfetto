@@ -82,6 +82,59 @@ curl -N http://localhost:3000/api/agent/v1/<sessionId>/stream
 
 Dual-trace comparison requires `referenceTraceId`, and it must be different from `traceId`.
 
+Smart analysis uses the same `/analyze` endpoint. The first request should usually run only the scene inventory:
+
+```json
+{
+  "traceId": "trace-id",
+  "query": "/smart",
+  "options": {
+    "analysisMode": "auto",
+    "preset": "smart",
+    "smartAction": "preview"
+  }
+}
+```
+
+When the preview completes, the `analysis_completed` payload includes `smartScenePreview.reportId` and the selectable scene ranges. Submit the selected scope with another `/analyze` request:
+
+```json
+{
+  "traceId": "trace-id",
+  "query": "/smart",
+  "options": {
+    "analysisMode": "auto",
+    "preset": "smart",
+    "smartAction": "analyze",
+    "smartSelection": {
+      "scope": "scene_types",
+      "sceneTypes": ["scroll", "inertial_scroll"],
+      "reportId": "scene-report-id"
+    }
+  }
+}
+```
+
+`smartSelection.scope` accepts `all`, `scene_types`, and `scene_ids`. Smart analysis currently rejects `referenceTraceId` and existing-session continuation runs.
+
+## Scene Reconstruction
+
+Base path: `/api/agent/v1`
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/scene-reconstruct/preview` | Check cache and estimate cost without starting heavy work |
+| `GET` | `/scene-reconstruct/report/:reportId` | Fetch a persisted SceneReport |
+| `POST` | `/scene-reconstruct` | Start scene reconstruction |
+| `GET` | `/scene-reconstruct/:analysisId/stream` | Subscribe to scene reconstruction SSE |
+| `GET` | `/scene-reconstruct/:analysisId/tracks` | Fetch tracks |
+| `GET` | `/scene-reconstruct/:analysisId/status` | Poll status |
+| `POST` | `/scene-reconstruct/:analysisId/deep-dive` | Deep-dive one scene |
+| `POST` | `/scene-reconstruct/:analysisId/cancel` | Cancel |
+| `DELETE` | `/scene-reconstruct/:analysisId` | Delete |
+
+This capability is controlled by `FEATURE_AGENT_SCENE_RECONSTRUCT`.
+
 ## Reports and Export
 
 | Method | Path | Purpose |

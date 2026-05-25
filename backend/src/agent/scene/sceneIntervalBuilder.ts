@@ -7,9 +7,13 @@
  * envelopes into the two-layer scene model used by the Story pipeline.
  *
  * buildDisplayedScenes() returns the FULL list of detected scenes covering
- * every step the skill emits — app_launches / user_gestures / inertial_scrolls
- * / idle_periods / screen_state_changes / scroll_initiation / top_app_changes,
- * with jank_events as a fallback when no gesture-like scene was found.
+ * the user-visible scene timeline — app_launches / user_gestures /
+ * inertial_scrolls / idle_periods / screen_state_changes / system_events /
+ * scroll_initiation / top_app_changes, with clean_timeline as a deterministic
+ * backfill source and jank_events as a fallback when no gesture-like scene was
+ * found. Android runtime rows (operation_chain / activity_lifecycle /
+ * app_state_tracking / device_state) enrich scenes as context instead of
+ * becoming deep-dive targets by default.
  *
  * buildAnalysisIntervals() takes that full list and selects the priority-
  * truncated subset that should run through SceneAnalysisJobRunner, applying
@@ -23,6 +27,7 @@ import { payloadToObjectRows } from '../strategies/helpers';
 import {
   DEFAULT_DOMAIN_MANIFEST,
   DomainManifest,
+  SceneRouteProfile,
   SceneReconstructionRouteRule,
   getSceneReconstructionRoutes,
   matchesSceneReconstructionRoute,
@@ -30,6 +35,9 @@ import {
 import {
   AnalysisInterval,
   DisplayedScene,
+  SceneConflict,
+  SceneEvidenceRef,
+  SceneAnalysisSelection,
 } from './types';
 
 // ---------------------------------------------------------------------------
@@ -72,6 +80,7 @@ const SCENE_DISPLAY_NAMES: Record<string, string> = {
   screen_unlock: '解锁屏幕',
   notification: '通知操作',
   split_screen: '分屏操作',
+  pip: '画中画',
   tap: '点击',
   long_press: '长按',
   idle: '空闲',
@@ -84,6 +93,38 @@ const SCENE_DISPLAY_NAMES: Record<string, string> = {
   ime_hide: '键盘收起',
   window_transition: '窗口转场',
 };
+
+const SCENE_DEDUPE_TOLERANCE_NS = 150_000_000n;
+const SCROLL_CHAIN_TOLERANCE_NS = 250_000_000n;
+const CONTEXT_WINDOW_NS = 750_000_000n;
+const MAX_CONTEXT_ROWS_PER_GROUP = 6;
+
+const CLEAN_TIMELINE_SCENE_TYPES = new Set([
+  'cold_start',
+  'warm_start',
+  'hot_start',
+  'scroll',
+  'inertial_scroll',
+  'tap',
+  'long_press',
+  'idle',
+  'app_foreground',
+  'home_screen',
+  'screen_on',
+  'screen_off',
+  'screen_sleep',
+  'screen_unlock',
+  'notification',
+  'split_screen',
+  'pip',
+  'back_key',
+  'home_key',
+  'recents_key',
+  'anr',
+  'ime_show',
+  'ime_hide',
+  'window_transition',
+]);
 
 /** Known launcher / home-screen package patterns */
 const LAUNCHER_PATTERNS = [
@@ -109,6 +150,7 @@ export interface BuildDisplayedScenesResult {
 export function buildDisplayedScenes(envelopes: DataEnvelope[]): BuildDisplayedScenesResult {
   const scenes: DisplayedScene[] = [];
   const jankRowsForFallback: Array<Record<string, any>> = [];
+  const rowsByStep = new Map<string, Array<Record<string, any>>>();
   let hasGestureLikeScene = false;
   let traceDurationSec = 0;
 
@@ -118,6 +160,7 @@ export function buildDisplayedScenes(envelopes: DataEnvelope[]): BuildDisplayedS
     if (!stepId) continue;
 
     const rows = payloadToObjectRows(env.data);
+    rowsByStep.set(stepId, rows);
 
     if (stepId === 'trace_time_range') {
       const first = rows[0];
@@ -170,6 +213,11 @@ export function buildDisplayedScenes(envelopes: DataEnvelope[]): BuildDisplayedS
         const scene = sceneFromScreenStateChange(row, scenes.length);
         if (scene) scenes.push(scene);
       }
+    } else if (stepId === 'system_events') {
+      for (const row of rows) {
+        const scene = sceneFromSystemEvent(row, scenes.length);
+        if (scene) scenes.push(scene);
+      }
     } else if (stepId === 'navigation_keys' || stepId === 'gesture_navigation') {
       for (const row of rows) {
         const scene = sceneFromNavigationKey(row, scenes.length);
@@ -219,6 +267,8 @@ export function buildDisplayedScenes(envelopes: DataEnvelope[]): BuildDisplayedS
     }
   }
 
+  enrichDisplayedScenes(scenes, rowsByStep);
+
   // Sort by startTs so the timeline rendering and Stage 3 prompt see scenes
   // in chronological order regardless of which skill step produced them
   // (the scene_reconstruction skill's step order is structural, not temporal).
@@ -247,6 +297,8 @@ export interface BuildAnalysisIntervalsOptions {
   cap: number;
   /** Defaults to DEFAULT_DOMAIN_MANIFEST. */
   manifest?: DomainManifest;
+  /** Route profile for Stage 2. Defaults to legacy /scene-reconstruct behavior. */
+  routeProfile?: SceneRouteProfile;
 }
 
 export function buildAnalysisIntervals(
@@ -254,11 +306,12 @@ export function buildAnalysisIntervals(
   options: BuildAnalysisIntervalsOptions,
 ): AnalysisInterval[] {
   const manifest = options.manifest ?? DEFAULT_DOMAIN_MANIFEST;
-  const routes = getSceneReconstructionRoutes(manifest);
+  const routes = getSceneReconstructionRoutes(options.routeProfile ?? 'legacy', manifest);
   if (routes.length === 0 || scenes.length === 0) return [];
 
   // Score each scene then pick a matching route in priority order.
   const scored = scenes
+    .filter(isAnalysisEligibleScene)
     .map((scene) => ({ scene, priority: computePriority(scene) }))
     .sort((a, b) => b.priority - a.priority);
 
@@ -277,6 +330,41 @@ export function buildAnalysisIntervals(
   }
 
   return intervals;
+}
+
+export function isAnalysisEligibleScene(scene: DisplayedScene): boolean {
+  return scene.analysisEligible !== false &&
+    scene.sceneRole !== 'marker' &&
+    scene.sceneRole !== 'context';
+}
+
+export function selectAnalysisEligibleScenes(
+  scenes: DisplayedScene[],
+  selection?: SceneAnalysisSelection,
+): DisplayedScene[] {
+  return filterDisplayedScenesForSelection(scenes, selection)
+    .filter(isAnalysisEligibleScene);
+}
+
+export function filterDisplayedScenesForSelection(
+  scenes: DisplayedScene[],
+  selection?: SceneAnalysisSelection,
+): DisplayedScene[] {
+  if (!selection || selection.scope === 'all') return scenes;
+
+  if (selection.scope === 'scene_types') {
+    const selectedTypes = new Set(selection.sceneTypes ?? []);
+    if (selectedTypes.size === 0) return [];
+    return scenes.filter((scene) => selectedTypes.has(scene.sceneType));
+  }
+
+  if (selection.scope === 'scene_ids') {
+    const selectedIds = new Set(selection.sceneIds ?? []);
+    if (selectedIds.size === 0) return [];
+    return scenes.filter((scene) => selectedIds.has(scene.id));
+  }
+
+  return [];
 }
 
 /**
@@ -521,6 +609,42 @@ function sceneFromScreenStateChange(row: Record<string, any>, index: number): Di
   };
 }
 
+function sceneFromSystemEvent(row: Record<string, any>, index: number): DisplayedScene | null {
+  const startTs = String(row.ts ?? '');
+  if (!startTs) return null;
+  const dur = String(row.dur ?? '0');
+  const endTs = safeAddNs(startTs, dur) ?? startTs;
+  const durationMs = nsToMs(dur);
+  const safeDurationMs = Number.isFinite(durationMs) ? durationMs : 0;
+
+  const rawType = String(row.event_type ?? '').trim();
+  const sceneType =
+    rawType === 'screen_unlock' ? 'screen_unlock'
+    : rawType === 'notification' ? 'notification'
+    : rawType === 'split_screen' ? 'split_screen'
+    : rawType === 'pip' ? 'pip'
+    : null;
+  if (!sceneType) return null;
+
+  const eventText = String(row.event ?? '').trim();
+  return {
+    id: `system_events-${index}`,
+    sceneType,
+    sourceStepId: 'system_events',
+    startTs,
+    endTs,
+    durationMs: safeDurationMs,
+    processName: 'system',
+    label: `${displayNameOf(sceneType)} (${formatDuration(safeDurationMs)})`,
+    metadata: {
+      event: eventText,
+      eventType: rawType,
+    },
+    severity: 'good',
+    analysisState: 'not_planned',
+  };
+}
+
 // ---------------------------------------------------------------------------
 // New scene factories: navigation keys, ANR, IME, window transitions
 // ---------------------------------------------------------------------------
@@ -627,6 +751,528 @@ function sceneFromWindowTransition(row: Record<string, any>, index: number): Dis
     severity: severityFor('window_transition', durationMs),
     analysisState: 'not_planned',
   };
+}
+
+// ---------------------------------------------------------------------------
+// Scene contract enrichment and deterministic fusion
+// ---------------------------------------------------------------------------
+
+function enrichDisplayedScenes(
+  scenes: DisplayedScene[],
+  rowsByStep: Map<string, Array<Record<string, any>>>,
+): void {
+  seedSceneContracts(scenes);
+  mergeCleanTimelineRows(scenes, getRows(rowsByStep, 'clean_timeline'));
+  attachRuntimeContext(scenes, rowsByStep);
+  linkScrollMarkersAndFling(scenes);
+  finalizeSceneContracts(scenes);
+}
+
+function seedSceneContracts(scenes: DisplayedScene[]): void {
+  for (const scene of scenes) {
+    const primaryRef = evidenceRefForScene(scene, 'primary');
+    scene.sceneRole ??= defaultSceneRole(scene);
+    scene.analysisEligible ??= scene.sceneRole === 'action';
+    scene.evidenceRefs = mergeEvidenceRefs(scene.evidenceRefs, [primaryRef]);
+    scene.confidenceReasons = uniqueStrings([
+      ...(scene.confidenceReasons ?? []),
+      `primary:${scene.sourceStepId}`,
+    ]);
+    scene.conflicts ??= [];
+  }
+}
+
+function mergeCleanTimelineRows(
+  scenes: DisplayedScene[],
+  rows: Array<Record<string, any>>,
+): void {
+  rows.forEach((row, index) => {
+    const sceneType = normalizeCleanTimelineSceneType(row.event_type);
+    if (!sceneType) return;
+    const ref = evidenceRefForRow('clean_timeline', row, index, 'supporting');
+    const existing = findMatchingSceneForRow(scenes, sceneType, row);
+    if (existing) {
+      addSupportingEvidence(existing, ref, row, 'clean_timeline');
+      return;
+    }
+
+    const scene = sceneFromCleanTimeline(row, index);
+    if (!scene) return;
+    scene.evidenceRefs = mergeEvidenceRefs(scene.evidenceRefs, [ref]);
+    scene.confidenceReasons = uniqueStrings([
+      ...(scene.confidenceReasons ?? []),
+      'derived:clean_timeline',
+    ]);
+    scenes.push(scene);
+  });
+}
+
+function sceneFromCleanTimeline(row: Record<string, any>, index: number): DisplayedScene | null {
+  const sceneType = normalizeCleanTimelineSceneType(row.event_type);
+  if (!sceneType) return null;
+  const startTs = String(row.ts ?? '');
+  if (!startTs) return null;
+  const dur = String(row.dur ?? '0');
+  const endTs = safeAddNs(startTs, dur) ?? startTs;
+  const durationMs = nsToMs(dur);
+  const safeDurationMs = Number.isFinite(durationMs) ? durationMs : 0;
+  const eventId = String(row.event_id ?? '').trim();
+  const processName = String(row.app_package ?? '').trim() || defaultProcessNameForSceneType(sceneType);
+  const sceneRole = defaultSceneRoleForType(sceneType);
+
+  return {
+    id: eventId ? `clean_timeline-${eventId}` : `clean_timeline-${sceneType}-${startTs}-${index}`,
+    sceneType,
+    sourceStepId: 'clean_timeline',
+    startTs,
+    endTs,
+    durationMs: safeDurationMs,
+    processName,
+    label: `${displayNameOf(sceneType)} (${formatDuration(safeDurationMs)})`,
+    metadata: {
+      eventId: eventId || undefined,
+      event: row.event,
+      eventType: row.event_type,
+      timeOffset: row.time_offset,
+      rating: row.rating,
+    },
+    severity: severityFromRating(row.rating) ?? severityFor(sceneType, safeDurationMs, row),
+    sceneRole,
+    analysisEligible: sceneRole === 'action',
+    analysisState: 'not_planned',
+  };
+}
+
+function normalizeCleanTimelineSceneType(value: any): string | null {
+  const sceneType = String(value ?? '').trim();
+  if (!sceneType) return null;
+  if (sceneType === 'system') return null;
+  return CLEAN_TIMELINE_SCENE_TYPES.has(sceneType) ? sceneType : null;
+}
+
+function findMatchingSceneForRow(
+  scenes: DisplayedScene[],
+  sceneType: string,
+  row: Record<string, any>,
+): DisplayedScene | null {
+  const rowStart = safeBigInt(row.ts);
+  if (rowStart === null) return null;
+  const rowEnd = rowStart + (safeBigInt(row.dur) ?? 0n);
+  return scenes.find((scene) => {
+    if (!areSceneTypesEquivalent(scene.sceneType, sceneType)) return false;
+    const sceneStart = safeBigInt(scene.startTs);
+    const sceneEnd = safeBigInt(scene.endTs);
+    if (sceneStart === null || sceneEnd === null) return false;
+    return rangesOverlapOrClose(sceneStart, sceneEnd, rowStart, rowEnd, SCENE_DEDUPE_TOLERANCE_NS);
+  }) ?? null;
+}
+
+function areSceneTypesEquivalent(left: string, right: string): boolean {
+  if (left === right) return true;
+  const appContext = new Set(['app_foreground', 'home_screen']);
+  if (appContext.has(left) && appContext.has(right)) return true;
+  return false;
+}
+
+function addSupportingEvidence(
+  scene: DisplayedScene,
+  ref: SceneEvidenceRef,
+  row: Record<string, any>,
+  reason: string,
+): void {
+  scene.evidenceRefs = mergeEvidenceRefs(scene.evidenceRefs, [ref]);
+  scene.confidenceReasons = uniqueStrings([...(scene.confidenceReasons ?? []), `support:${reason}`]);
+  scene.context = {
+    ...(scene.context ?? {}),
+    cleanTimeline: appendBoundedContext(scene.context?.cleanTimeline, compactContextRow(row)),
+  };
+
+  const supportingApp = String(row.app_package ?? '').trim();
+  if (supportingApp && isMeaningfulProcess(scene.processName) && scene.processName !== supportingApp) {
+    scene.conflicts = [
+      ...(scene.conflicts ?? []),
+      {
+        type: 'app_mismatch',
+        severity: 'warning',
+        message: `scene app ${scene.processName} differs from ${reason} app ${supportingApp}`,
+        evidenceRefs: [evidenceRefForScene(scene, 'primary'), ref],
+      },
+    ];
+  }
+}
+
+function attachRuntimeContext(
+  scenes: DisplayedScene[],
+  rowsByStep: Map<string, Array<Record<string, any>>>,
+): void {
+  const operationRows = getRows(rowsByStep, 'operation_chain');
+  const activityRows = getRows(rowsByStep, 'activity_lifecycle');
+  const appStateRows = [
+    ...getRows(rowsByStep, 'app_state_tracking'),
+    ...getRows(rowsByStep, 'app_states'),
+  ];
+  const deviceRows = getRows(rowsByStep, 'device_state');
+
+  for (const scene of scenes) {
+    const operationChain = contextRowsNearScene(operationRows, scene, CONTEXT_WINDOW_NS);
+    const activityLifecycle = contextRowsNearScene(activityRows, scene, CONTEXT_WINDOW_NS);
+    const appState = contextRowsNearScene(appStateRows, scene, CONTEXT_WINDOW_NS, (row) =>
+      sameMeaningfulProcess(scene.processName, row.app_package),
+    );
+    const deviceState = contextRowsNearScene(deviceRows, scene, CONTEXT_WINDOW_NS);
+
+    const context = {
+      ...(scene.context ?? {}),
+      ...(operationChain.length > 0 ? { operationChain } : {}),
+      ...(activityLifecycle.length > 0 ? { activityLifecycle } : {}),
+      ...(appState.length > 0 ? { appState } : {}),
+      ...(deviceState.length > 0 ? { deviceState } : {}),
+    };
+    if (Object.keys(context).length > 0) {
+      scene.context = context;
+    }
+    if (operationChain.length > 0) {
+      scene.evidenceRefs = mergeEvidenceRefs(scene.evidenceRefs, [
+        evidenceRefForContext('operation_chain', operationChain[0]),
+      ]);
+      scene.confidenceReasons = uniqueStrings([...(scene.confidenceReasons ?? []), 'context:operation_chain']);
+    }
+  }
+}
+
+function contextRowsNearScene(
+  rows: Array<Record<string, any>>,
+  scene: DisplayedScene,
+  windowNs: bigint,
+  predicate?: (row: Record<string, any>) => boolean,
+): Array<Record<string, unknown>> {
+  const sceneStart = safeBigInt(scene.startTs);
+  const sceneEnd = safeBigInt(scene.endTs);
+  if (sceneStart === null || sceneEnd === null) return [];
+  const start = sceneStart - windowNs;
+  const end = sceneEnd + windowNs;
+
+  const selected: Array<Record<string, unknown>> = [];
+  for (const row of rows) {
+    if (predicate && !predicate(row)) continue;
+    const rowTs = safeBigInt(row.ts);
+    if (rowTs === null || rowTs < start || rowTs > end) continue;
+    selected.push(compactContextRow(row));
+    if (selected.length >= MAX_CONTEXT_ROWS_PER_GROUP) break;
+  }
+  return selected;
+}
+
+function linkScrollMarkersAndFling(scenes: DisplayedScene[]): void {
+  const scrolls = scenes.filter(scene => scene.sceneType === 'scroll');
+  const flings = scenes.filter(scene => scene.sceneType === 'inertial_scroll');
+  const markers = scenes.filter(scene => scene.sceneType === 'scroll_start');
+
+  for (const marker of markers) {
+    marker.sceneRole = 'marker';
+    marker.analysisEligible = false;
+    const parent = findContainingOrNearestScene(marker, scrolls, SCROLL_CHAIN_TOLERANCE_NS);
+    if (!parent) continue;
+    linkParentChild(parent, marker);
+    marker.confidenceReasons = uniqueStrings([...(marker.confidenceReasons ?? []), 'linked:scroll_start']);
+  }
+
+  for (const fling of flings) {
+    const parent = findContainingOrNearestScene(fling, scrolls, SCROLL_CHAIN_TOLERANCE_NS, true);
+    if (!parent) continue;
+    linkParentChild(parent, fling);
+    parent.confidenceReasons = uniqueStrings([...(parent.confidenceReasons ?? []), 'linked:inertial_scroll']);
+    fling.confidenceReasons = uniqueStrings([...(fling.confidenceReasons ?? []), 'linked:active_scroll']);
+  }
+}
+
+function findContainingOrNearestScene(
+  target: DisplayedScene,
+  candidates: DisplayedScene[],
+  toleranceNs: bigint,
+  requireSameProcess = false,
+): DisplayedScene | null {
+  const targetStart = safeBigInt(target.startTs);
+  const targetEnd = safeBigInt(target.endTs);
+  if (targetStart === null || targetEnd === null) return null;
+
+  let best: { scene: DisplayedScene; distance: bigint } | null = null;
+  for (const scene of candidates) {
+    if (scene.id === target.id) continue;
+    if (requireSameProcess && !sameMeaningfulProcess(scene.processName, target.processName)) continue;
+    const sceneStart = safeBigInt(scene.startTs);
+    const sceneEnd = safeBigInt(scene.endTs);
+    if (sceneStart === null || sceneEnd === null) continue;
+    if (!rangesOverlapOrClose(sceneStart, sceneEnd, targetStart, targetEnd, toleranceNs)) continue;
+
+    const distance =
+      targetStart >= sceneStart && targetStart <= sceneEnd
+        ? 0n
+        : minBigInt(absBigInt(targetStart - sceneEnd), absBigInt(sceneStart - targetEnd));
+    if (!best || distance < best.distance) {
+      best = { scene, distance };
+    }
+  }
+  return best?.scene ?? null;
+}
+
+function linkParentChild(parent: DisplayedScene, child: DisplayedScene): void {
+  child.parentSceneId = parent.id;
+  parent.childSceneIds = uniqueStrings([...(parent.childSceneIds ?? []), child.id]);
+}
+
+function finalizeSceneContracts(scenes: DisplayedScene[]): void {
+  for (const scene of scenes) {
+    scene.sceneRole ??= defaultSceneRole(scene);
+    scene.analysisEligible ??= scene.sceneRole === 'action';
+    scene.evidenceRefs = mergeEvidenceRefs(scene.evidenceRefs, [evidenceRefForScene(scene, 'primary')]);
+    scene.conflicts = dedupeConflicts(scene.conflicts ?? []);
+
+    const score = computeConfidenceScore(scene);
+    scene.confidenceScore = score;
+    scene.confidenceLevel = confidenceLevelForScore(score);
+    scene.confidenceReasons = uniqueStrings(scene.confidenceReasons ?? []);
+  }
+}
+
+function computeConfidenceScore(scene: DisplayedScene): number {
+  const sourceBase = baseConfidenceForSource(scene.sourceStepId);
+  const evidenceCount = scene.evidenceRefs?.length ?? 0;
+  const supportBonus = Math.min(0.12, Math.max(0, evidenceCount - 1) * 0.04);
+  const metadataScore = confidenceScoreFromMetadata(scene.metadata?.confidence);
+  const conflictPenalty = Math.min(0.25, (scene.conflicts ?? []).length * 0.08);
+  const rolePenalty = scene.sceneRole === 'marker' ? 0.08 : scene.sceneRole === 'context' ? 0.05 : 0;
+  const raw = Math.max(sourceBase, metadataScore ?? 0) + supportBonus - conflictPenalty - rolePenalty;
+  return Math.max(0.35, Math.min(0.95, Number(raw.toFixed(2))));
+}
+
+function baseConfidenceForSource(sourceStepId: string): number {
+  if (sourceStepId === 'app_launches') return 0.9;
+  if (sourceStepId === 'user_gestures') return 0.78;
+  if (sourceStepId === 'inertial_scrolls') return 0.76;
+  if (sourceStepId === 'scroll_initiation') return 0.64;
+  if (sourceStepId === 'system_events') return 0.72;
+  if (sourceStepId === 'screen_state_changes') return 0.78;
+  if (sourceStepId === 'top_app_changes') return 0.72;
+  if (sourceStepId === 'idle_periods') return 0.62;
+  if (sourceStepId === 'clean_timeline') return 0.68;
+  if (sourceStepId === 'jank_events') return 0.58;
+  return 0.7;
+}
+
+function confidenceScoreFromMetadata(value: any): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (value > 1) return Math.min(0.95, value / 100);
+    return Math.max(0, Math.min(0.95, value));
+  }
+  const text = String(value ?? '').trim().toLowerCase();
+  if (!text) return null;
+  if (text === '高' || text === 'high') return 0.86;
+  if (text === '中' || text === 'medium') return 0.74;
+  if (text === '低' || text === 'low') return 0.58;
+  return null;
+}
+
+function confidenceLevelForScore(score: number): 'high' | 'medium' | 'low' {
+  if (score >= 0.82) return 'high';
+  if (score >= 0.65) return 'medium';
+  return 'low';
+}
+
+function defaultSceneRole(scene: DisplayedScene): 'action' | 'marker' | 'context' {
+  return defaultSceneRoleForType(scene.sceneType);
+}
+
+function defaultSceneRoleForType(sceneType: string): 'action' | 'marker' | 'context' {
+  if (sceneType === 'scroll_start') return 'marker';
+  if (sceneType === 'app_foreground' || sceneType === 'home_screen' || sceneType === 'idle') {
+    return 'context';
+  }
+  return 'action';
+}
+
+function defaultProcessNameForSceneType(sceneType: string): string {
+  if (
+    sceneType === 'screen_unlock'
+    || sceneType === 'notification'
+    || sceneType === 'split_screen'
+    || sceneType === 'pip'
+    || sceneType === 'screen_on'
+    || sceneType === 'screen_off'
+    || sceneType === 'screen_sleep'
+    || sceneType === 'ime_show'
+    || sceneType === 'ime_hide'
+    || sceneType === 'window_transition'
+  ) {
+    return 'system';
+  }
+  return 'unknown';
+}
+
+function severityFromRating(value: any): DisplayedScene['severity'] | null {
+  const text = String(value ?? '');
+  if (!text) return null;
+  if (text.includes('🔴')) return 'bad';
+  if (text.includes('🟡')) return 'warning';
+  if (text.includes('🟢')) return 'good';
+  return null;
+}
+
+function evidenceRefForScene(
+  scene: DisplayedScene,
+  role: SceneEvidenceRef['role'],
+): SceneEvidenceRef {
+  return {
+    sourceStepId: scene.sourceStepId,
+    role,
+    rowSelector: {
+      ts: scene.startTs,
+      sceneType: scene.sceneType,
+    },
+  };
+}
+
+function evidenceRefForRow(
+  sourceStepId: string,
+  row: Record<string, any>,
+  rowIndex: number,
+  role: SceneEvidenceRef['role'],
+): SceneEvidenceRef {
+  const ref: SceneEvidenceRef = {
+    sourceStepId,
+    rowIndex,
+    role,
+  };
+  const eventId = String(row.event_id ?? '').trim();
+  if (eventId) ref.eventId = eventId;
+  const selector: Record<string, string | number | boolean> = {};
+  if (row.ts !== undefined && row.ts !== null) selector.ts = String(row.ts);
+  const eventType = row.event_type ?? row.gesture_type ?? row.key_name ?? row.ime_action;
+  if (eventType !== undefined && eventType !== null) selector.eventType = String(eventType);
+  if (Object.keys(selector).length > 0) ref.rowSelector = selector;
+  return ref;
+}
+
+function evidenceRefForContext(
+  sourceStepId: string,
+  row: Record<string, unknown>,
+): SceneEvidenceRef {
+  const selector: Record<string, string | number | boolean> = {};
+  if (row.ts !== undefined && row.ts !== null) selector.ts = String(row.ts);
+  if (row.event !== undefined && row.event !== null) selector.event = String(row.event);
+  if (row.category !== undefined && row.category !== null) selector.category = String(row.category);
+  return {
+    sourceStepId,
+    role: 'context',
+    ...(Object.keys(selector).length > 0 ? { rowSelector: selector } : {}),
+  };
+}
+
+function mergeEvidenceRefs(
+  existing: SceneEvidenceRef[] | undefined,
+  next: SceneEvidenceRef[],
+): SceneEvidenceRef[] {
+  const merged = [...(existing ?? [])];
+  for (const ref of next) {
+    const key = evidenceRefKey(ref);
+    if (merged.some(item => evidenceRefKey(item) === key)) continue;
+    merged.push(ref);
+  }
+  return merged;
+}
+
+function evidenceRefKey(ref: SceneEvidenceRef): string {
+  const selector = ref.rowSelector ? JSON.stringify(ref.rowSelector) : '';
+  return `${ref.sourceStepId}:${ref.eventId ?? ''}:${ref.rowIndex ?? ''}:${ref.role ?? ''}:${selector}`;
+}
+
+function dedupeConflicts(conflicts: SceneConflict[]): SceneConflict[] {
+  const seen = new Set<string>();
+  const result: SceneConflict[] = [];
+  for (const conflict of conflicts) {
+    const key = `${conflict.type}:${conflict.severity}:${conflict.message}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(conflict);
+  }
+  return result;
+}
+
+function getRows(
+  rowsByStep: Map<string, Array<Record<string, any>>>,
+  stepId: string,
+): Array<Record<string, any>> {
+  return rowsByStep.get(stepId) ?? [];
+}
+
+function compactContextRow(row: Record<string, any>): Record<string, unknown> {
+  const compact: Record<string, unknown> = {};
+  for (const key of [
+    'event_id',
+    'time_offset',
+    'ts',
+    'dur',
+    'dur_ms',
+    'event_type',
+    'event',
+    'category',
+    'priority',
+    'app_package',
+    'activity_name',
+    'lifecycle_event',
+    'oom_adj',
+    'state_label',
+    'value',
+  ]) {
+    if (row[key] !== undefined && row[key] !== null) compact[key] = row[key];
+  }
+  return compact;
+}
+
+function appendBoundedContext(
+  existing: Array<Record<string, unknown>> | undefined,
+  next: Record<string, unknown>,
+): Array<Record<string, unknown>> {
+  const rows = [...(existing ?? [])];
+  const key = JSON.stringify(next);
+  if (!rows.some(row => JSON.stringify(row) === key)) rows.push(next);
+  return rows.slice(0, MAX_CONTEXT_ROWS_PER_GROUP);
+}
+
+function rangesOverlapOrClose(
+  aStart: bigint,
+  aEnd: bigint,
+  bStart: bigint,
+  bEnd: bigint,
+  toleranceNs: bigint,
+): boolean {
+  if (aEnd + toleranceNs < bStart) return false;
+  if (bEnd + toleranceNs < aStart) return false;
+  return true;
+}
+
+function sameMeaningfulProcess(left?: string, right?: any): boolean {
+  const l = String(left ?? '').trim();
+  const r = String(right ?? '').trim();
+  if (!isMeaningfulProcess(l) || !isMeaningfulProcess(r)) return false;
+  return l === r;
+}
+
+function isMeaningfulProcess(value?: string): value is string {
+  const text = String(value ?? '').trim();
+  return !!text && text !== 'unknown' && text !== 'system';
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function absBigInt(value: bigint): bigint {
+  return value < 0n ? -value : value;
+}
+
+function minBigInt(left: bigint, right: bigint): bigint {
+  return left < right ? left : right;
 }
 
 // ---------------------------------------------------------------------------

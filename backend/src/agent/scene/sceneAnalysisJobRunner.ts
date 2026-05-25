@@ -9,10 +9,9 @@
  * AnalysisInterval[] selected by buildAnalysisIntervals() and runs each one
  * through a SkillExecutor with bounded concurrency and single-retry semantics.
  *
- * Concurrency: global, not per-trace. trace_processor_shell serializes SQL
- * queries internally; adding a per-trace lock on top would silently reduce
- * the effective concurrency to 1 for a single trace's jobs, defeating the
- * product decision of "3-way parallel analysis".
+ * Concurrency: legacy mode stays globally concurrent. Smart Analysis Mode can
+ * pass runExecution to add an opt-in per-trace SQL gate without changing the
+ * legacy product decision of "3-way parallel analysis".
  *
  * Cancel semantics: cancel() drains the queued jobs to 'cancelled' state
  * immediately, but running jobs keep executing (SkillExecutor has no abort
@@ -27,6 +26,10 @@ import {
   SceneAnalysisJobState,
   SceneJobResult,
 } from './types';
+
+const PROJECTION_SAMPLE_LIMIT = 3;
+const PROJECTION_MAX_BYTES = 50 * 1024;
+const SAMPLE_STRING_LIMIT = 4096;
 
 // ---------------------------------------------------------------------------
 // External dependencies: minimal interfaces so the runner stays unit-testable
@@ -73,6 +76,14 @@ export interface SceneAnalysisJobRunnerOptions {
   analysisId: string;
   /** Skill executor used to run the per-interval skill. */
   skillExecutor: SceneSkillExecutor;
+  /** Optional smart-only execution gate around per-job SQL-heavy skill calls. */
+  runExecution?: (fn: () => Promise<SceneSkillExecutionResult>) => Promise<SceneSkillExecutionResult>;
+  /** Optional projection input for replay/debug artifacts. */
+  toDataEnvelopes?: (
+    result: SceneSkillExecutionResult,
+    traceId: string,
+    job: SceneAnalysisJob,
+  ) => unknown[];
   /** Receives every state transition for SSE fanout and telemetry. */
   onEvent: (event: JobRunnerEvent) => void;
 }
@@ -225,11 +236,14 @@ export class SceneAnalysisJobRunner {
     let skillResult: SceneSkillExecutionResult | undefined;
     let thrown: unknown;
     try {
-      skillResult = await this.opts.skillExecutor.execute(
+      const execute = () => this.opts.skillExecutor.execute(
         job.interval.skillId,
         this.opts.traceId,
         job.interval.params,
       );
+      skillResult = this.opts.runExecution
+        ? await this.opts.runExecution(execute)
+        : await execute();
     } catch (err) {
       thrown = err;
     }
@@ -266,17 +280,33 @@ export class SceneAnalysisJobRunner {
 
     // Success path.
     job.endedAt = Date.now();
+    const displayResults = skillResult!.displayResults ?? [];
+    const dataEnvelopes = this.buildDataEnvelopes(skillResult!, job);
     const result: SceneJobResult = {
       jobId: job.jobId,
       displayedSceneId: job.interval.displayedSceneId,
       skillId: job.interval.skillId,
-      displayResults: skillResult!.displayResults ?? [],
-      dataEnvelopes: [], // populated by the caller via toDataEnvelopes()
+      displayResults,
+      dataEnvelopes,
+      projection: buildJobProjection(job, displayResults),
       durationMs: skillResult!.executionTimeMs ?? (job.endedAt - (job.startedAt ?? job.endedAt)),
     };
     job.result = result;
     this.transitionJob(job, 'completed');
     this.emit({ type: 'job_completed', job, result });
+  }
+
+  private buildDataEnvelopes(result: SceneSkillExecutionResult, job: SceneAnalysisJob): unknown[] {
+    if (!this.opts.toDataEnvelopes) return [];
+    try {
+      return this.opts.toDataEnvelopes(result, this.opts.traceId, job);
+    } catch (err) {
+      console.warn(
+        '[SceneAnalysisJobRunner] toDataEnvelopes failed, continuing without envelopes:',
+        (err as Error)?.message ?? err,
+      );
+      return [];
+    }
   }
 
   private transitionJob(job: SceneAnalysisJob, next: SceneAnalysisJobState): void {
@@ -294,4 +324,63 @@ export class SceneAnalysisJobRunner {
     this.allDoneResolvers = [];
     for (const r of resolvers) r();
   }
+}
+
+function buildJobProjection(job: SceneAnalysisJob, displayResults: unknown[]): SceneJobResult['projection'] {
+  let topRowsSample = displayResults
+    .slice(0, PROJECTION_SAMPLE_LIMIT)
+    .map((row) => truncateProjectionValue(row));
+  while (topRowsSample.length > 0 && projectionByteLength(job, displayResults.length, topRowsSample) > PROJECTION_MAX_BYTES) {
+    topRowsSample = topRowsSample.slice(0, -1);
+  }
+  return {
+    sceneId: job.interval.displayedSceneId,
+    skillId: job.interval.skillId,
+    routeId: job.interval.routeRuleId,
+    metrics: {
+      display_result_count: displayResults.length,
+      duration_ms: Math.max(0, (job.endedAt ?? Date.now()) - (job.startedAt ?? Date.now())),
+    },
+    evidenceRefs: [`data:scene_job:${job.jobId}`],
+    topRowsSample,
+    omittedRowCount: Math.max(0, displayResults.length - topRowsSample.length),
+  };
+}
+
+function projectionByteLength(
+  job: SceneAnalysisJob,
+  displayResultCount: number,
+  topRowsSample: unknown[],
+): number {
+  return Buffer.byteLength(JSON.stringify({
+    sceneId: job.interval.displayedSceneId,
+    skillId: job.interval.skillId,
+    routeId: job.interval.routeRuleId,
+    metrics: {
+      display_result_count: displayResultCount,
+      duration_ms: Math.max(0, (job.endedAt ?? Date.now()) - (job.startedAt ?? Date.now())),
+    },
+    evidenceRefs: [`data:scene_job:${job.jobId}`],
+    topRowsSample,
+    omittedRowCount: Math.max(0, displayResultCount - topRowsSample.length),
+  }), 'utf8');
+}
+
+function truncateProjectionValue(value: unknown, depth = 0): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'string') {
+    return value.length > SAMPLE_STRING_LIMIT
+      ? `${value.slice(0, SAMPLE_STRING_LIMIT)}...[truncated ${value.length - SAMPLE_STRING_LIMIT} chars]`
+      : value;
+  }
+  if (typeof value !== 'object') return value;
+  if (depth >= 4) return '[truncated nested object]';
+  if (Array.isArray(value)) {
+    return value.slice(0, 20).map((item) => truncateProjectionValue(item, depth + 1));
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>).slice(0, 40)) {
+    out[key] = truncateProjectionValue(item, depth + 1);
+  }
+  return out;
 }

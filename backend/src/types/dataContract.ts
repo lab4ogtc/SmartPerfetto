@@ -642,6 +642,7 @@ export const SSE_EVENT_TYPES = [
   // Scene Story Pipeline events — 'scene_story_' prefix keeps these strictly
   // distinct from the legacy 'scene_detected' event (singular vs plural trap).
   'scene_story_detected',
+  'scene_story_selection_ready',
   'scene_story_queued',
   'scene_story_started',
   'scene_story_retrying',
@@ -650,6 +651,7 @@ export const SSE_EVENT_TYPES = [
   'scene_story_cancelled',
   'scene_story_dropped',
   'scene_story_report_ready',
+  'scene_story_smart_eta_refined',
 ] as const;
 export type SSEEventType = typeof SSE_EVENT_TYPES[number];
 

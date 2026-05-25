@@ -29,6 +29,15 @@ Output:
 - The UI streams progress, SQL/Skill evidence, tables, and the final conclusion.
 - Conclusions should trace back to concrete time ranges, threads, slices, SQL rows, or Skill results.
 
+### Smart Analysis Mode
+
+Auto mode is designed for traces that contain a full test script, such as cold start, warm start, scrolling, taps, Back/Home, screen on/off, and another launch in one recording. It does not deep-dive every scene immediately. Instead, the main AI panel first returns a scene inventory:
+
+- Lists detected startup, scrolling, inertial scrolling, click, navigation, device-state, ANR, and related scenes in timeline order.
+- Marks which scenes are eligible for deep dives and which are only marker or context evidence.
+- Shows scope buttons such as `All`, `Startup`, `Scrolling`, `Click`, `Navigation`, `Device`, and `ANR`.
+- After the user chooses a scope, SmartPerfetto runs the matching startup, scrolling, or other deep-dive path with the same evidence and conclusion contract as the dedicated analysis mode.
+
 ## 2. Common Performance Scenarios
 
 SmartPerfetto includes Android performance analysis scenarios for common trace investigations.

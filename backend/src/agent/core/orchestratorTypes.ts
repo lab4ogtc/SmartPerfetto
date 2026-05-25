@@ -29,6 +29,7 @@ import type { AgentMessageBus } from '../communication';
 import type { CircuitBreaker } from './circuitBreaker';
 import type { ModelRouter } from './modelRouter';
 import type { FocusInterval } from '../strategies/types';
+import type { SmartScenePreviewPayload } from '../scene/types';
 import type { AdbCollaborationConfig, AdbContext } from '../../services/adb';
 import type { IncrementalScope } from './incrementalAnalyzer';
 import type { EnhancedSessionContext } from '../context/enhancedSessionContext';
@@ -230,6 +231,8 @@ export interface AnalysisResult {
   partial?: boolean;
   terminationReason?: AnalysisTerminationReason;
   terminationMessage?: string;
+  /** Structured Smart Stage1 preview for the frontend main chat surface. */
+  smartScenePreview?: SmartScenePreviewPayload;
 }
 
 export type AgentRuntimeAnalysisResult = AnalysisResult;
@@ -309,6 +312,8 @@ export interface AnalysisOptions {
    * - 'auto' or undefined: defer to queryComplexityClassifier
    */
   analysisMode?: 'fast' | 'full' | 'auto';
+  /** UI/backend preset selector. Smart preset is dispatched by route layer. */
+  preset?: 'smart';
 
   /** Provider override for this analysis session. When set, env vars are sourced
    *  from this provider instead of the global active provider. */

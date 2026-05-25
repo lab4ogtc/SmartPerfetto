@@ -13,6 +13,7 @@ import {
   SceneSkillExecutionResult,
   SceneSkillExecutor,
 } from '../sceneAnalysisJobRunner';
+import type { SceneAnalysisJobRunnerOptions } from '../sceneAnalysisJobRunner';
 import { AnalysisInterval } from '../types';
 
 // ---------------------------------------------------------------------------
@@ -81,6 +82,8 @@ function flush(): Promise<void> {
 function buildRunner(executor: SceneSkillExecutor, opts: Partial<{
   concurrency: number;
   maxRetries: number;
+  runExecution: SceneAnalysisJobRunnerOptions['runExecution'];
+  toDataEnvelopes: SceneAnalysisJobRunnerOptions['toDataEnvelopes'];
 }> = {}) {
   const events: JobRunnerEvent[] = [];
   const runner = new SceneAnalysisJobRunner({
@@ -89,6 +92,8 @@ function buildRunner(executor: SceneSkillExecutor, opts: Partial<{
     traceId: 'trace-1',
     analysisId: 'analysis-1',
     skillExecutor: executor,
+    runExecution: opts.runExecution as any,
+    toDataEnvelopes: opts.toDataEnvelopes,
     onEvent: (e) => events.push(e),
   });
   return { runner, events };
@@ -246,6 +251,61 @@ describe('SceneAnalysisJobRunner', () => {
 
     expect(events.filter((e) => e.type === 'all_done').length).toBe(1);
     expect(runner.getJobs().length).toBe(0);
+  });
+
+  it('wraps skill execution with the optional smart execution gate', async () => {
+    const exec = new ManualSkillExecutor();
+    const gate = jest.fn((fn: () => Promise<SceneSkillExecutionResult>) => fn());
+    const { runner } = buildRunner(exec, { concurrency: 1, runExecution: gate });
+
+    runner.enqueue([makeInterval('smart')]);
+    await flush();
+    exec.resolveNext({ displayResults: [{ metric: 1 }] });
+    await runner.waitForAllDone();
+
+    expect(gate).toHaveBeenCalledTimes(1);
+    expect(runner.getJobs()[0].result?.projection?.metrics.display_result_count).toBe(1);
+  });
+
+  it('captures data envelopes for smart artifact replay', async () => {
+    const exec = new ManualSkillExecutor();
+    const toDataEnvelopes = jest.fn((result: SceneSkillExecutionResult, traceId: string) => [
+      { type: 'table', traceId, rows: result.displayResults ?? [] },
+    ]);
+    const { runner } = buildRunner(exec, { concurrency: 1, toDataEnvelopes });
+
+    runner.enqueue([makeInterval('smart')]);
+    await flush();
+    exec.resolveNext({ displayResults: [{ metric: 1 }] });
+    await runner.waitForAllDone();
+
+    expect(toDataEnvelopes).toHaveBeenCalledTimes(1);
+    expect(runner.getJobs()[0].result?.dataEnvelopes).toEqual([
+      { type: 'table', traceId: 'trace-1', rows: [{ metric: 1 }] },
+    ]);
+  });
+
+  it('bounds projection samples below the report payload cap', async () => {
+    const exec = new ManualSkillExecutor();
+    const { runner } = buildRunner(exec, { concurrency: 1 });
+    const huge = 'x'.repeat(120_000);
+
+    runner.enqueue([makeInterval('huge')]);
+    await flush();
+    exec.resolveNext({
+      displayResults: [
+        { id: 1, payload: huge },
+        { id: 2, payload: huge },
+        { id: 3, payload: huge },
+        { id: 4, payload: huge },
+      ],
+    });
+    await runner.waitForAllDone();
+
+    const projection = runner.getJobs()[0].result?.projection;
+    expect(projection).toBeDefined();
+    expect(Buffer.byteLength(JSON.stringify(projection), 'utf8')).toBeLessThanOrEqual(50 * 1024);
+    expect(projection?.omittedRowCount).toBeGreaterThan(0);
   });
 
   it('emits all_done after cancel even with no in-flight jobs', async () => {

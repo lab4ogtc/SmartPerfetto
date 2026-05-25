@@ -73,6 +73,21 @@ describe('strategyLoader tolerates leading SPDX HTML comments', () => {
     ]));
   });
 
+  it('keeps contract-only smart strategy out of normal scene registration', () => {
+    const scenes = getRegisteredScenes();
+    expect(scenes).not.toContain('smart');
+    expect(getStrategyContent('smart')).toBeUndefined();
+    expect(getPhaseHints('smart')).toEqual([]);
+
+    const contract = getFinalReportContract('smart');
+    expect(contract?.requiredSections.map(section => section.id)).toEqual(expect.arrayContaining([
+      'scene_timeline',
+      'per_scene_summary',
+      'cross_scene_narrative',
+      'bottleneck_ranking',
+    ]));
+  });
+
   it('returns empty phase_hints array for scenes without hints', () => {
     expect(getPhaseHints('general')).toEqual([]);
     expect(getPhaseHints('memory')).toEqual([]);

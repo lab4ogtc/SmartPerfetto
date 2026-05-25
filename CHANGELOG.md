@@ -13,6 +13,32 @@ Detailed commit-level history is available via `git log`.
 
 ## [Unreleased]
 
+## [1.0.21] - 2026-05-25
+
+### Added
+- Smart Analysis Mode now starts with a scene-inventory preview for mixed-action
+  traces, then lets users deep-dive all scenes or only startup, scrolling,
+  click, navigation, device-state, or ANR ranges.
+- Smart scene reconstruction now carries eligibility, confidence, context,
+  verification, and report ids into the main AI chat so the frontend can render
+  scoped analysis buttons before spending deep-dive tokens.
+- Smart selected-scope E2E coverage now verifies startup and scrolling
+  conclusions against the direct single-scene analysis path.
+
+### Changed
+- Smart deep dives reuse the dedicated scene strategies and full analysis mode
+  for the selected scope, keeping Smart output close to explicit startup or
+  scrolling analysis.
+- Smart job evidence is projected into bounded report payloads, with omitted
+  rows kept as out-of-band scene-job artifacts.
+- The committed Perfetto UI prebuild was refreshed from the updated AI
+  Assistant plugin bundle.
+
+### Fixed
+- Smart scrolling conclusions now preserve corrected deep-dive root causes when
+  batch reason codes are superseded by stronger evidence such as shader
+  pipeline or `postAndWait` signals.
+
 ### Added
 - Fast / Full / Auto three-tier analysis mode routing via `options.analysisMode`
   (env-configurable per-turn timeouts, classifier fast-path via keyword rules).
@@ -58,5 +84,6 @@ Detailed commit-level history is available via `git log`.
 - HTML report generation and CSV / JSON export.
 - AGPL v3.0 licensing throughout.
 
-[Unreleased]: https://github.com/Gracker/SmartPerfetto/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Gracker/SmartPerfetto/compare/v1.0.21...HEAD
+[1.0.21]: https://github.com/Gracker/SmartPerfetto/compare/v1.0.20...v1.0.21
 [0.1.0]: https://github.com/Gracker/SmartPerfetto/releases/tag/v0.1.0

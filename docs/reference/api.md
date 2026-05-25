@@ -104,6 +104,41 @@ curl -N http://localhost:3000/api/agent/v1/<sessionId>/stream
 
 双 trace 对比需要传 `referenceTraceId`，且不能与 `traceId` 相同。
 
+智能分析通过同一个 `/analyze` 入口启动。第一次请求建议只做场景盘点：
+
+```json
+{
+  "traceId": "trace-id",
+  "query": "/smart",
+  "options": {
+    "analysisMode": "auto",
+    "preset": "smart",
+    "smartAction": "preview"
+  }
+}
+```
+
+场景盘点完成后，`analysis_completed` payload 会携带 `smartScenePreview.reportId` 和可选范围。用户选择范围后再次调用 `/analyze`：
+
+```json
+{
+  "traceId": "trace-id",
+  "query": "/smart",
+  "options": {
+    "analysisMode": "auto",
+    "preset": "smart",
+    "smartAction": "analyze",
+    "smartSelection": {
+      "scope": "scene_types",
+      "sceneTypes": ["scroll", "inertial_scroll"],
+      "reportId": "scene-report-id"
+    }
+  }
+}
+```
+
+`smartSelection.scope` 支持 `all`、`scene_types` 和 `scene_ids`。智能分析暂不支持 `referenceTraceId`，也不能作为已有 session 的后续轮次运行。
+
 ## Scene Reconstruction
 
 Base path: `/api/agent/v1`

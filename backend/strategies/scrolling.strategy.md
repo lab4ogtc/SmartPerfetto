@@ -107,7 +107,7 @@ phase_hints:
     critical: false
   - id: conclusion
     keywords: ['结论', 'conclusion', '输出', 'output', '报告', 'report', '总结']
-    constraints: '输出必须包含：全帧根因分布表（按 reason_code 聚合）+ 代表帧分析（含四象限+频率+根因推理链）+ 按优先级排序的优化建议。每个 CRITICAL/HIGH 必须有量化证据+因果链。'
+    constraints: '输出必须包含：全帧根因分布表（按 reason_code 聚合）+ 代表帧分析（含四象限+频率+根因推理链）+ 按优先级排序的优化建议。每个 CRITICAL/HIGH 必须有量化证据+因果链。若深钻证据纠正了 batch reason_code（例如 lock_binder_wait 但 binder_overlap_ms=0，render_slices_json 指向 cache_miss/makePipeline/shader 编译），最终结论必须使用纠正后的根因命名，并明确标注原 reason_code 为误分类。'
     critical_tools: []
     critical: false
 
@@ -346,6 +346,10 @@ Phase 1 的 `batch_frame_root_cause` 已包含每帧的**完整统计数据**（
 - 需要查看 RenderThread 或主线程的 top N slices 详情
 - **reason_code 为 unknown 且帧数 >5%**：必须对至少 1 帧调用 jank_frame_detail 获取更多线索，不能在分布表中仅标记"未分类"就跳过
 - reason_code 与实际数据矛盾时（如 `lock_binder_wait` 但 Binder 耗时 0ms）：应在结论中标注可能的误分类原因
+
+如果深钻结果已给出更具体的根因，不要在最终报告继续把原始 `reason_code` 当作根因名称。典型例子：
+- `lock_binder_wait` 但 `binder_overlap_ms=0`，且 `render_slices_json` 出现 `cache_miss: makePipeline` / shader 编译 / Vulkan finish frame / `postAndWait`，最终根因应写成 **shader_compile + sync_wait** 或等价机制，并说明 `lock_binder_wait` 是批量分类误判。
+- `workload_heavy` 但 `main_slices_json` 明确指向应用自定义方法，最终根因应写具体方法名和所处阶段，例如 `CustomScroll_longFrameLoad` 在 ANIMATION 回调同步执行，而不是只写 "workload_heavy"。
 
 `frame_blocking_calls` 是 Phase 1.9 的帧内阻塞证据补充，不占 `jank_frame_detail` 的 2 帧上限。遇到 Binder/IO/futex/锁相关根因时，优先用它确认阻塞调用是否真的与掉帧帧重叠。
 

@@ -79,6 +79,7 @@ Step 4: Start or restart services. For Docker, run `docker compose -f docker-com
 
 - Analyzes Android Perfetto traces for scrolling jank, startup, ANR, interaction latency, memory, game, and rendering-pipeline issues.
 - Keeps Perfetto's timeline and SQL power, then adds an AI assistant panel inside the Perfetto UI.
+- Reconstructs mixed-action traces in Smart mode before deep analysis, so users can inspect the scene timeline and choose all scenes or only startup, scrolling, click, navigation, device-state, or ANR ranges.
 - Compares completed analysis results across multiple traces, windows, or workspace users without requiring both Perfetto UI windows to stay open.
 - Uses a TypeScript backend to run agent workflows, query `trace_processor_shell`, invoke YAML analysis skills, and stream results to the browser.
 - Supports Anthropic directly, Claude/Anthropic-compatible providers, and OpenAI/OpenAI-compatible providers through the matching backend SDK runtime.
@@ -86,7 +87,7 @@ Step 4: Start or restart services. For Docker, run `docker compose -f docker-com
 
 ## Feature Overview
 
-- [Feature Overview](docs/getting-started/features.en.md): AI Assistant workflows, performance scenarios, selection-aware analysis, reports, live trace comparison, multi-trace result comparison, code-aware local-source analysis, provider management, API/CLI automation, and runtime options.
+- [Feature Overview](docs/getting-started/features.en.md): AI Assistant workflows, Smart scene inventory and selected deep dives, performance scenarios, selection-aware analysis, reports, live trace comparison, multi-trace result comparison, code-aware local-source analysis, provider management, API/CLI automation, and runtime options.
 
 ## Tech Stack
 

@@ -24,6 +24,8 @@ SmartPerfetto works best with Android 12+ traces, especially traces that include
 5. Ask a natural-language question.
 6. Wait for SSE streaming output, table evidence, and the final conclusion.
 
+Auto mode first returns a scene inventory for mixed-action traces. The timeline lists detected startup, scrolling, click, navigation, device-state, ANR, and related scenes, then shows scope buttons. Select all scenes or one scene family before SmartPerfetto runs the matching startup, scrolling, click, or other deep-dive analysis.
+
 ## Common Prompt Templates
 
 ```text
@@ -53,7 +55,7 @@ This compares completed analysis results and does not require the other Perfetto
 |---|---|---|
 | Fast | Package name, process name, trace overview, simple facts | Heavy analysis such as startup or scrolling jank |
 | Full | Startup, scrolling, ANR, complex rendering root cause | A single simple fact query |
-| Auto | Default daily use | Cases with strict cost or depth requirements |
+| Auto | Mixed-script traces where you want to inspect scenes before choosing a deep-dive scope | Cases where you already know the single scene and want to run full analysis directly |
 
 Fast mode defaults to 10 turns. Heavy Skills can still return large JSON and exhaust turns, so complex performance investigations should use full mode.
 

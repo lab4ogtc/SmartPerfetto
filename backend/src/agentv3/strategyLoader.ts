@@ -70,8 +70,12 @@ export interface FinalReportContract {
   requiredSections: FinalReportContractRequirement[];
 }
 
+export type StrategyKind = 'normal' | 'contract_only';
+
 export interface StrategyDefinition {
   scene: string;
+  /** contract_only strategies expose contracts without classifier/prompt injection. */
+  strategyKind: StrategyKind;
   priority: number;
   effort: string;
   keywords: string[];
@@ -176,8 +180,14 @@ function parseStrategyFile(filePath: string): StrategyDefinition | null {
     };
   }
 
+  const rawStrategyKind = frontmatter.strategy_kind as string | undefined;
+  const strategyKind: StrategyKind = rawStrategyKind === 'contract_only'
+    ? 'contract_only'
+    : 'normal';
+
   return {
     scene: frontmatter.scene as string,
+    strategyKind,
     priority: (frontmatter.priority as number) ?? 99,
     effort: (frontmatter.effort as string) ?? 'high',
     keywords: (frontmatter.keywords as string[]) || [],
@@ -210,16 +220,20 @@ export function loadStrategies(): Map<string, StrategyDefinition> {
 }
 
 export function getStrategyContent(scene: string): string | undefined {
-  return loadStrategies().get(scene)?.content;
+  const def = loadStrategies().get(scene);
+  return def?.strategyKind === 'contract_only' ? undefined : def?.content;
 }
 
 export function getRegisteredScenes(): StrategyDefinition[] {
-  return Array.from(loadStrategies().values());
+  return Array.from(loadStrategies().values())
+    .filter(def => def.strategyKind !== 'contract_only');
 }
 
 /** Get phase-level restatement hints for a scene. Returns [] if scene has no hints. */
 export function getPhaseHints(scene: string): PhaseHint[] {
-  return loadStrategies().get(scene)?.phaseHints || [];
+  const def = loadStrategies().get(scene);
+  if (def?.strategyKind === 'contract_only') return [];
+  return def?.phaseHints || [];
 }
 
 /**
@@ -233,7 +247,9 @@ export function getPhaseHints(scene: string): PhaseHint[] {
  * has migrated.
  */
 export function getPlanTemplate(scene: string): PlanTemplate | null {
-  return loadStrategies().get(scene)?.planTemplate ?? null;
+  const def = loadStrategies().get(scene);
+  if (def?.strategyKind === 'contract_only') return null;
+  return def?.planTemplate ?? null;
 }
 
 /**

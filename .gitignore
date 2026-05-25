@@ -153,8 +153,14 @@ private/
 # ===================
 # Agent/skill scratch context (regenerated on run)
 # ===================
+.backend.tmux
+findings.md
+progress.md
+task_plan.md
 backend/.context/
+backend/data/secrets/
 backend/data/scene-reports/
+backend/data/scene-job-artifacts/
 backend/data/self_improve/
 
 # ===================

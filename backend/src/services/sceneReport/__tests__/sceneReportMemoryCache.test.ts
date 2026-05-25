@@ -68,6 +68,19 @@ describe('SceneReportMemoryCache', () => {
       expect(cache.size).toBe(1);
     });
 
+    it('isolates reports with the same traceId by route profile', () => {
+      const cache = new SceneReportMemoryCache(3);
+      const legacy = makeReport('legacy');
+      const smart = makeReport('smart');
+
+      cache.set('trace-a', legacy, 'legacy');
+      cache.set('trace-a', smart, 'smart');
+
+      expect(cache.get('trace-a', 'legacy')).toBe(legacy);
+      expect(cache.get('trace-a', 'smart')).toBe(smart);
+      expect(cache.size).toBe(2);
+    });
+
     it('deletes an entry', () => {
       const cache = new SceneReportMemoryCache(3);
       cache.set('trace-a', makeReport('a'));
@@ -75,6 +88,17 @@ describe('SceneReportMemoryCache', () => {
       expect(cache.delete('trace-a')).toBe(false);
       expect(cache.get('trace-a')).toBeUndefined();
       expect(cache.size).toBe(0);
+    });
+
+    it('deletes only the requested route profile', () => {
+      const cache = new SceneReportMemoryCache(3);
+      cache.set('trace-a', makeReport('legacy'), 'legacy');
+      cache.set('trace-a', makeReport('smart'), 'smart');
+
+      expect(cache.delete('trace-a', 'smart')).toBe(true);
+      expect(cache.get('trace-a', 'smart')).toBeUndefined();
+      expect(cache.get('trace-a', 'legacy')?.reportId).toBe('legacy');
+      expect(cache.size).toBe(1);
     });
 
     it('clears everything', () => {

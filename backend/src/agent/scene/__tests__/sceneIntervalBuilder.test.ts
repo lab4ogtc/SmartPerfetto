@@ -13,6 +13,8 @@ import {
   buildAnalysisIntervals,
   buildDisplayedScenes,
   computePriority,
+  filterDisplayedScenesForSelection,
+  selectAnalysisEligibleScenes,
 } from '../sceneIntervalBuilder';
 import { DisplayedScene } from '../types';
 
@@ -110,6 +112,31 @@ describe('buildDisplayedScenes', () => {
     expect(scenes[0].sceneType).toBe('inertial_scroll');
   });
 
+  it('links active scroll, scroll_start marker, and inertial scroll as one operation chain', () => {
+    const envs = [
+      envelope('user_gestures', [
+        { ts: '1000000000', dur: '1000000000', gesture_type: 'scroll', app_package: 'com.app' },
+      ]),
+      envelope('scroll_initiation', [
+        { ts: '1100000000', dur: '0', latency_ms: 16, app_package: 'com.app' },
+      ]),
+      envelope('inertial_scrolls', [
+        { ts: '1950000000', dur: '500000000', frame_count: 30, jank_frames: 1, app_package: 'com.app' },
+      ]),
+    ];
+
+    const { scenes } = buildDisplayedScenes(envs);
+    const scroll = scenes.find((scene) => scene.sceneType === 'scroll')!;
+    const marker = scenes.find((scene) => scene.sceneType === 'scroll_start')!;
+    const inertial = scenes.find((scene) => scene.sceneType === 'inertial_scroll')!;
+
+    expect(marker.sceneRole).toBe('marker');
+    expect(marker.analysisEligible).toBe(false);
+    expect(marker.parentSceneId).toBe(scroll.id);
+    expect(inertial.parentSceneId).toBe(scroll.id);
+    expect(scroll.childSceneIds).toEqual(expect.arrayContaining([marker.id, inertial.id]));
+  });
+
   it('produces idle scenes from idle_periods', () => {
     const envs = [
       envelope('idle_periods', [{ ts: '0', dur: '5000000000', confidence: 0.9 }]),
@@ -141,6 +168,7 @@ describe('buildDisplayedScenes', () => {
     expect(scenes.length).toBe(1);
     expect(scenes[0].sceneType).toBe('scroll_start');
     expect(scenes[0].sourceStepId).toBe('scroll_initiation');
+    expect(scenes[0].processName).toBe('com.app');
   });
 
   // The skill emits Chinese event labels on the `event` column; the parser
@@ -170,6 +198,84 @@ describe('buildDisplayedScenes', () => {
     const { scenes } = buildDisplayedScenes(envs);
     expect(scenes.length).toBe(1);
     expect(scenes[0].sceneType).toBe('screen_on');
+  });
+
+  it('adds user-visible system events from system_events', () => {
+    const envs = [
+      envelope('system_events', [
+        { ts: '0', dur: '120000000', event: '解锁屏幕', event_type: 'screen_unlock' },
+        { ts: '1000000000', dur: '250000000', event: '下拉通知栏', event_type: 'notification' },
+      ]),
+    ];
+
+    const { scenes } = buildDisplayedScenes(envs);
+    expect(scenes.map((scene) => scene.sceneType)).toEqual(['screen_unlock', 'notification']);
+    expect(scenes[0].sourceStepId).toBe('system_events');
+    expect(scenes[0].evidenceRefs?.[0].sourceStepId).toBe('system_events');
+    expect(scenes[0].confidenceScore).toBeGreaterThan(0);
+  });
+
+  it('uses clean_timeline as fallback without duplicating source-step scenes', () => {
+    const envs = [
+      envelope('user_gestures', [
+        { ts: '0', dur: '100000000', gesture_type: 'tap', app_package: 'com.app' },
+      ]),
+      envelope('clean_timeline', [
+        {
+          event_id: 'evt_1',
+          ts: '0',
+          dur: '100000000',
+          dur_ms: 100,
+          event_type: 'tap',
+          event: '点击 [app]',
+          app_package: 'com.app',
+        },
+        {
+          event_id: 'evt_2',
+          ts: '500000000',
+          dur: '120000000',
+          dur_ms: 120,
+          event_type: 'screen_unlock',
+          event: '解锁屏幕',
+        },
+      ]),
+    ];
+
+    const { scenes } = buildDisplayedScenes(envs);
+    expect(scenes.map((scene) => scene.sceneType)).toEqual(['tap', 'screen_unlock']);
+    const tap = scenes.find((scene) => scene.sceneType === 'tap')!;
+    expect(tap.sourceStepId).toBe('user_gestures');
+    expect(tap.evidenceRefs?.map((ref) => ref.sourceStepId)).toEqual(
+      expect.arrayContaining(['user_gestures', 'clean_timeline']),
+    );
+    expect(scenes.find((scene) => scene.sceneType === 'screen_unlock')?.sourceStepId).toBe('clean_timeline');
+  });
+
+  it('attaches Android runtime context around a scene', () => {
+    const envs = [
+      envelope('user_gestures', [
+        { ts: '1000000000', dur: '100000000', gesture_type: 'tap', app_package: 'com.app' },
+      ]),
+      envelope('operation_chain', [
+        { ts: '1005000000', event: '点击', category: 'gesture', priority: 4 },
+      ]),
+      envelope('activity_lifecycle', [
+        { ts: '1010000000', activity_name: 'MainActivity', lifecycle_event: 'activityResume', dur_ms: 12 },
+      ]),
+      envelope('app_state_tracking', [
+        { ts: '1020000000', event: '进入前台', app_package: 'com.app', oom_adj: 0, state_label: '前台' },
+      ]),
+      envelope('device_state', [
+        { ts: '1030000000', event: 'CPU 0 频率范围', value: '300 - 2400 MHz', category: 'cpu_freq' },
+      ]),
+    ];
+
+    const { scenes } = buildDisplayedScenes(envs);
+    expect(scenes[0].context?.operationChain?.length).toBe(1);
+    expect(scenes[0].context?.activityLifecycle?.length).toBe(1);
+    expect(scenes[0].context?.appState?.length).toBe(1);
+    expect(scenes[0].context?.deviceState?.length).toBe(1);
+    expect(scenes[0].confidenceReasons).toEqual(expect.arrayContaining(['context:operation_chain']));
   });
 
   it('falls back to jank_region scenes only when no gesture-like scene was found', () => {
@@ -273,6 +379,88 @@ describe('buildAnalysisIntervals', () => {
     // Non-startup_route includes 'all' minus startup types, so screen_off
     // would actually match. We only assert that 'matched' is present —
     // exact unmatched behaviour depends on the manifest configuration.
+  });
+
+  it('routes smart scenes through profile-specific deep-dive skills', () => {
+    const scenes: DisplayedScene[] = [
+      makeScene({ id: 'scroll-start-1', sceneType: 'scroll_start', startTs: '5', endTs: '5', durationMs: 0 }),
+      makeScene({ id: 'tap-1', sceneType: 'tap', startTs: '10', endTs: '20', durationMs: 10 }),
+      makeScene({ id: 'nav-1', sceneType: 'home_key', startTs: '20', endTs: '30', durationMs: 10 }),
+      makeScene({ id: 'screen-1', sceneType: 'screen_off', startTs: '30', endTs: '40', durationMs: 10 }),
+      makeScene({ id: 'anr-1', sceneType: 'anr', startTs: '40', endTs: '50', durationMs: 6000 }),
+    ];
+
+    const intervals = buildAnalysisIntervals(scenes, { cap: 10, routeProfile: 'smart' });
+    const byScene = Object.fromEntries(intervals.map((i) => [i.displayedSceneId, i]));
+
+    expect(byScene['scroll-start-1']).toBeUndefined();
+    expect(byScene['tap-1'].skillId).toBe('click_response_analysis');
+    expect(byScene['nav-1'].skillId).toBe('navigation_analysis');
+    expect(byScene['screen-1'].skillId).toBe('device_state_snapshot');
+    expect(byScene['anr-1'].skillId).toBe('anr_analysis');
+  });
+
+  it('skips scenes that are explicitly marked ineligible for analysis', () => {
+    const intervals = buildAnalysisIntervals([
+      makeScene({
+        id: 'tap-marker',
+        sceneType: 'tap',
+        durationMs: 10,
+        sceneRole: 'marker',
+        analysisEligible: false,
+      }),
+    ], { cap: 10, routeProfile: 'smart' });
+
+    expect(intervals).toEqual([]);
+  });
+
+  it('keeps legacy profile from routing device-state scenes', () => {
+    const intervals = buildAnalysisIntervals([
+      makeScene({ id: 'screen-legacy', sceneType: 'screen_off', durationMs: 10 }),
+    ], { cap: 10 });
+
+    expect(intervals).toEqual([]);
+  });
+
+  it('filters scenes by explicit smart selection before deep-dive interval planning', () => {
+    const scenes: DisplayedScene[] = [
+      makeScene({ id: 'start-1', sceneType: 'cold_start' }),
+      makeScene({ id: 'scroll-1', sceneType: 'scroll' }),
+      makeScene({ id: 'tap-1', sceneType: 'tap' }),
+    ];
+
+    expect(filterDisplayedScenesForSelection(scenes, {
+      scope: 'scene_types',
+      sceneTypes: ['scroll'],
+    }).map((scene) => scene.id)).toEqual(['scroll-1']);
+
+    expect(filterDisplayedScenesForSelection(scenes, {
+      scope: 'scene_ids',
+      sceneIds: ['tap-1'],
+    }).map((scene) => scene.id)).toEqual(['tap-1']);
+
+    expect(filterDisplayedScenesForSelection(scenes, { scope: 'all' })).toBe(scenes);
+  });
+
+  it('filters smart selections down to analysis-eligible action scenes', () => {
+    const scenes: DisplayedScene[] = [
+      makeScene({ id: 'scroll-1', sceneType: 'scroll' }),
+      makeScene({
+        id: 'scroll-start-1',
+        sceneType: 'scroll_start',
+        sceneRole: 'marker',
+        analysisEligible: false,
+      }),
+      makeScene({
+        id: 'idle-1',
+        sceneType: 'idle',
+        sceneRole: 'context',
+        analysisEligible: false,
+      }),
+    ];
+
+    expect(selectAnalysisEligibleScenes(scenes, { scope: 'all' }).map((scene) => scene.id))
+      .toEqual(['scroll-1']);
   });
 });
 

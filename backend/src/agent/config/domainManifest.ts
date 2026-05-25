@@ -26,12 +26,16 @@ export type SceneTypeGroup =
   | 'navigation'
   | 'app_switch'
   | 'idle'
+  | 'device_state'
   | 'jank_region'
   | 'anr'
   | 'all';
 
+export type SceneRouteProfile = 'legacy' | 'smart';
+
 export interface SceneReconstructionRouteRule {
   id: string;
+  routeProfile: SceneRouteProfile;
   sceneTypes?: string[];
   sceneTypeGroups?: SceneTypeGroup[];
   excludeSceneTypes?: string[];
@@ -114,6 +118,7 @@ export const DEFAULT_DOMAIN_MANIFEST: DomainManifest = {
   sceneReconstructionRoutes: [
     {
       id: 'startup_scene',
+      routeProfile: 'legacy',
       sceneTypeGroups: ['startup'],
       agentId: 'startup_agent',
       domain: 'startup',
@@ -132,6 +137,7 @@ export const DEFAULT_DOMAIN_MANIFEST: DomainManifest = {
     },
     {
       id: 'non_startup_scene',
+      routeProfile: 'legacy',
       // Whitelist gesture-like scene types only. Earlier this rule used
       // sceneTypeGroups: ['all'] with excludeSceneTypes for the three startup
       // types, which would also catch idle / screen_on/off/sleep / app_switch
@@ -149,6 +155,103 @@ export const DEFAULT_DOMAIN_MANIFEST: DomainManifest = {
       },
       skillParams: {
         enable_frame_details: false,
+      },
+    },
+    {
+      id: 'smart_startup_scene',
+      routeProfile: 'smart',
+      sceneTypeGroups: ['startup'],
+      agentId: 'startup_agent',
+      domain: 'startup',
+      directSkillId: 'startup_detail',
+      descriptionTemplate: '智能分析启动场景: {{scopeLabel}}',
+      paramMapping: {
+        startup_id: 'startupId',
+        start_ts: 'startTs',
+        end_ts: 'endTs',
+        dur_ms: 'durationMs',
+        package: 'processName',
+        startup_type: 'startupType',
+        ttid_ms: 'ttidMs',
+        ttfd_ms: 'ttfdMs',
+      },
+    },
+    {
+      id: 'smart_scroll_scene',
+      routeProfile: 'smart',
+      // `scroll_start` is a zero-duration marker, useful in the reconstructed
+      // timeline but not a valid frame-analysis interval.
+      sceneTypes: ['scroll', 'inertial_scroll'],
+      agentId: 'frame_agent',
+      domain: 'scroll',
+      directSkillId: 'scrolling_analysis',
+      descriptionTemplate: '智能分析滑动场景: {{scopeLabel}}',
+      paramMapping: {
+        start_ts: 'startTs',
+        end_ts: 'endTs',
+        package: 'processName',
+      },
+      skillParams: {
+        enable_frame_details: false,
+      },
+    },
+    {
+      id: 'smart_click_scene',
+      routeProfile: 'smart',
+      sceneTypes: ['tap', 'long_press', 'screen_unlock'],
+      agentId: 'interaction_agent',
+      domain: 'interaction',
+      directSkillId: 'click_response_analysis',
+      descriptionTemplate: '智能分析点击响应场景: {{scopeLabel}}',
+      paramMapping: {
+        start_ts: 'startTs',
+        end_ts: 'endTs',
+        package: 'processName',
+      },
+      skillParams: {
+        enable_per_event_detail: false,
+      },
+    },
+    {
+      id: 'smart_navigation_scene',
+      routeProfile: 'smart',
+      sceneTypes: ['navigation', 'back_key', 'home_key', 'recents_key', 'window_transition'],
+      agentId: 'interaction_agent',
+      domain: 'navigation',
+      directSkillId: 'navigation_analysis',
+      descriptionTemplate: '智能分析导航/返回场景: {{scopeLabel}}',
+      paramMapping: {
+        start_ts: 'startTs',
+        end_ts: 'endTs',
+        package: 'processName',
+      },
+    },
+    {
+      id: 'smart_anr_scene',
+      routeProfile: 'smart',
+      sceneTypes: ['anr', 'jank_region'],
+      agentId: 'anr_agent',
+      domain: 'anr',
+      directSkillId: 'anr_analysis',
+      descriptionTemplate: '智能分析 ANR/严重卡顿场景: {{scopeLabel}}',
+      paramMapping: {
+        start_ts: 'startTs',
+        end_ts: 'endTs',
+        process_name: 'processName',
+        package: 'processName',
+      },
+    },
+    {
+      id: 'smart_device_state_scene',
+      routeProfile: 'smart',
+      sceneTypeGroups: ['device_state'],
+      agentId: 'system_agent',
+      domain: 'system',
+      directSkillId: 'device_state_snapshot',
+      descriptionTemplate: '智能分析设备状态场景: {{scopeLabel}}',
+      paramMapping: {
+        start_ts: 'startTs',
+        end_ts: 'endTs',
       },
     },
   ],
@@ -170,7 +273,7 @@ export const DEFAULT_DOMAIN_MANIFEST: DomainManifest = {
     },
     {
       id: 'scroll_deep_dive',
-      eventTypes: ['scroll', 'scroll_start', 'inertial_scroll'],
+      eventTypes: ['scroll', 'inertial_scroll'],
       skillId: 'scrolling_analysis',
       description: '滑动流畅性分析',
       paramMapping: {
@@ -216,6 +319,7 @@ const SCENE_TYPE_GROUPS: Record<Exclude<SceneTypeGroup, 'all'>, string[]> = {
   navigation: ['navigation', 'back_key', 'home_key', 'recents_key', 'window_transition'],
   app_switch: ['app_switch', 'home_screen', 'app_foreground'],
   idle: ['idle'],
+  device_state: ['screen_on', 'screen_off', 'screen_sleep', 'idle'],
   jank_region: ['jank_region'],
   anr: ['anr'],
 };
@@ -257,12 +361,23 @@ function collectRouteSceneTypes(route: SceneReconstructionRouteRule): Set<string
 }
 
 export function getSceneReconstructionRoutes(
-  manifest: DomainManifest = DEFAULT_DOMAIN_MANIFEST
+  profileOrManifest: SceneRouteProfile | DomainManifest = 'legacy',
+  maybeManifest?: DomainManifest
 ): SceneReconstructionRouteRule[] {
+  const routeProfile = typeof profileOrManifest === 'string'
+    ? normalizeRouteProfile(profileOrManifest)
+    : 'legacy';
+  const manifest = typeof profileOrManifest === 'string'
+    ? (maybeManifest ?? DEFAULT_DOMAIN_MANIFEST)
+    : profileOrManifest;
   const routes = Array.isArray(manifest.sceneReconstructionRoutes)
     ? manifest.sceneReconstructionRoutes
     : [];
-  return routes.length > 0 ? routes : DEFAULT_DOMAIN_MANIFEST.sceneReconstructionRoutes;
+  const effectiveRoutes = routes.length > 0 ? routes : DEFAULT_DOMAIN_MANIFEST.sceneReconstructionRoutes;
+  return effectiveRoutes.filter((route) => {
+    const routeProfileForRule = normalizeRouteProfile(route.routeProfile);
+    return routeProfileForRule === routeProfile;
+  });
 }
 
 /**
@@ -319,14 +434,20 @@ export function matchesSceneReconstructionRoute(
 
 export function resolveSceneReconstructionRoute(
   sceneType: string,
-  manifest: DomainManifest = DEFAULT_DOMAIN_MANIFEST
+  manifest: DomainManifest = DEFAULT_DOMAIN_MANIFEST,
+  routeProfile: SceneRouteProfile = 'legacy'
 ): SceneReconstructionRouteRule | null {
-  for (const route of getSceneReconstructionRoutes(manifest)) {
+  for (const route of getSceneReconstructionRoutes(routeProfile, manifest)) {
     if (matchesSceneReconstructionRoute(sceneType, route)) {
       return route;
     }
   }
   return null;
+}
+
+function normalizeRouteProfile(value: unknown): SceneRouteProfile {
+  if (value === 'legacy' || value === 'smart') return value;
+  throw new Error(`Invalid scene reconstruction routeProfile: ${String(value)}`);
 }
 
 export function getStrategyExecutionPolicy(

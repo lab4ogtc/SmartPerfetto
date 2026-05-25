@@ -24,6 +24,7 @@ import {
 import { writeTraceMetadata } from '../services/traceMetadataStore';
 
 type CodeAwareMode = 'off' | 'metadata_only' | 'provider_send';
+type SmartAction = 'preview' | 'analyze';
 
 interface VerifyOptions {
   tracePath: string;
@@ -37,6 +38,19 @@ interface VerifyOptions {
   requireConclusionEvidence: boolean;
   /** Analysis mode override forwarded as options.analysisMode to the backend. */
   analysisMode?: 'fast' | 'full' | 'auto';
+  /** Analyze preset forwarded as options.preset to the backend. */
+  preset?: 'smart';
+  /** Smart action forwarded as options.smartAction. Defaults to analyze for --mode smart CLI runs. */
+  smartAction?: SmartAction;
+  /** Smart scene selection forwarded as options.smartSelection. */
+  smartSelection?: {
+    scope: 'all' | 'scene_types' | 'scene_ids';
+    sceneTypes?: string[];
+    sceneIds?: string[];
+    label?: string;
+  };
+  /** Force deterministic prepasses to bypass cached scene reports. */
+  forceRefresh: boolean;
   /** Code-aware mode forwarded as options.codeAwareMode to the backend. */
   codeAwareMode?: CodeAwareMode;
   /** Registered codebases exposed to this verification run. */
@@ -126,7 +140,14 @@ function printUsage(): void {
   console.log('  --timeout-ms <number>             SSE timeout in ms (default: 600000)');
   console.log('  --max-rounds <number>             Analysis max rounds (default: 3)');
   console.log('  --confidence-threshold <number>   Analysis confidence threshold (default: 0.5)');
-  console.log('  --mode <fast|full|auto>           Override analysisMode sent to backend (default: unset → classifier)');
+  console.log('  --mode <fast|full|auto|smart>     Override analysisMode, or use smart as shorthand for --preset smart');
+  console.log('  --preset <smart>                  Forward preset to the backend');
+  console.log('  --smart-action <preview|analyze>  Smart action (default: analyze for --mode/--preset smart)');
+  console.log('  --smart-scope <all|scene_types|scene_ids>');
+  console.log('                                      Smart selection scope (default: all for analyze)');
+  console.log('  --smart-scene-type <type>          Smart scene type selection; repeatable');
+  console.log('  --smart-scene-id <id>              Smart scene id selection; repeatable');
+  console.log('  --force-refresh                   Bypass cached scene reports when supported');
   console.log('  --code-aware <off|metadata_only|provider_send>');
   console.log('                                      Forward codeAwareMode to the backend');
   console.log('  --codebase-id <id>                 Registered codebase id to expose; repeatable');
@@ -158,6 +179,7 @@ function parseArgs(argv: string[]): VerifyOptions {
     confidenceThreshold: 0.5,
     keepSession: false,
     keepTrace: false,
+    forceRefresh: false,
     requireConclusionEvidence: false,
     codebaseIds: [],
     requireCodeRef: false,
@@ -171,6 +193,9 @@ function parseArgs(argv: string[]): VerifyOptions {
     allowNoDataEnvelopes: false,
     requiredTools: [],
   };
+  let smartScope: 'all' | 'scene_types' | 'scene_ids' | undefined;
+  const smartSceneTypes: string[] = [];
+  const smartSceneIds: string[] = [];
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -188,6 +213,11 @@ function parseArgs(argv: string[]): VerifyOptions {
 
     if (arg === '--keep-trace') {
       options.keepTrace = true;
+      continue;
+    }
+
+    if (arg === '--force-refresh') {
+      options.forceRefresh = true;
       continue;
     }
 
@@ -300,10 +330,86 @@ function parseArgs(argv: string[]): VerifyOptions {
       if (!next) {
         throw new Error('--mode requires a value');
       }
+      if (next === 'smart') {
+        options.preset = 'smart';
+        options.smartAction = options.smartAction ?? 'analyze';
+        options.query = options.query === DEFAULT_QUERY ? '/smart' : options.query;
+        i += 1;
+        continue;
+      }
       if (next !== 'fast' && next !== 'full' && next !== 'auto') {
-        throw new Error(`Invalid --mode value: ${next} (expected fast|full|auto)`);
+        throw new Error(`Invalid --mode value: ${next} (expected fast|full|auto|smart)`);
       }
       options.analysisMode = next;
+      i += 1;
+      continue;
+    }
+
+    if (arg === '--preset') {
+      if (!next) {
+        throw new Error('--preset requires a value');
+      }
+      if (next !== 'smart') {
+        throw new Error(`Invalid --preset value: ${next} (expected smart)`);
+      }
+      options.preset = 'smart';
+      options.smartAction = options.smartAction ?? 'analyze';
+      options.query = options.query === DEFAULT_QUERY ? '/smart' : options.query;
+      i += 1;
+      continue;
+    }
+
+    if (arg === '--smart-action') {
+      if (!next) {
+        throw new Error('--smart-action requires a value');
+      }
+      if (next !== 'preview' && next !== 'analyze') {
+        throw new Error(`Invalid --smart-action value: ${next} (expected preview|analyze)`);
+      }
+      options.preset = 'smart';
+      options.smartAction = next;
+      options.query = options.query === DEFAULT_QUERY ? '/smart' : options.query;
+      i += 1;
+      continue;
+    }
+
+    if (arg === '--smart-scope') {
+      if (!next) {
+        throw new Error('--smart-scope requires a value');
+      }
+      if (next !== 'all' && next !== 'scene_types' && next !== 'scene_ids') {
+        throw new Error(`Invalid --smart-scope value: ${next} (expected all|scene_types|scene_ids)`);
+      }
+      options.preset = 'smart';
+      options.smartAction = options.smartAction ?? 'analyze';
+      options.query = options.query === DEFAULT_QUERY ? '/smart' : options.query;
+      smartScope = next;
+      i += 1;
+      continue;
+    }
+
+    if (arg === '--smart-scene-type') {
+      if (!next) {
+        throw new Error('--smart-scene-type requires a value');
+      }
+      options.preset = 'smart';
+      options.smartAction = options.smartAction ?? 'analyze';
+      options.query = options.query === DEFAULT_QUERY ? '/smart' : options.query;
+      smartSceneTypes.push(next);
+      smartScope = smartScope ?? 'scene_types';
+      i += 1;
+      continue;
+    }
+
+    if (arg === '--smart-scene-id') {
+      if (!next) {
+        throw new Error('--smart-scene-id requires a value');
+      }
+      options.preset = 'smart';
+      options.smartAction = options.smartAction ?? 'analyze';
+      options.query = options.query === DEFAULT_QUERY ? '/smart' : options.query;
+      smartSceneIds.push(next);
+      smartScope = smartScope ?? 'scene_ids';
       i += 1;
       continue;
     }
@@ -375,6 +481,34 @@ function parseArgs(argv: string[]): VerifyOptions {
     }
 
     throw new Error(`Unknown argument: ${arg}`);
+  }
+
+  if (options.preset === 'smart') {
+    options.smartAction = options.smartAction ?? 'analyze';
+    if (options.smartAction === 'analyze') {
+      const scope = smartScope ?? 'all';
+      if (scope === 'scene_types') {
+        if (smartSceneTypes.length === 0) {
+          throw new Error('--smart-scope scene_types requires --smart-scene-type');
+        }
+        options.smartSelection = {
+          scope,
+          sceneTypes: Array.from(new Set(smartSceneTypes)),
+          label: 'CLI scene_types',
+        };
+      } else if (scope === 'scene_ids') {
+        if (smartSceneIds.length === 0) {
+          throw new Error('--smart-scope scene_ids requires --smart-scene-id');
+        }
+        options.smartSelection = {
+          scope,
+          sceneIds: Array.from(new Set(smartSceneIds)),
+          label: 'CLI scene_ids',
+        };
+      } else {
+        options.smartSelection = { scope: 'all', label: 'CLI all scenes' };
+      }
+    }
   }
 
   return options;
@@ -835,6 +969,10 @@ async function main(): Promise<void> {
         options: {
           maxRounds: options.maxRounds,
           confidenceThreshold: options.confidenceThreshold,
+          ...(options.preset ? { preset: options.preset } : {}),
+          ...(options.smartAction ? { smartAction: options.smartAction } : {}),
+          ...(options.smartSelection ? { smartSelection: options.smartSelection } : {}),
+          ...(options.forceRefresh ? { forceRefresh: true } : {}),
           ...(options.analysisMode ? { analysisMode: options.analysisMode } : {}),
           ...(options.codeAwareMode ? { codeAwareMode: options.codeAwareMode } : {}),
           ...(options.codebaseIds.length > 0 ? { codebaseIds: options.codebaseIds } : {}),
@@ -859,19 +997,22 @@ async function main(): Promise<void> {
     // quick run can legitimately emit up to ~5 agent_response events.
     const isQuickMode = sse.planSubmittedCount === 0;
 
+    const smartMode = options.preset === 'smart';
     const requiredChecks = {
       hasProgressEvents: sse.progressCount > 0,
-      hasAgentResponses: sse.agentResponseCount > 0,
+      ...(smartMode ? {} : { hasAgentResponses: sse.agentResponseCount > 0 }),
       hasTerminalConclusionPayload: sse.conclusionCount > 0 || sse.analysisCompletedConclusionChars > 0,
       hasAnalysisCompletedEvent: sse.terminalEvent === 'analysis_completed' || sse.terminalEvent === 'end',
       hasNoSseErrors: sse.errorEvents.length === 0,
     };
 
-    const fullModeChecks = {
-      ...(options.allowNoDataEnvelopes ? {} : { hasDataEnvelopes: sse.dataEnvelopeCount > 0 }),
-      hasPlanSubmitted: sse.planSubmittedCount > 0,
-      hasArchitectureDetected: sse.architectureDetectedCount > 0,
-    };
+    const fullModeChecks = smartMode
+      ? {}
+      : {
+        ...(options.allowNoDataEnvelopes ? {} : { hasDataEnvelopes: sse.dataEnvelopeCount > 0 }),
+        hasPlanSubmitted: sse.planSubmittedCount > 0,
+        hasArchitectureDetected: sse.architectureDetectedCount > 0,
+      };
 
     // Mode expectation: if the caller pinned `--mode fast|full`, verify the backend honored it.
     // Catches regressions where a fast CLI flag silently falls back to the full pipeline (or vice versa).
@@ -972,6 +1113,7 @@ async function main(): Promise<void> {
       timestamp: new Date().toISOString(),
       tracePath: options.tracePath,
       query: options.query,
+      preset: options.preset,
       traceId,
       sessionId,
       checks,

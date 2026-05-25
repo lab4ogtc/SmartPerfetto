@@ -35,16 +35,21 @@ import { DataEnvelope } from '../../types/dataContract';
 import { StreamingUpdate } from '../types';
 import { sceneStoryConfig } from '../../config';
 import { ownersMatch, type ResourceOwnerFields } from '../../services/resourceOwnership';
+import { runWithSmartTraceSqlSemaphore } from '../../services/traceProcessor/sqlSemaphore';
+import type { SceneJobArtifactStore } from '../../services/sceneReport/sceneJobArtifactStore';
 import { estimateSceneStoryCost, type CostEstimate } from './sceneCostEstimator';
+import type { SceneRouteProfile } from '../config/domainManifest';
+import type { SmartCancelToken } from './smartCancelBridge';
 import {
   buildAnalysisIntervals,
-  buildDisplayedScenes,
+  selectAnalysisEligibleScenes,
 } from './sceneIntervalBuilder';
 import {
   JobRunnerEvent,
   SceneAnalysisJobRunner,
 } from './sceneAnalysisJobRunner';
 import { SceneStage1Runner } from './sceneStage1Runner';
+import { runSceneStage1Verifier } from './sceneStage1Verifier';
 import { runStage3Summary } from './sceneStage3Summarizer';
 import type { SceneReportStore } from '../../services/sceneReport/sceneReportStore';
 import type { SceneReportMemoryCache } from '../../services/sceneReport/sceneReportMemoryCache';
@@ -53,6 +58,8 @@ import {
   DisplayedScene,
   DisplayedSceneAnalysisState,
   SceneAnalysisJob,
+  SceneAnalysisSelection,
+  SceneReconstructionVerification,
   SceneInsight,
   SceneReport,
 } from './types';
@@ -93,6 +100,8 @@ export interface SceneStoryServiceDeps {
   reportStore: SceneReportStore;
   /** Process-memory weak cache for external-RPC traces (no content hash). */
   memoryCache: SceneReportMemoryCache;
+  /** Out-of-band storage for omitted Smart job rows. */
+  jobArtifactStore?: SceneJobArtifactStore;
   /**
    * Compute the trace's content hash. Returns null when the trace has no
    * file backing it (external RPC). DI'd so tests can stub without a real
@@ -121,6 +130,16 @@ export interface SceneStoryStartOptions {
   analysisCap?: number;
   /** Skip cache lookup and run a fresh pipeline. */
   forceRefresh?: boolean;
+  /** Route profile for Stage 2 route selection and cache isolation. */
+  routeProfile?: SceneRouteProfile;
+  /** Stop after Stage 1 and wait for the user to choose a Smart deep-dive scope. */
+  previewOnly?: boolean;
+  /** Optional Stage 2 scope chosen by the user. Defaults to all detected scenes. */
+  selection?: SceneAnalysisSelection;
+  /** Optional parent-session cancellation signal used by Smart Analysis Mode. */
+  cancelToken?: SmartCancelToken;
+  /** Optional LLM double-check for ambiguous Smart Stage1 scene reconstruction. */
+  verifyWithLlm?: boolean;
 }
 
 /**
@@ -141,6 +160,7 @@ export class SceneStoryService {
   private readonly runners: Map<string, SceneAnalysisJobRunner> = new Map();
   private readonly inProgress: Set<string> = new Set();
   private readonly toEnvelopes: (result: SkillExecutionResult, traceId: string) => DataEnvelope[];
+  private readonly memoryReportById: Map<string, SceneReport> = new Map();
 
   /**
    * Concurrent-request dedupe: while a pipeline for an owner-scoped
@@ -166,9 +186,13 @@ export class SceneStoryService {
    * the caller does not need its own try/catch (the route handler still
    * wraps it for safety).
    */
-  async start(args: SceneStoryStartArgs): Promise<void> {
+  async start(args: SceneStoryStartArgs): Promise<SceneReport | null> {
     const { sessionId, traceId, skillExecutor, options } = args;
     const forceRefresh = options?.forceRefresh ?? false;
+    const routeProfile = options?.routeProfile ?? 'legacy';
+    const previewOnly = options?.previewOnly === true;
+    const selection = options?.selection ?? { scope: 'all' as const };
+    const cacheableByHash = !previewOnly && selection.scope === 'all';
     const session = this.deps.getSession(sessionId);
     if (!session) {
       throw new Error(`SceneStoryService.start: session ${sessionId} not found`);
@@ -183,10 +207,12 @@ export class SceneStoryService {
 
     let scenes: DisplayedScene[] = [];
     let intervals: AnalysisInterval[] = [];
+    let sceneVerification: SceneReconstructionVerification | undefined;
     let runner: SceneAnalysisJobRunner | undefined;
     let traceDurationSec = 0;
     let pipelineError: Error | undefined;
     let traceHash: string | null = null;
+    let pendingKeyToDelete: string | null = null;
     let resolvePending: ((r: SceneReport) => void) | undefined;
     let rejectPending: ((err: unknown) => void) | undefined;
 
@@ -196,25 +222,28 @@ export class SceneStoryService {
       // response on the same trace. Hashing reads the file (~5-10s for 1GB);
       // RPC traces skip the hash and check the memory cache by traceId.
       traceHash = await this.deps.computeHash(traceId);
+      options?.cancelToken?.throwIfAborted();
 
-      if (!forceRefresh) {
+      if (cacheableByHash && !forceRefresh) {
         // Disk (by hash) or memory (by traceId) cache lookup.
-        const cached = await this.lookupCachedReport(traceHash, traceId, args.owner);
+        const cached = await this.lookupCachedReport(traceHash, traceId, routeProfile, args.owner);
         if (cached) {
           this.emitCachedReport(sessionId, session, cached);
-          return;
+          return cached;
         }
       }
 
       // 3) In-flight pipeline dedupe — only file-backed traces have a hash
       // key, so concurrent RPC requests fall through and run independently.
-      const pendingKey = traceHash ? buildOwnerScopedCacheKey(traceHash, args.owner) : null;
-      if (pendingKey && !forceRefresh) {
+      const pendingKey = traceHash
+        ? buildOwnerScopedCacheKey(traceHash, routeProfile, args.owner)
+        : null;
+      if (cacheableByHash && pendingKey && !forceRefresh) {
         const inFlight = this.pendingByHash.get(pendingKey);
         if (inFlight) {
           const shared = await inFlight;
           this.emitCachedReport(sessionId, session, shared);
-          return;
+          return shared;
         }
         // Register a deferred promise so peer requests can wait on us.
         const pending = new Promise<SceneReport>((res, rej) => {
@@ -222,6 +251,7 @@ export class SceneStoryService {
           rejectPending = rej;
         });
         this.pendingByHash.set(pendingKey, pending);
+        pendingKeyToDelete = pendingKey;
         // Swallow unhandled-rejection — peer awaiters that come and go later
         // will see the rejection through their own await.
         pending.catch(() => undefined);
@@ -237,6 +267,7 @@ export class SceneStoryService {
       // We also capture each envelope into a local array so the finalised
       // SceneReport can persist them for cache-hit replay; without this,
       // re-opening a cached trace would lose the lane-overlay state.
+      options?.cancelToken?.throwIfAborted();
       const stage1Envelopes: DataEnvelope[] = [];
       const stage1 = await new SceneStage1Runner({
         execute: (skillId, tid, params) => skillExecutor.execute(skillId, tid, params),
@@ -254,9 +285,34 @@ export class SceneStoryService {
 
       scenes = stage1.scenes;
       traceDurationSec = stage1.traceDurationSec;
+      sceneVerification = await runSceneStage1Verifier({
+        scenes,
+        traceDurationSec,
+        enableLlm: routeProfile === 'smart' && options?.verifyWithLlm === true,
+      });
+      options?.cancelToken?.throwIfAborted();
       const cap = args.options?.analysisCap ??
         estimateSceneStoryCost({ traceDurationSec }).expectedScenes;
-      intervals = buildAnalysisIntervals(scenes, { cap });
+      const candidateIntervals = buildAnalysisIntervals(scenes, { cap, routeProfile });
+      const selectedScenes = previewOnly
+        ? []
+        : selectAnalysisEligibleScenes(scenes, selection);
+      intervals = previewOnly
+        ? []
+        : buildAnalysisIntervals(selectedScenes, { cap, routeProfile });
+      if (routeProfile === 'smart') {
+        this.deps.broadcast(sessionId, {
+          type: 'scene_story_smart_eta_refined',
+          content: {
+            etaSec: estimateSmartEtaSec(previewOnly ? candidateIntervals.length : intervals.length),
+            etaConfidence: 'medium',
+            expectedDeepDives: previewOnly ? candidateIntervals.length : intervals.length,
+            selectionMode: previewOnly ? 'selection_required' : selection.scope,
+            selectedSceneCount: selectedScenes.length,
+          },
+          timestamp: Date.now(),
+        });
+      }
 
       // Mark which scenes were selected for analysis.
       const selectedSceneIds = new Set(intervals.map((i) => i.displayedSceneId));
@@ -273,7 +329,13 @@ export class SceneStoryService {
 
       this.deps.broadcast(sessionId, {
         type: 'scene_story_detected',
-        content: { scenes, analysisIntervals: intervals.length },
+        content: {
+          scenes,
+          analysisIntervals: intervals.length,
+          candidateIntervals: candidateIntervals.length,
+          sceneVerification,
+          previewOnly,
+        },
         timestamp: Date.now(),
       });
 
@@ -284,8 +346,25 @@ export class SceneStoryService {
         timestamp: Date.now(),
       });
 
+      if (previewOnly) {
+        const previewReport = this.finalizeSelectionPreview({
+          sessionId,
+          traceId,
+          session,
+          scenes,
+          traceDurationSec,
+          traceHash,
+          stage1Envelopes,
+          routeProfile,
+          candidateIntervalCount: candidateIntervals.length,
+          sceneVerification,
+        });
+        return previewReport;
+      }
+
       // Skip Stage 2 entirely if nothing matched a route.
       if (intervals.length === 0) {
+        options?.cancelToken?.throwIfAborted();
         const emptyReport = await this.finalize({
           sessionId,
           traceId,
@@ -297,18 +376,28 @@ export class SceneStoryService {
           traceDurationSec,
           traceHash,
           stage1Envelopes,
+          routeProfile,
+          cacheableByHash,
+          sceneVerification,
         });
         resolvePending?.(emptyReport);
-        return;
+        return emptyReport;
       }
 
       // ── Stage 2: per-interval Agent deep-dive ────────────────────────────
+      options?.cancelToken?.throwIfAborted();
       runner = new SceneAnalysisJobRunner({
         concurrency: sceneStoryConfig.analysisConcurrency,
         maxRetries: sceneStoryConfig.jobMaxRetries,
         traceId,
         analysisId: sessionId,
         skillExecutor,
+        runExecution: routeProfile === 'smart'
+          ? (fn) => runWithSmartTraceSqlSemaphore(traceId, fn)
+          : undefined,
+        toDataEnvelopes: routeProfile === 'smart'
+          ? (result, tid) => this.toEnvelopes(result as SkillExecutionResult, tid)
+          : undefined,
         onEvent: (event) => this.handleJobEvent(sessionId, scenes, event),
       });
       this.runners.set(sessionId, runner);
@@ -318,6 +407,7 @@ export class SceneStoryService {
 
       const jobs = runner.getJobs();
       const cancelled = runner.isCancelled();
+      options?.cancelToken?.throwIfAborted();
 
       // ── Stage 3: cross-scene narrative summary ──────────────────────────
       let summary: string | null = null;
@@ -327,10 +417,12 @@ export class SceneStoryService {
           content: { phase: 'summarizing', message: '生成整体叙述' },
           timestamp: Date.now(),
         });
+        options?.cancelToken?.throwIfAborted();
         summary = await runStage3Summary({ scenes, jobs });
       }
 
       // ── Stage 4: finalise + persist ──────────────────────────────────────
+      options?.cancelToken?.throwIfAborted();
       const finalReport = await this.finalize({
         sessionId,
         traceId,
@@ -342,8 +434,12 @@ export class SceneStoryService {
         traceDurationSec,
         traceHash,
         stage1Envelopes,
+        routeProfile,
+        cacheableByHash,
+        sceneVerification,
       });
       resolvePending?.(finalReport);
+      return finalReport;
     } catch (err) {
       pipelineError = err as Error;
       session.status = 'failed';
@@ -356,8 +452,9 @@ export class SceneStoryService {
       // Wake any peer requests that were awaiting this hash so they propagate
       // the same failure on their own SSE channels (instead of hanging).
       rejectPending?.(pipelineError);
+      return null;
     } finally {
-      if (traceHash) this.pendingByHash.delete(buildOwnerScopedCacheKey(traceHash, args.owner));
+      if (pendingKeyToDelete) this.pendingByHash.delete(pendingKeyToDelete);
       this.runners.delete(sessionId);
       this.inProgress.delete(sessionId);
     }
@@ -449,7 +546,18 @@ export class SceneStoryService {
     traceHash: string | null;
     /** Stage1 envelopes captured during the cold run, for cache-hit replay. */
     stage1Envelopes: DataEnvelope[];
+    routeProfile: SceneRouteProfile;
+    cacheableByHash: boolean;
+    sceneVerification?: SceneReconstructionVerification;
   }): Promise<SceneReport> {
+    const jobs = args.routeProfile === 'smart'
+      ? await attachSmartJobArtifactRefs({
+        traceId: args.traceId,
+        jobs: args.jobs,
+        artifactStore: this.deps.jobArtifactStore,
+      })
+      : args.jobs;
+
     const report = buildSceneReport({
       analysisId: args.sessionId,
       traceId: args.traceId,
@@ -458,12 +566,14 @@ export class SceneStoryService {
       userId: args.session.userId,
       createdAt: args.session.createdAt,
       scenes: args.scenes,
-      jobs: args.jobs,
+      jobs,
       summary: args.summary,
       cancelled: args.cancelled,
       traceDurationSec: args.traceDurationSec,
       traceHash: args.traceHash,
       stage1Envelopes: args.stage1Envelopes,
+      routeProfile: args.routeProfile,
+      sceneVerification: args.sceneVerification,
     });
 
     args.session.sceneStoryReport = report;
@@ -473,7 +583,9 @@ export class SceneStoryService {
     // Persist BEFORE broadcasting scene_story_report_ready so any client
     // that immediately calls GET /scene-reconstruct/report/:id is guaranteed
     // to find the report rather than racing the disk write.
-    await this.persistReport(report, args.traceId);
+    await this.persistReport(report, args.traceId, args.routeProfile, {
+      indexByHash: args.cacheableByHash,
+    });
 
     this.deps.broadcast(args.sessionId, {
       type: 'scene_story_report_ready',
@@ -500,6 +612,65 @@ export class SceneStoryService {
     return report;
   }
 
+  private finalizeSelectionPreview(args: {
+    sessionId: string;
+    traceId: string;
+    session: SceneStorySession;
+    scenes: DisplayedScene[];
+    traceDurationSec: number;
+    traceHash: string | null;
+    stage1Envelopes: DataEnvelope[];
+    routeProfile: SceneRouteProfile;
+    candidateIntervalCount: number;
+    sceneVerification?: SceneReconstructionVerification;
+  }): SceneReport {
+    const report = buildSceneReport({
+      analysisId: args.sessionId,
+      traceId: args.traceId,
+      tenantId: args.session.tenantId,
+      workspaceId: args.session.workspaceId,
+      userId: args.session.userId,
+      createdAt: args.session.createdAt,
+      scenes: args.scenes,
+      jobs: [],
+      summary: '场景盘点已完成，等待用户选择智能分析深钻范围。',
+      cancelled: false,
+      traceDurationSec: args.traceDurationSec,
+      traceHash: args.traceHash,
+      stage1Envelopes: args.stage1Envelopes,
+      routeProfile: args.routeProfile,
+      sceneVerification: args.sceneVerification,
+    });
+
+    args.session.sceneStoryReport = report;
+    args.session.status = 'completed';
+    args.session.lastActivityAt = Date.now();
+    this.memoryReportById.set(report.reportId, report);
+
+    this.deps.broadcast(args.sessionId, {
+      type: 'scene_story_selection_ready',
+      content: {
+        sceneCount: report.displayedScenes.length,
+        candidateIntervalCount: args.candidateIntervalCount,
+        sceneTypeCounts: countSceneTypes(report.displayedScenes),
+        reportId: report.reportId,
+        sceneVerification: report.sceneVerification,
+      },
+      timestamp: Date.now(),
+    });
+
+    this.deps.broadcast(args.sessionId, {
+      type: 'progress',
+      content: {
+        phase: 'selection_ready',
+        message: '场景盘点完成,请选择智能分析范围',
+      },
+      timestamp: Date.now(),
+    });
+
+    return report;
+  }
+
   /**
    * Persist a finalised SceneReport to whichever cache layer matches the
    * trace's origin. File-backed traces go into the disk store with the
@@ -511,11 +682,22 @@ export class SceneStoryService {
    * a save failure would let peer requests get a `reportId` they can't
    * subsequently load via `GET /scene-reconstruct/report/:id`.
    */
-  private async persistReport(report: SceneReport, traceId: string): Promise<void> {
+  private async persistReport(
+    report: SceneReport,
+    traceId: string,
+    routeProfile: SceneRouteProfile,
+    options: { indexByHash?: boolean } = {},
+  ): Promise<void> {
     if (report.traceOrigin === 'file' && report.traceHash) {
-      await this.deps.reportStore.save(report);
+      await this.deps.reportStore.save(report, routeProfile, {
+        indexByHash: options.indexByHash !== false,
+      });
+      this.memoryReportById.set(report.reportId, report);
     } else {
-      this.deps.memoryCache.set(traceId, report);
+      if (options.indexByHash !== false) {
+        this.deps.memoryCache.set(traceId, report, routeProfile);
+      }
+      this.memoryReportById.set(report.reportId, report);
     }
   }
 
@@ -570,6 +752,8 @@ export class SceneStoryService {
       content: {
         scenes: report.displayedScenes,
         analysisIntervals: report.jobs.length,
+        sceneVerification: report.sceneVerification,
+        previewOnly: report.jobs.length === 0 && report.summary === '场景盘点已完成，等待用户选择智能分析深钻范围。',
       },
       timestamp: now,
     });
@@ -616,8 +800,13 @@ export class SceneStoryService {
    *   - cached + RPC: O(1) Map lookup
    *   - cold:        hash + trace_bounds SQL probe (~50ms)
    */
-  async previewOnly(args: { traceId: string; owner?: ResourceOwnerFields }): Promise<SceneStoryPreviewResult> {
+  async previewOnly(args: {
+    traceId: string;
+    owner?: ResourceOwnerFields;
+    routeProfile?: SceneRouteProfile;
+  }): Promise<SceneStoryPreviewResult> {
     const { traceId, owner } = args;
+    const routeProfile = args.routeProfile ?? 'legacy';
 
     // Hash and probe are independent — run in parallel. Hash dominates for
     // large files (5-10s for 1GB), probe is ~50ms. Parallelising cuts cold
@@ -627,7 +816,7 @@ export class SceneStoryService {
       this.deps.probeDuration(traceId),
     ]);
 
-    const cached = await this.lookupCachedReport(hash, traceId, owner);
+    const cached = await this.lookupCachedReport(hash, traceId, routeProfile, owner);
     if (cached) {
       const dur = cached.traceMeta.durationSec;
       return {
@@ -650,7 +839,14 @@ export class SceneStoryService {
    * existed; the route handler maps null to a 404.
    */
   async getReport(reportId: string): Promise<SceneReport | null> {
-    return this.deps.reportStore.loadById(reportId);
+    const persisted = await this.deps.reportStore.loadById(reportId);
+    if (persisted) return persisted;
+    const memory = this.memoryReportById.get(reportId) ?? null;
+    if (memory && memory.expiresAt !== null && memory.expiresAt < Date.now()) {
+      this.memoryReportById.delete(reportId);
+      return null;
+    }
+    return memory;
   }
 
   /**
@@ -662,11 +858,12 @@ export class SceneStoryService {
   private async lookupCachedReport(
     hash: string | null,
     traceId: string,
+    routeProfile: SceneRouteProfile,
     owner?: ResourceOwnerFields,
   ): Promise<SceneReport | null> {
     const report = hash
-      ? await this.deps.reportStore.loadByHash(hash)
-      : this.deps.memoryCache.get(traceId) ?? null;
+      ? await this.deps.reportStore.loadByHash(hash, routeProfile)
+      : this.deps.memoryCache.get(traceId, routeProfile) ?? null;
     if (!report) return null;
     return owner ? (ownersMatch(report, owner) ? report : null) : report;
   }
@@ -676,9 +873,21 @@ export class SceneStoryService {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function buildOwnerScopedCacheKey(hash: string, owner?: ResourceOwnerFields): string {
-  if (!owner) return `${hash}:legacy`;
-  return `${hash}:${owner.tenantId || ''}:${owner.workspaceId || ''}:${owner.userId || owner.ownerUserId || ''}`;
+function buildOwnerScopedCacheKey(
+  hash: string,
+  routeProfile: SceneRouteProfile,
+  owner?: ResourceOwnerFields,
+): string {
+  if (!owner) return `${hash}:${routeProfile}:legacy-owner`;
+  return `${hash}:${routeProfile}:${owner.tenantId || ''}:${owner.workspaceId || ''}:${owner.userId || owner.ownerUserId || ''}`;
+}
+
+function countSceneTypes(scenes: DisplayedScene[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const scene of scenes) {
+    counts[scene.sceneType] = (counts[scene.sceneType] || 0) + 1;
+  }
+  return counts;
 }
 
 function jobStateToAnalysisState(
@@ -710,6 +919,52 @@ function mapJobEventToSseType(
   }
 }
 
+async function attachSmartJobArtifactRefs(args: {
+  traceId: string;
+  jobs: SceneAnalysisJob[];
+  artifactStore?: SceneJobArtifactStore;
+}): Promise<SceneAnalysisJob[]> {
+  if (!args.artifactStore) return args.jobs;
+
+  const out: SceneAnalysisJob[] = [];
+  for (const job of args.jobs) {
+    const result = job.result;
+    const projection = result?.projection;
+    if (
+      !result ||
+      !projection ||
+      projection.omittedRowCount <= 0 ||
+      projection.artifactRef
+    ) {
+      out.push(job);
+      continue;
+    }
+
+    const artifactRef = await args.artifactStore.save({
+      traceId: args.traceId,
+      jobId: job.jobId,
+      displayedSceneId: result.displayedSceneId,
+      skillId: result.skillId,
+      displayResults: result.displayResults,
+      dataEnvelopes: result.dataEnvelopes,
+      createdAt: Date.now(),
+    });
+
+    out.push({
+      ...job,
+      result: {
+        ...result,
+        projection: {
+          ...projection,
+          artifactRef,
+        },
+      },
+    });
+  }
+
+  return out;
+}
+
 function buildSceneReport(args: {
   analysisId: string;
   traceId: string;
@@ -726,6 +981,8 @@ function buildSceneReport(args: {
   traceHash: string | null;
   /** Stage1 envelopes captured during cold run, persisted for cache replay. */
   stage1Envelopes: DataEnvelope[];
+  routeProfile: SceneRouteProfile;
+  sceneVerification?: SceneReconstructionVerification;
 }): SceneReport {
   const failedCount = args.jobs.filter((j) => j.state === 'failed').length;
   const partial = args.cancelled || failedCount > 0;
@@ -766,8 +1023,11 @@ function buildSceneReport(args: {
     createdAt: args.createdAt,
     traceMeta: { durationSec: args.traceDurationSec },
     displayedScenes: args.scenes,
+    sceneVerification: args.sceneVerification,
     cachedDataEnvelopes: args.stage1Envelopes,
-    jobs: args.jobs,
+    jobs: args.routeProfile === 'smart'
+      ? args.jobs.map(sanitizeSmartReportJob)
+      : args.jobs,
     summary: args.summary,
     insights,
     partialReport: partial,
@@ -777,6 +1037,23 @@ function buildSceneReport(args: {
       pipelineVersion: 'v2',
     },
   };
+}
+
+function sanitizeSmartReportJob(job: SceneAnalysisJob): SceneAnalysisJob {
+  if (!job.result) return job;
+  return {
+    ...job,
+    result: {
+      ...job.result,
+      displayResults: [],
+      dataEnvelopes: [],
+    },
+  };
+}
+
+function estimateSmartEtaSec(intervalCount: number): number {
+  if (intervalCount <= 0) return 3;
+  return Math.max(10, Math.ceil(intervalCount * 12));
 }
 
 // ---------------------------------------------------------------------------

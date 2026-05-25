@@ -357,9 +357,11 @@ export interface StreamingUpdate {
     | 'plan_submitted' | 'plan_phase_updated' | 'plan_revised'
     // Scene Story Pipeline events — 'scene_story_' prefix keeps these strictly
     // distinct from legacy 'scene_detected' / 'track_data' (avoid single/plural trap).
-    | 'scene_story_detected' | 'scene_story_queued' | 'scene_story_started'
+    | 'scene_story_detected' | 'scene_story_selection_ready'
+    | 'scene_story_queued' | 'scene_story_started'
     | 'scene_story_retrying' | 'scene_story_completed' | 'scene_story_failed'
     | 'scene_story_cancelled' | 'scene_story_dropped' | 'scene_story_report_ready'
+    | 'scene_story_smart_eta_refined'
     /** @deprecated Use 'skill_layered_result' instead. Will be removed in v3.0 */
     | 'skill_data';
   content: any;

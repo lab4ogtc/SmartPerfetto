@@ -8,11 +8,9 @@ import type { DataEnvelope } from '../../types/dataContract';
  * Scene Story Pipeline — Data Contract Types.
  *
  * Two-layer scene model:
- *  - DisplayedScene: the full scene list shown in the frontend timeline,
- *    covering every step output from the scene_reconstruction skill
- *    (app_launches / user_gestures / inertial_scrolls / idle_periods /
- *     screen_state_changes / scroll_initiation / top_app_changes /
- *     jank_events fallback).
+ *  - DisplayedScene: the scene list shown in the frontend timeline. It is
+ *    built from user-visible scene steps and enriched with Android runtime
+ *    context/evidence from the broader scene_reconstruction output.
  *  - AnalysisInterval: the priority-truncated subset that enters
  *    SceneAnalysisJobRunner for per-scene Agent analysis.
  */
@@ -36,6 +34,71 @@ export type DisplayedSceneAnalysisState =
   | 'failed'        // Job retry 后仍失败
   | 'cancelled'     // 用户 cancel,job 在 queued 时被取消
   | 'dropped';      // Cancel 后迟到的 result (仅后端日志,前端不再展示)
+
+export type DisplayedSceneRole =
+  | 'action'   // 用户可感知、可作为深钻候选的动作区间
+  | 'marker'   // 零时长或辅助定位标记，例如 scroll_start
+  | 'context'; // 前台应用/空闲/设备状态等上下文，不直接深钻
+
+export type SceneConfidenceLevel = 'high' | 'medium' | 'low';
+
+export interface SceneEvidenceRef {
+  sourceStepId: string;
+  eventId?: string;
+  rowIndex?: number;
+  rowSelector?: Record<string, string | number | boolean>;
+  role?: 'primary' | 'supporting' | 'context' | 'conflict';
+  note?: string;
+}
+
+export interface SceneConflict {
+  type:
+    | 'app_mismatch'
+    | 'type_mismatch'
+    | 'invalid_timing'
+    | 'duplicate_candidate'
+    | 'ambiguous_boundary';
+  severity: 'warning' | 'bad';
+  message: string;
+  evidenceRefs?: SceneEvidenceRef[];
+}
+
+export interface SceneRuntimeContext {
+  cleanTimeline?: Array<Record<string, unknown>>;
+  operationChain?: Array<Record<string, unknown>>;
+  activityLifecycle?: Array<Record<string, unknown>>;
+  appState?: Array<Record<string, unknown>>;
+  deviceState?: Array<Record<string, unknown>>;
+}
+
+export interface SceneReconstructionVerification {
+  status: 'passed' | 'needs_review' | 'skipped' | 'failed';
+  verifier: 'deterministic' | 'llm' | 'deterministic+llm';
+  summary: string;
+  checkedSceneCount: number;
+  lowConfidenceSceneIds: string[];
+  conflictSceneIds: string[];
+  issues: Array<{
+    severity: 'info' | 'warning' | 'bad';
+    sceneId?: string;
+    type: string;
+    message: string;
+  }>;
+  llm?: {
+    status: 'not_needed' | 'skipped' | 'passed' | 'needs_review' | 'failed';
+    summary?: string;
+    raw?: string;
+    error?: string;
+  };
+}
+
+export interface SmartScenePreviewPayload {
+  reportId: string;
+  scenes: DisplayedScene[];
+  sceneVerification?: SceneReconstructionVerification;
+  eligibleSceneCount: number;
+  sceneTypeCounts: Record<string, number>;
+}
 
 /**
  * 展示用全量场景 — 时间轴上每个用户可感知的动作
@@ -71,6 +134,19 @@ export interface DisplayedScene {
   metadata: Record<string, any>;
   /** Rule-based severity (no LLM): green / yellow / red / unknown */
   severity: 'good' | 'warning' | 'bad' | 'unknown';
+  /** Display semantics used by Smart routing and UI explanation. */
+  sceneRole?: DisplayedSceneRole;
+  /** Explicit deep-dive gate. `false` wins over route matches. */
+  analysisEligible?: boolean;
+  /** Numeric confidence for UI/report math; avoid using `confidence` name. */
+  confidenceScore?: number;
+  confidenceLevel?: SceneConfidenceLevel;
+  confidenceReasons?: string[];
+  evidenceRefs?: SceneEvidenceRef[];
+  conflicts?: SceneConflict[];
+  context?: SceneRuntimeContext;
+  parentSceneId?: string;
+  childSceneIds?: string[];
   /** Analysis lifecycle state — updated by JobRunner as jobs progress */
   analysisState: DisplayedSceneAnalysisState;
   /** Set when analysisState !== 'not_planned' */
@@ -141,9 +217,40 @@ export interface SceneJobResult {
   displayResults: unknown[];
   /** DataEnvelope[] from skillEngine — opaque here */
   dataEnvelopes: unknown[];
+  /** Bounded replay-safe projection for smart chat/report rendering. */
+  projection?: SceneJobProjection;
   durationMs: number;
   /** Only set when the skill ran through Claude SDK */
   costUsd?: number;
+}
+
+export interface SceneJobProjection {
+  sceneId: string;
+  skillId: string;
+  routeId: string;
+  metrics: Record<string, number>;
+  evidenceRefs: string[];
+  topRowsSample: unknown[];
+  omittedRowCount: number;
+  artifactRef?: {
+    artifactId: string;
+    artifactType: 'scene_job_envelopes';
+    sizeBytes: number;
+    checksum: string;
+  };
+}
+
+export type SceneAnalysisSelectionScope = 'all' | 'scene_types' | 'scene_ids';
+
+export interface SceneAnalysisSelection {
+  scope: SceneAnalysisSelectionScope;
+  sceneTypes?: string[];
+  sceneIds?: string[];
+  label?: string;
+  /** SceneReport id returned by Smart preview; used to bind selection to that snapshot. */
+  reportId?: string;
+  /** Alias kept for older frontend builds that named the same concept snapshotId. */
+  sceneSnapshotId?: string;
 }
 
 // =============================================================================
@@ -188,6 +295,9 @@ export interface SceneReport {
 
   /** Full scene list, including scenes not selected for analysis */
   displayedScenes: DisplayedScene[];
+
+  /** Stage1 reconstruction self-check result; optional for old cached reports. */
+  sceneVerification?: SceneReconstructionVerification;
 
   /**
    * Stage1 DataEnvelopes captured verbatim so cache-hit replays can
@@ -250,6 +360,7 @@ export interface SceneInsight {
  */
 export type SceneStreamEventType =
   | 'scene_story_detected'           // Stage1 完成,displayedScenes 就绪
+  | 'scene_story_selection_ready'    // Smart preview 完成,等待用户选择深钻范围
   | 'scene_story_queued'             // 某 job 入 JobRunner 队列
   | 'scene_story_started'            // 某 job 开始执行
   | 'scene_story_retrying'           // 某 job 失败进入 retry (attempt → 1)
@@ -257,4 +368,5 @@ export type SceneStreamEventType =
   | 'scene_story_failed'             // 某 job retry 后仍失败
   | 'scene_story_cancelled'          // 某 job 在 queued 状态被 cancel
   | 'scene_story_dropped'            // 某 job 结果在 cancel 后迟到 (仅日志)
-  | 'scene_story_report_ready';      // 最终 SceneReport 持久化完成
+  | 'scene_story_report_ready'       // 最终 SceneReport 持久化完成
+  | 'scene_story_smart_eta_refined'; // Smart Stage1 后成本预估升级

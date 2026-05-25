@@ -34,6 +34,7 @@ import { SessionPersistenceService } from '../services/sessionPersistenceService
 import { authenticate, requireRequestContext, type RequestContext } from '../middleware/auth';
 import {
   isOwnedByContext,
+  ownersMatch,
   ownerFieldsFromContext,
   sendResourceNotFound,
   type ResourceOwnerFields,
@@ -57,8 +58,15 @@ import { DEEP_REASON_LABEL } from '../utils/analysisNarrative';
 import { sanitizeNarrativeForClient } from './narrativeSanitizer';
 import { registerSceneReconstructRoutes } from './agentSceneReconstructRoutes';
 import { SceneStoryService } from '../agent/scene/sceneStoryService';
+import {
+  buildSmartSceneSelectionReport,
+} from '../agent/scene/buildSmartChatReport';
+import { buildSmartDeepDiveDispatch } from '../agent/scene/smartDeepDiveDispatch';
+import type { SceneAnalysisSelection, SceneReport } from '../agent/scene/types';
+import { SmartCancelBridge } from '../agent/scene/smartCancelBridge';
 import { FileSystemSceneReportStore } from '../services/sceneReport/sceneReportStore';
 import { SceneReportMemoryCache } from '../services/sceneReport/sceneReportMemoryCache';
+import { FileSystemSceneJobArtifactStore } from '../services/sceneReport/sceneJobArtifactStore';
 import { computeTraceContentHash } from '../agent/scene/traceHash';
 import { probeTraceDuration } from '../agent/scene/sceneTraceDurationProbe';
 import { resolveFeatureConfig, sceneStoryConfig } from '../config';
@@ -87,6 +95,12 @@ import { registerAgentReportRoutes } from './agentReportRoutes';
 import { registerAgentResumeRoutes } from './agentResumeRoutes';
 import { registerAgentSessionCatalogRoutes } from './agentSessionCatalogRoutes';
 import { registerTeachingRoutes } from './agentTeachingRoutes';
+import {
+  AnalyzeOptionsError,
+  normalizeAnalyzeOptions,
+  type AnalyzeMode,
+} from './agent/normalizeAnalyzeOptions';
+import { finalizeAgentDrivenSession } from './agent/finalizeAgentDrivenSession';
 import { AssistantApplicationService } from '../assistant/application/assistantApplicationService';
 import { StreamProjector, SSE_RING_BUFFER_SIZE, type BufferedSseEvent } from '../assistant/stream/streamProjector';
 import {
@@ -403,6 +417,7 @@ interface AnalysisSession {
   // Optional scene reconstruction artifacts (unified into agent-driven sessions)
   scenes?: DetectedScene[];
   trackEvents?: TrackEvent[];
+  sceneStoryReport?: SceneReport;
   // Continuous state timeline lanes (from state_timeline skill)
   stateTimeline?: Record<string, StateLaneSegment[]>;
   laneAvailability?: Record<string, 'available' | 'table_missing' | 'no_data'>;
@@ -446,6 +461,7 @@ interface AnalysisSession {
 }
 const assistantAppService = new AssistantApplicationService<AnalysisSession>();
 const streamProjector = new StreamProjector();
+const smartCancelBridge = new SmartCancelBridge();
 
 function agentEventScopeFromSession(session: AnalysisSession): AgentEventPersistenceScope | null {
   const run = session.activeRun || session.lastRun;
@@ -1238,7 +1254,7 @@ async function handleAnalyzeRequest(
       traceId,
       query,
       sessionId: bodyRequestedSessionId,
-      options = {},
+      options: rawOptions = {},
       selectionContext: rawSelectionContext,
       referenceTraceId,
       traceContext: rawTraceContext,
@@ -1280,6 +1296,24 @@ async function handleAnalyzeRequest(
         hint: '请使用 /scene 命令（前端）或 POST /api/agent/v1/scene-reconstruct（后端）',
       });
       return;
+    }
+
+    let options: ReturnType<typeof normalizeAnalyzeOptions>;
+    try {
+      options = normalizeAnalyzeOptions(rawOptions, {
+        endpoint: requestedSessionIdOverride ? '/sessions/:id/runs' : '/analyze',
+        hasReferenceTraceId: !!referenceTraceId,
+      });
+    } catch (error: any) {
+      if (error instanceof AnalyzeOptionsError) {
+        res.status(error.httpStatus).json({
+          success: false,
+          error: error.message,
+          code: error.code,
+        });
+        return;
+      }
+      throw error;
     }
 
     if (requestedSessionId && !requestedSessionIsVisible(requestedSessionId, requestContext)) {
@@ -1432,6 +1466,51 @@ async function handleAnalyzeRequest(
       runId: runContext.runId,
       runSequence: runContext.sequence,
     });
+
+    if (options.preset === 'smart') {
+      runSmartAnalysis(sessionId, query, traceId, {
+        runContext,
+        traceProcessorService,
+        smartAction: options.smartAction ?? 'preview',
+        smartSelection: options.smartSelection,
+        forceRefresh: options.forceRefresh === true,
+        analysisMode: options.analysisMode,
+        blockedStrategyIds,
+        owner: ownerFieldsFromContext(requestContext),
+      }).catch((error) => {
+        const session = assistantAppService.getSession(sessionId);
+        if (session) {
+          session.logger.error('AgentRoutes', 'Smart analysis failed', error);
+          session.status = 'failed';
+          session.error = error.message;
+          markSessionRunStatus(session, 'failed', error.message);
+          broadcastToAgentDrivenClients(sessionId, {
+            type: 'error',
+            content: { message: error.message, error: error.message },
+            timestamp: Date.now(),
+          });
+        }
+      });
+
+      res.json({
+        success: true,
+        sessionId,
+        message: isNewSession ? 'Smart analysis started' : 'Smart analysis started',
+        isNewSession,
+        providerSnapshotChanged: preparedSession?.providerSnapshotChanged || undefined,
+        architecture: 'agent-driven',
+        preset: 'smart',
+        runId: runContext.runId,
+        requestId: runContext.requestId,
+        runSequence: runContext.sequence,
+        observability: {
+          runId: runContext.runId,
+          requestId: runContext.requestId,
+          runSequence: runContext.sequence,
+        },
+      });
+      return;
+    }
 
     let agentRunLease: TraceProcessorLeaseRecord | null = null;
     let referenceAgentRunLease: TraceProcessorLeaseRecord | null = null;
@@ -2308,6 +2387,9 @@ router.post('/:sessionId/cancel', (req, res) => {
 
   // Mark session as failed/cancelled
   if (session.status === 'running' || session.status === 'pending') {
+    const smartCancelled = smartCancelBridge.cancel(sessionId);
+    if (smartCancelled) smartCancelBridge.tryClaimTerminal(sessionId);
+    const sceneCancelled = sceneStoryService.cancel(sessionId);
     session.status = 'failed';
     session.error = 'Cancelled by user';
     markSessionRunStatus(session, 'failed', 'Cancelled by user');
@@ -2329,7 +2411,11 @@ router.post('/:sessionId/cancel', (req, res) => {
       } catch { /* client may already be closed */ }
     }
     session.sseClients = [];
-    session.logger.info('AgentRoutes', 'Session cancelled by user', { sessionId });
+    session.logger.info('AgentRoutes', 'Session cancelled by user', {
+      sessionId,
+      smartCancelled,
+      sceneCancelled,
+    });
   }
 
   return res.json({ success: true, sessionId, status: session.status });
@@ -2487,6 +2573,7 @@ registerAgentResumeRoutes(router, {
 // traces (no content hash, so they live for the lifetime of the backend).
 const sceneReportStore = new FileSystemSceneReportStore(sceneStoryConfig.reportDir);
 const sceneReportMemoryCache = new SceneReportMemoryCache(sceneStoryConfig.memoryCacheMaxSize);
+const sceneJobArtifactStore = new FileSystemSceneJobArtifactStore(sceneStoryConfig.jobArtifactDir);
 
 // Singleton — sceneStoryService holds per-session JobRunner state for cancel
 // lookup, so it must outlive a single request. SkillExecutor is still created
@@ -2496,6 +2583,7 @@ const sceneStoryService = new SceneStoryService({
   getSession: (id) => assistantAppService.getSession(id) as any,
   reportStore: sceneReportStore,
   memoryCache: sceneReportMemoryCache,
+  jobArtifactStore: sceneJobArtifactStore,
   computeHash: (traceId) => computeTraceContentHash(getTraceProcessorService(), traceId),
   probeDuration: (traceId) => probeTraceDuration(getTraceProcessorService(), traceId),
 });
@@ -2535,6 +2623,235 @@ const SCENE_EXTRACTION_STEP_IDS = new Set([
   'jank_events',
   'clean_timeline',
 ]);
+
+async function runSmartAnalysis(
+  sessionId: string,
+  query: string,
+  traceId: string,
+  options: {
+    runContext: AnalyzeSessionRunContext;
+    traceProcessorService: ReturnType<typeof getTraceProcessorService>;
+    smartAction: 'preview' | 'analyze';
+    smartSelection?: SceneAnalysisSelection;
+    forceRefresh: boolean;
+    analysisMode?: AnalyzeMode;
+    blockedStrategyIds?: string[];
+    owner: ResourceOwnerFields;
+  },
+): Promise<void> {
+  const session = assistantAppService.getSession(sessionId);
+  if (!session) return;
+
+  const startedAt = Date.now();
+  session.activeRun = {
+    ...options.runContext,
+    query,
+    status: 'running',
+    startedAt: options.runContext.startedAt || startedAt,
+  };
+  session.lastRun = { ...session.activeRun };
+  session.status = 'running';
+  session.lastActivityAt = Date.now();
+  persistSessionRunState(session, 'running');
+  const runHeartbeatInterval = startSessionRunHeartbeat(session);
+  const cancelToken = smartCancelBridge.create(sessionId);
+  let dispatchedToAgentDeepDive = false;
+
+  session.logger.info('SmartAnalysis', 'Starting smart analysis', {
+    query,
+    traceId,
+    smartAction: options.smartAction,
+    smartSelection: options.smartSelection,
+    runId: session.activeRun?.runId,
+    requestId: session.activeRun?.requestId,
+  });
+
+  try {
+    await ensureSkillRegistryInitialized();
+    const skillExecutor = new SkillExecutor(options.traceProcessorService);
+    skillExecutor.registerSkills(skillRegistry.getAllSkills());
+
+    let report: SceneReport | null = null;
+    if (options.smartAction === 'analyze') {
+      report = await resolveSmartPreviewReportForSelection({
+        session,
+        selection: options.smartSelection,
+        traceId,
+        owner: options.owner,
+      });
+    }
+
+    if (!report) {
+      report = await sceneStoryService.start({
+        sessionId,
+        traceId,
+        skillExecutor,
+        owner: options.owner,
+        options: {
+          routeProfile: 'smart',
+          previewOnly: true,
+          forceRefresh: options.smartAction === 'preview'
+            ? true
+            : options.forceRefresh,
+          cancelToken,
+        },
+      });
+    }
+    if (!report) {
+      throw new Error(session.error || 'Smart analysis failed before report finalization');
+    }
+
+    if (options.smartAction === 'preview') {
+      const result = buildSmartSceneSelectionReport({
+        sessionId,
+        report,
+        totalDurationMs: Date.now() - startedAt,
+      });
+      if (!smartCancelBridge.tryClaimTerminal(sessionId)) {
+        session.logger.warn('SmartAnalysis', 'Skipping late smart preview terminal', {
+          sessionId,
+          runId: session.activeRun?.runId,
+        });
+        return;
+      }
+      completeAgentDrivenSessionWithResult({
+        sessionId,
+        query,
+        traceId,
+        session,
+        result,
+        logComponent: 'SmartAnalysis',
+      });
+      return;
+    }
+
+    const dispatch = buildSmartDeepDiveDispatch({
+      report,
+      selection: options.smartSelection ?? { scope: 'all' },
+    });
+    if (!dispatch) {
+      throw new Error('所选范围没有匹配到可深钻场景，请返回场景盘点后重新选择。');
+    }
+
+    session.logger.info('SmartAnalysis', 'Dispatching smart selection to agent deep dive', {
+      query: dispatch.query,
+      selectedSceneCount: dispatch.selectedScenes.length,
+      packageName: dispatch.packageName,
+      previewReportId: report.reportId,
+      runId: session.activeRun?.runId,
+      requestId: session.activeRun?.requestId,
+    });
+    broadcastToAgentDrivenClients(sessionId, {
+      type: 'progress',
+      content: {
+        phase: 'smart_deep_dive_dispatch',
+        message: `已选中 ${dispatch.selectedScenes.length} 个场景，进入详细分析`,
+      },
+      timestamp: Date.now(),
+    });
+
+    dispatchedToAgentDeepDive = true;
+    await runAgentDrivenAnalysis(sessionId, dispatch.query, traceId, {
+      traceProcessorService: options.traceProcessorService,
+      runContext: options.runContext,
+      blockedStrategyIds: options.blockedStrategyIds,
+      selectionContext: dispatch.selectionContext,
+      traceContext: dispatch.traceContext,
+      packageName: dispatch.packageName,
+      analysisMode: resolveSmartDeepDiveAnalysisMode(options.analysisMode),
+      generateTracks: false,
+    });
+  } catch (error: any) {
+    session.status = 'failed';
+    session.error = error.message || String(error);
+    markSessionRunStatus(session, 'failed', session.error);
+    session.logger.error('SmartAnalysis', 'Smart analysis failed', error);
+    if (!dispatchedToAgentDeepDive && smartCancelBridge.tryClaimTerminal(sessionId)) {
+      broadcastToAgentDrivenClients(sessionId, {
+        type: 'error',
+        content: { message: session.error, error: session.error },
+        timestamp: Date.now(),
+      });
+    }
+  } finally {
+    smartCancelBridge.release(sessionId);
+    if (runHeartbeatInterval) {
+      clearInterval(runHeartbeatInterval);
+    }
+  }
+}
+
+function resolveSmartDeepDiveAnalysisMode(mode?: AnalyzeMode): AnalyzeMode {
+  return mode === 'fast' ? 'fast' : 'full';
+}
+
+async function resolveSmartPreviewReportForSelection(input: {
+  session: AnalysisSession;
+  selection?: SceneAnalysisSelection;
+  traceId: string;
+  owner: ResourceOwnerFields;
+}): Promise<SceneReport | null> {
+  const requestedReportId = input.selection?.reportId || input.selection?.sceneSnapshotId;
+  const sessionReport = input.session.sceneStoryReport as SceneReport | undefined;
+  if (isUsableSmartPreviewReport(sessionReport, input.traceId, input.owner, requestedReportId)) {
+    return sessionReport;
+  }
+  if (!requestedReportId) return null;
+
+  const persisted = await sceneStoryService.getReport(requestedReportId);
+  if (isUsableSmartPreviewReport(persisted, input.traceId, input.owner, requestedReportId)) {
+    return persisted;
+  }
+  return null;
+}
+
+function isUsableSmartPreviewReport(
+  report: SceneReport | null | undefined,
+  traceId: string,
+  owner: ResourceOwnerFields,
+  requestedReportId?: string,
+): report is SceneReport {
+  if (!report) return false;
+  if (requestedReportId && report.reportId !== requestedReportId) return false;
+  if (report.traceId !== traceId) return false;
+  return ownersMatch(report, owner);
+}
+
+function completeAgentDrivenSessionWithResult(input: {
+  sessionId: string;
+  query: string;
+  traceId: string;
+  session: AnalysisSession;
+  result: AgentRuntimeAnalysisResult;
+  logComponent: string;
+}): void {
+  finalizeAgentDrivenSession(input, {
+    applyFinalResultQualityGate,
+    broadcast: broadcastToAgentDrivenClients,
+    buildConversationStepUpdate,
+    appendConversationStep,
+    annotateLatestCompletedTurn: (sessionId, traceId, result) => {
+      sessionContextManager.get(sessionId, traceId)?.annotateLatestCompletedTurn({
+        success: result.success,
+        findings: result.findings,
+        message: result.conclusion,
+        confidence: result.confidence,
+        partial: result.partial,
+        terminationReason: result.terminationReason,
+        terminationMessage: result.terminationMessage,
+        conclusionContract: result.conclusionContract,
+        claimSupport: result.claimSupport,
+        claimVerificationResult: result.claimVerificationResult,
+        identityResolutions: result.identityResolutions,
+      });
+    },
+    terminalRunStatusForResult,
+    markSessionRunStatus,
+    persistAgentTurn,
+    ensureCompletedAnalysisSseEvents,
+    sendAgentDrivenResult,
+  });
+}
 
 function objectRowsToEnvelopePayload(rows: Array<Record<string, any>>): { columns: string[]; rows: any[][] } {
   if (!Array.isArray(rows) || rows.length === 0) {
@@ -3212,32 +3529,6 @@ async function runAgentDrivenAnalysis(
     });
     console.log('[AgentRoutes.AgentDriven] analyze completed, success:', result.success);
 
-    session.result = result;
-    delete (session as any).completedAnalysisFinalArtifacts;
-    // Accumulate hypotheses across turns (deduplicate by id)
-    const existingIds = new Set(session.hypotheses.map(h => h.id));
-    for (const h of result.hypotheses) {
-      if (!existingIds.has(h.id)) {
-        session.hypotheses.push(h);
-      } else {
-        // Update existing hypothesis with latest status
-        const idx = session.hypotheses.findIndex(eh => eh.id === h.id);
-        if (idx >= 0) session.hypotheses[idx] = h;
-      }
-    }
-    const terminalRunStatus = terminalRunStatusForResult(result);
-
-    // Record conclusion in cross-turn history
-    if (!session.conclusionHistory) session.conclusionHistory = [];
-    if (result.conclusion) {
-      session.conclusionHistory.push({
-        turn: session.runSequence || 1,
-        conclusion: result.conclusion,
-        confidence: result.confidence ?? 0,
-        timestamp: Date.now(),
-      });
-    }
-
     // Ensure trackEvents/scenes are computed for completed sessions (even without SSE clients)
     if (shouldGenerateTracks) {
       updateSceneReconstructionArtifactsFromEnvelopes(session, session.dataEnvelopes as DataEnvelope[]);
@@ -3285,107 +3576,17 @@ async function runAgentDrivenAnalysis(
       if (normalizedConclusionContract) {
         result.conclusionContract = normalizedConclusionContract;
       }
-      ensureAnalysisQualityArtifacts(session, normalizedConclusionContract);
+      ensureAnalysisQualityArtifacts(session, normalizedConclusionContract, result);
     }
 
-    const finalQualityIssue = applyFinalResultQualityGate({ result, query });
-    if (finalQualityIssue) {
-      const message = result.terminationMessage || finalQualityIssue.message;
-      logger.warn('AgentDrivenAnalysis', 'Final result quality gate marked result partial', {
-        code: finalQualityIssue.code,
-        conclusionChars: result.conclusion.length,
-        findingsCount: result.findings.length,
-        hasConclusionContract: !!result.conclusionContract,
-        claimVerifierStatus: result.claimVerificationResult?.status,
-        runId: session.activeRun?.runId,
-        requestId: session.activeRun?.requestId,
-      });
-      const update: StreamingUpdate = {
-        type: 'degraded',
-        content: {
-          module: 'agentRoutes',
-          fallback: 'final_result_quality_gate',
-          code: finalQualityIssue.code,
-          partial: true,
-          message,
-        },
-        timestamp: Date.now(),
-      };
-      broadcastToAgentDrivenClients(sessionId, update);
-      const conversationStep = buildConversationStepUpdate(session, update);
-      if (conversationStep) {
-        appendConversationStep(session, conversationStep);
-        broadcastToAgentDrivenClients(sessionId, conversationStep);
-      }
-    }
-    const currentTurn = session.runSequence || 1;
-    const latestConclusionHistory = session.conclusionHistory?.[session.conclusionHistory.length - 1];
-    if (latestConclusionHistory?.turn === currentTurn) {
-      latestConclusionHistory.confidence = result.confidence ?? latestConclusionHistory.confidence;
-    }
-    sessionContextManager.get(sessionId, traceId)?.annotateLatestCompletedTurn({
-      success: result.success,
-      findings: result.findings,
-      message: result.conclusion,
-      confidence: result.confidence,
-      partial: result.partial,
-      terminationReason: result.terminationReason,
-      terminationMessage: result.terminationMessage,
-      conclusionContract: result.conclusionContract,
-      claimSupport: result.claimSupport,
-      claimVerificationResult: result.claimVerificationResult,
-      identityResolutions: result.identityResolutions,
-    });
-
-    session.status = terminalRunStatus === 'quota_exceeded'
-      ? 'quota_exceeded'
-      : result.success ? 'completed' : 'failed';
-    markSessionRunStatus(session, terminalRunStatus);
-
-    // Log completion details
-    logger.info('AgentDrivenAnalysis', 'Agent-driven analysis completed', {
-      confidence: result.confidence,
-      rounds: result.rounds,
-      findingsCount: result.findings.length,
-      hypothesesCount: result.hypotheses.length,
-      claimSupportCount: result.claimSupport?.length || 0,
-      claimVerifierStatus: result.claimVerificationResult?.status,
-      partial: result.partial,
-      terminationReason: result.terminationReason,
-      runId: session.activeRun?.runId,
-      requestId: session.activeRun?.requestId,
-      runSequence: session.activeRun?.sequence,
-    });
-
-    // Persist session state via shared helper — see services/persistAgentSession.ts.
-    // CLI's cliAnalyzeService routes through the same function.
-    persistAgentTurn({
-      session,
+    completeAgentDrivenSessionWithResult({
       sessionId,
-      traceId,
       query,
-      result: { conclusion: result.conclusion, totalDurationMs: result.totalDurationMs },
-      logger,
-      // Preserve the legacy component label so any log filters / alerts keyed
-      // on 'AgentDrivenAnalysis' keep matching persist-related events.
+      traceId,
+      session,
+      result,
       logComponent: 'AgentDrivenAnalysis',
     });
-
-    // Send final result
-    const clientCount = session.sseClients.length;
-    logger.info('AgentRoutes', 'Sending agent-driven result', { clientCount });
-    ensureCompletedAnalysisSseEvents(session);
-
-    session.sseClients.forEach((client, index) => {
-      try {
-        logger.info('AgentRoutes', `Sending agent-driven result to client ${index + 1}/${clientCount}`);
-        sendAgentDrivenResult(client, session);
-      } catch (e: any) {
-        logger.error('AgentRoutes', `Error sending agent-driven result to client ${index + 1}`, e);
-      }
-    });
-
-    logger.close();
   } catch (error: any) {
     session.status = 'failed';
     session.error = error.message;
@@ -5289,6 +5490,7 @@ function ensureCompletedAnalysisResultPayload(session: AnalysisSession): Complet
   if (!result) return undefined;
   const replayOnlyScene = isSceneReplayOnlyQuery(session.query);
   const hasEvidenceBackedConclusion = result.success || result.partial === true;
+  const isSmartResult = result.conclusionContract?.metadata?.sceneId === 'smart';
   const normalizedConclusion = replayOnlyScene
     ? buildSceneReplayNarrative(session.scenes || [])
     : hasEvidenceBackedConclusion ? appendEvidenceIndexIfMissing(
@@ -5304,6 +5506,8 @@ function ensureCompletedAnalysisResultPayload(session: AnalysisSession): Complet
     });
   const normalizedConclusionContract = replayOnlyScene
     ? undefined
+    : isSmartResult
+      ? result.conclusionContract as ConclusionContract
     : hasEvidenceBackedConclusion ? (
       deriveEvidenceBackedConclusionContractForNarrative(result.conclusion, session.dataEnvelopes || [], {
         existingContract: result.conclusionContract as ConclusionContract | undefined,
@@ -5433,6 +5637,7 @@ function ensureCompletedAnalysisSseEvents(session: AnalysisSession): BufferedSse
       partial: result.partial,
       terminationReason: result.terminationReason,
       terminationMessage: result.terminationMessage,
+      smartScenePreview: result.smartScenePreview,
       findings: clientFindings,
       resultContract,
       hypotheses: result.hypotheses.map((h: AgentRuntimeAnalysisResult['hypotheses'][number]) => ({
