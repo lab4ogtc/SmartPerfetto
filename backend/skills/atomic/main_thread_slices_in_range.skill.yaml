@@ -31,7 +31,17 @@ inputs:
   - name: package
     type: string
     required: false
-    description: "目标应用包名（支持 GLOB）"
+    description: "目标应用进程名；匹配精确进程或 name:* 子进程"
+  - name: upid
+    type: integer
+    required: false
+    default: 0
+    description: "Trace 内唯一进程 ID；优先用于精确进程隔离"
+  - name: pid
+    type: integer
+    required: false
+    default: 0
+    description: "进程 ID；无 upid 时作为降级匹配"
   - name: min_dur_ns
     type: integer
     required: false
@@ -83,7 +93,13 @@ sql: |
     SELECT t.utid
     FROM thread t
     JOIN process p ON t.upid = p.upid
-    WHERE (p.name GLOB '${package}*' OR '${package}' = '')
+    WHERE (
+        (${upid|0} > 0 AND p.upid = ${upid|0})
+        OR (${upid|0} <= 0 AND ${pid|0} > 0 AND p.pid = ${pid|0}
+            AND ('${package|}' = '' OR p.name = '${package|}' OR p.name GLOB '${package|}:*'))
+        OR (${upid|0} <= 0 AND ${pid|0} <= 0
+            AND ('${package|}' = '' OR p.name = '${package|}' OR p.name GLOB '${package|}:*'))
+      )
       AND t.tid = p.pid
   ),
   -- Compute per-slice self_dur (exclusive time = wall time - direct children time)
@@ -91,24 +107,27 @@ sql: |
     SELECT
       s.id,
       s.name as slice_name,
-      MIN(s.ts + s.dur, ${end_ts}) - MAX(s.ts, ${start_ts}) as clipped_dur,
+      MIN(CASE WHEN s.dur < 0 THEN ${end_ts} ELSE s.ts + s.dur END, ${end_ts}) - MAX(s.ts, ${start_ts}) as clipped_dur,
       -- Self dur = clipped wall time minus clipped children time
-      (MIN(s.ts + s.dur, ${end_ts}) - MAX(s.ts, ${start_ts}))
+      (MIN(CASE WHEN s.dur < 0 THEN ${end_ts} ELSE s.ts + s.dur END, ${end_ts}) - MAX(s.ts, ${start_ts}))
         - COALESCE((
             SELECT SUM(
-              MIN(c.ts + c.dur, MIN(s.ts + s.dur, ${end_ts}))
+              MIN(
+                CASE WHEN c.dur < 0 THEN ${end_ts} ELSE c.ts + c.dur END,
+                MIN(CASE WHEN s.dur < 0 THEN ${end_ts} ELSE s.ts + s.dur END, ${end_ts})
+              )
               - MAX(c.ts, MAX(s.ts, ${start_ts}))
             )
             FROM slice c
             WHERE c.parent_id = s.id
               AND c.ts < ${end_ts}
-              AND c.ts + c.dur > ${start_ts}
+              AND (CASE WHEN c.dur < 0 THEN ${end_ts} ELSE c.ts + c.dur END) > ${start_ts}
           ), 0) as self_dur
     FROM slice s
     JOIN thread_track tt ON s.track_id = tt.id
     JOIN main_thread mt ON tt.utid = mt.utid
     WHERE s.ts < ${end_ts}
-      AND s.ts + s.dur > ${start_ts}
+      AND (CASE WHEN s.dur < 0 THEN ${end_ts} ELSE s.ts + s.dur END) > ${start_ts}
   )
   SELECT
     slice_name,

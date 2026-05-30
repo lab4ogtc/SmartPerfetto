@@ -12,10 +12,10 @@
 #
 # ANR 类型：
 # - INPUT_DISPATCHING_TIMEOUT: 输入超时（5s 无响应）
+# - INPUT_DISPATCHING_TIMEOUT_NO_FOCUSED_WINDOW: 无焦点窗口输入超时（5s）
 # - BROADCAST_OF_INTENT: 广播超时（前台10s/后台60s）
 # - EXECUTING_SERVICE: 服务执行超时（前台20s/后台200s）
 # - CONTENT_PROVIDER_NOT_RESPONDING: ContentProvider 超时
-# - NO_FOCUSED_WINDOW: 无焦点窗口（特殊情况）
 #
 # 分析流程：
 # 1. 系统健康检查 → 判断系统 vs 应用问题
@@ -79,7 +79,12 @@ inputs:
     type: number
     required: false
     default: 500
-    description: "IO 等待告警阈值（ms）"
+    description: "兼容旧调用的 D-state 不可中断等待告警阈值（ms）；不能单独作为 IO 根因"
+  - name: uninterruptible_wait_threshold_ms
+    type: number
+    required: false
+    default: 500
+    description: "D-state 不可中断等待告警阈值（ms）；需要 blocked_function/slice/系统 IO 证据才能升级为 IO"
   - name: enable_lock_probe
     type: boolean
     required: false
@@ -95,6 +100,11 @@ inputs:
     required: false
     default: 10
     description: "Mutex P95 锁等待告警阈值（ms）"
+  - name: enable_detail_analysis
+    type: boolean
+    required: false
+    default: true
+    description: "是否执行逐 ANR 深度分析；测试或快速预览可设为 false"
 
 steps:
   # ============================================================================
@@ -116,6 +126,7 @@ steps:
     params:
       process_name: "${process_name}"
       package: "${package}"
+      anr_type: "${anr_type}"
     save_as: anr_ctx
     display:
       level: hidden
@@ -177,11 +188,131 @@ steps:
         MAX(ts) as last_anr_ts,
         ROUND((MAX(ts) - MIN(ts)) / 1e9, 2) as anr_span_seconds
       FROM android_anrs
-      WHERE (process_name GLOB '${process_name}*' OR process_name GLOB '${package}*' OR ('${process_name}' = '' AND '${package}' = ''))
+      WHERE (
+          ('${process_name}' <> '' AND (process_name = '${process_name}' OR process_name GLOB '${process_name}:*'))
+          OR ('${package}' <> '' AND (process_name = '${package}' OR process_name GLOB '${package}:*'))
+          OR ('${process_name}' = '' AND '${package}' = '')
+        )
         AND (anr_type = '${anr_type}' OR '${anr_type}' = '')
     save_as: detection
     optional: true
     on_empty: "未检测到 ANR 事件。请确认 Trace 包含 ANR 数据。"
+
+  # Step 1.1b: 触发类型分类（触发机制，不等于最终根因）
+  - id: trigger_classification
+    type: atomic
+    name: "ANR 触发类型分类"
+    display:
+      level: key
+      layer: overview
+      title: "ANR 触发类型"
+      columns:
+        - name: source_anr_type
+          label: "Perfetto 类型"
+          type: string
+        - name: trigger_type
+          label: "触发类型"
+          type: string
+        - name: event_count
+          label: "事件数"
+          type: number
+        - name: type_confidence
+          label: "类型置信度"
+          type: string
+        - name: root_cause_pattern_hints
+          label: "候选根因提示"
+          type: string
+        - name: not_final
+          label: "非最终根因"
+          type: boolean
+        - name: analysis_focus
+          label: "分析重点"
+          type: string
+    synthesize:
+      role: overview
+      fields:
+        - key: trigger_type
+          label: 触发类型
+        - key: event_count
+          label: 事件数
+        - key: root_cause_pattern_hints
+          label: 候选提示
+      insights:
+        - template: "ANR 触发类型 {{trigger_type}}（{{event_count}} 次）；候选根因提示只作为排查入口，不是最终结论"
+    sql: |
+      WITH classified AS (
+        SELECT
+          anr_type AS source_anr_type,
+          CASE
+            WHEN anr_type = 'INPUT_DISPATCHING_TIMEOUT_NO_FOCUSED_WINDOW' THEN 'no_focus_window'
+            WHEN anr_type = 'INPUT_DISPATCHING_TIMEOUT' THEN 'input_dispatching_timeout'
+            WHEN anr_type = 'BROADCAST_OF_INTENT' THEN 'broadcast_timeout'
+            WHEN anr_type IN ('EXECUTING_SERVICE', 'START_FOREGROUND_SERVICE', 'FOREGROUND_SERVICE_TIMEOUT', 'FOREGROUND_SHORT_SERVICE_TIMEOUT') THEN 'service_timeout'
+            WHEN anr_type = 'CONTENT_PROVIDER_NOT_RESPONDING' THEN 'content_provider_timeout'
+            WHEN anr_type IN ('JOB_SERVICE_START', 'JOB_SERVICE_STOP', 'JOB_SERVICE_BIND', 'JOB_SERVICE_NOTIFICATION_NOT_PROVIDED') THEN 'job_scheduler_timeout'
+            WHEN anr_type = 'SYSTEM_SERVER_WATCHDOG_TIMEOUT' THEN 'system_watchdog_swt'
+            WHEN anr_type = 'BIND_APPLICATION' THEN 'bind_application_timeout'
+            WHEN anr_type = 'GPU_HANG' THEN 'gpu_hang'
+            WHEN anr_type = 'APP_TRIGGERED' THEN 'app_triggered_anr'
+            ELSE 'unknown'
+          END AS trigger_type,
+          CASE
+            WHEN anr_type = 'UNKNOWN_ANR_TYPE' THEN 'low'
+            WHEN anr_type IS NULL THEN 'low'
+            ELSE 'high'
+          END AS type_confidence,
+          TRIM(
+            (CASE
+              WHEN LOWER(COALESCE(subject, '')) GLOB '*deadlock*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*waiting to lock*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*monitor contention*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*futex*'
+                THEN 'deadlock,' ELSE '' END) ||
+            (CASE
+              WHEN LOWER(COALESCE(subject, '')) GLOB '*oom*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*lmk*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*memory*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*gc*'
+                THEN 'memory_leak_oom_pressure,' ELSE '' END) ||
+            (CASE
+              WHEN LOWER(COALESCE(subject, '')) GLOB '*cpu*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*iowait*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*load*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*sched*'
+                THEN 'high_load_anr,' ELSE '' END),
+            ','
+          ) AS root_cause_pattern_hint
+        FROM android_anrs
+        WHERE (
+            ('${process_name}' <> '' AND (process_name = '${process_name}' OR process_name GLOB '${process_name}:*'))
+            OR ('${package}' <> '' AND (process_name = '${package}' OR process_name GLOB '${package}:*'))
+            OR ('${process_name}' = '' AND '${package}' = '')
+          )
+          AND (anr_type = '${anr_type}' OR '${anr_type}' = '')
+      )
+      SELECT
+        source_anr_type,
+        trigger_type,
+        COUNT(*) AS event_count,
+        MIN(type_confidence) AS type_confidence,
+        COALESCE(NULLIF(GROUP_CONCAT(DISTINCT NULLIF(root_cause_pattern_hint, '')), ''), 'none') AS root_cause_pattern_hints,
+        1 AS not_final,
+        CASE trigger_type
+          WHEN 'input_dispatching_timeout' THEN '主线程是否 5s 内未处理输入；重点看 direct blocker、Binder/锁/IO/调度压力'
+          WHEN 'no_focus_window' THEN '按 resume → relayout → draw/focus 三步检查窗口焦点链，主线程 nativePoll 不单独定因'
+          WHEN 'broadcast_timeout' THEN '检查 onReceive/goAsync/finish 与工作线程，区分前台 10s 和后台 60s'
+          WHEN 'service_timeout' THEN '检查 Service 生命周期、前台服务启动和冷启动链路'
+          WHEN 'content_provider_timeout' THEN '区分 provider publish 与 query/CRUD not responding；看 provider main 或 Binder 线程'
+          WHEN 'job_scheduler_timeout' THEN '检查 JobService onStartJob/onStopJob/bind 与 JobScheduler 调度链路'
+          WHEN 'system_watchdog_swt' THEN 'system_server Watchdog/SWT，优先系统服务 Handler/锁/Binder 线程'
+          WHEN 'gpu_hang' THEN 'GPU/fence/buffer 方向候选，必须和 RenderThread/SF 证据闭环'
+          ELSE '未知/厂商扩展 ANR，保留 baseline evidence，先确认触发类型'
+        END AS analysis_focus
+      FROM classified
+      GROUP BY source_anr_type, trigger_type
+      ORDER BY event_count DESC
+    save_as: trigger_classification
+    condition: detection.data[0]?.total_anr_count > 0
 
   # Step 1.2: 系统 CPU 负载（判断系统繁忙程度）
   - id: system_cpu_health
@@ -190,7 +321,7 @@ steps:
     display:
       level: key
       layer: overview
-      title: "系统 CPU 状况"
+      title: "首个 ANR 窗口系统 CPU 状况"
       columns:
         - name: core_type
           label: "核心类型"
@@ -228,7 +359,13 @@ steps:
         - condition: "status === 'normal'"
           template: "{{core_type}} 核心负载正常 ({{avg_util_pct}}%)"
     sql: |
-      WITH cpu_info AS (
+      WITH anr_window AS (
+        SELECT
+          ${anr_ctx.data[0].anr_ts} - ${anr_ctx.data[0].timeout_ns} AS start_ts,
+          ${anr_ctx.data[0].anr_ts} AS end_ts,
+          ${anr_ctx.data[0].timeout_ns} AS window_ns
+      ),
+      cpu_info AS (
         SELECT cpu_id as cpu, core_type
         FROM _cpu_topology
       ),
@@ -237,16 +374,14 @@ steps:
           ss.cpu,
           COALESCE(c.core_type, 'unknown') as core_type,
           SUM(
-            CASE
-              WHEN ss.ts < ${anr_ctx.data[0].anr_ts} AND ss.ts + ss.dur > ${anr_ctx.data[0].anr_ts} - ${anr_ctx.data[0].timeout_ns}
-              THEN MIN(ss.ts + ss.dur, ${anr_ctx.data[0].anr_ts}) - MAX(ss.ts, ${anr_ctx.data[0].anr_ts} - ${anr_ctx.data[0].timeout_ns})
-              ELSE 0
-            END
+            MIN(CASE WHEN ss.dur < 0 THEN aw.end_ts ELSE ss.ts + ss.dur END, aw.end_ts)
+              - MAX(ss.ts, aw.start_ts)
           ) as active_ns
         FROM sched_slice ss
+        CROSS JOIN anr_window aw
         LEFT JOIN cpu_info c ON ss.cpu = c.cpu
-        WHERE ss.ts < ${anr_ctx.data[0].anr_ts}
-          AND ss.ts + ss.dur > ${anr_ctx.data[0].anr_ts} - ${anr_ctx.data[0].timeout_ns}
+        WHERE ss.ts < aw.end_ts
+          AND (CASE WHEN ss.dur < 0 THEN aw.end_ts ELSE ss.ts + ss.dur END) > aw.start_ts
         GROUP BY ss.cpu
       ),
       totals AS (
@@ -254,7 +389,7 @@ steps:
           core_type,
           COUNT(*) as core_count,
           SUM(active_ns) as total_active_ns,
-          ${anr_ctx.data[0].timeout_ns} as window_ns
+          (SELECT window_ns FROM anr_window) as window_ns
         FROM cpu_time
         GROUP BY core_type
       )
@@ -281,7 +416,7 @@ steps:
     display:
       level: detail
       layer: list
-      title: "内存压力"
+      title: "首个 ANR 窗口内存压力"
       columns:
         - name: oom_score_adj
           label: "OOM Score"
@@ -307,48 +442,57 @@ steps:
     condition: detection.data[0]?.total_anr_count > 0
     optional: true
 
-  # Step 1.4: IO 负载检测
+  # Step 1.4: D-state 不可中断等待基线
   - id: io_load
     type: atomic
-    name: "IO 负载检测"
+    name: "不可中断等待基线"
     display:
       level: detail
       layer: list
-      title: "IO 负载"
+      title: "首个 ANR 窗口 D-state 不可中断等待"
       columns:
         - name: process_name
           label: "进程名"
           type: string
-        - name: io_wait_ms
-          label: "IO 等待"
+        - name: uninterruptible_wait_ms
+          label: "不可中断等待"
           type: duration
           format: duration_ms
           unit: ms
-        - name: io_wait_count
+        - name: uninterruptible_wait_count
           label: "等待次数"
           type: number
           format: compact
     sql: |
-      WITH io_states AS (
+      WITH anr_window AS (
+        SELECT
+          ${anr_ctx.data[0].anr_ts} - ${anr_ctx.data[0].timeout_ns} AS start_ts,
+          ${anr_ctx.data[0].anr_ts} AS end_ts
+      ),
+      uninterruptible_states AS (
         SELECT
           p.name as process_name,
-          SUM(CASE WHEN ts.state = 'D' THEN ts.dur ELSE 0 END) as io_wait_ns,
-          COUNT(CASE WHEN ts.state = 'D' THEN 1 END) as io_wait_count
+          SUM(
+            MIN(CASE WHEN ts.dur < 0 THEN aw.end_ts ELSE ts.ts + ts.dur END, aw.end_ts)
+              - MAX(ts.ts, aw.start_ts)
+          ) as uninterruptible_wait_ns,
+          COUNT(*) as uninterruptible_wait_count
         FROM thread_state ts
+        CROSS JOIN anr_window aw
         JOIN thread t ON ts.utid = t.utid
         JOIN process p ON t.upid = p.upid
-        WHERE ts.ts >= ${anr_ctx.data[0].anr_ts} - ${anr_ctx.data[0].timeout_ns}
-          AND ts.ts < ${anr_ctx.data[0].anr_ts}
-          AND ts.state = 'D'
+        WHERE ts.state = 'D'
+          AND ts.ts < aw.end_ts
+          AND (CASE WHEN ts.dur < 0 THEN aw.end_ts ELSE ts.ts + ts.dur END) > aw.start_ts
         GROUP BY p.name
       )
       SELECT
         process_name,
-        ROUND(io_wait_ns / 1e6, 2) as io_wait_ms,
-        io_wait_count
-      FROM io_states
-      WHERE io_wait_ns > 10000000  -- > 10ms
-      ORDER BY io_wait_ns DESC
+        ROUND(uninterruptible_wait_ns / 1e6, 2) as uninterruptible_wait_ms,
+        uninterruptible_wait_count
+      FROM uninterruptible_states
+      WHERE uninterruptible_wait_ns > 10000000  -- > 10ms
+      ORDER BY uninterruptible_wait_ns DESC
       LIMIT 10
     save_as: io_load
     condition: detection.data[0]?.total_anr_count > 0
@@ -367,7 +511,7 @@ steps:
     display:
       level: detail
       layer: list
-      title: "ANR 窗口锁等待分布（专家探针）"
+      title: "首个 ANR 窗口锁等待分布（专家探针）"
       columns:
         - name: wait_type
           label: "等待类型"
@@ -401,7 +545,7 @@ steps:
     display:
       level: key
       layer: overview
-      title: "系统冻结检测"
+      title: "首个 ANR 窗口系统冻结检测"
       columns:
         - name: total_apps
           label: "检测应用数"
@@ -424,16 +568,28 @@ steps:
           label: "system_server 冻结"
           type: boolean
     sql: |
-      WITH app_activity AS (
+      WITH anr_window AS (
+        SELECT
+          ${anr_ctx.data[0].anr_ts} - ${anr_ctx.data[0].timeout_ns} AS start_ts,
+          ${anr_ctx.data[0].anr_ts} AS end_ts
+      ),
+      app_activity AS (
         SELECT
           p.name as process_name,
-          SUM(CASE WHEN ts.state = 'Running' THEN ts.dur ELSE 0 END) as running_ns,
-          SUM(ts.dur) as total_ns
+          SUM(CASE WHEN ts.state = 'Running' THEN
+            MIN(CASE WHEN ts.dur < 0 THEN aw.end_ts ELSE ts.ts + ts.dur END, aw.end_ts)
+              - MAX(ts.ts, aw.start_ts)
+          ELSE 0 END) as running_ns,
+          SUM(
+            MIN(CASE WHEN ts.dur < 0 THEN aw.end_ts ELSE ts.ts + ts.dur END, aw.end_ts)
+              - MAX(ts.ts, aw.start_ts)
+          ) as total_ns
         FROM thread_state ts
+        CROSS JOIN anr_window aw
         JOIN thread t ON ts.utid = t.utid
         JOIN process p ON t.upid = p.upid
-        WHERE ts.ts >= ${anr_ctx.data[0].anr_ts} - ${anr_ctx.data[0].timeout_ns}
-          AND ts.ts < ${anr_ctx.data[0].anr_ts}
+        WHERE ts.ts < aw.end_ts
+          AND (CASE WHEN ts.dur < 0 THEN aw.end_ts ELSE ts.ts + ts.dur END) > aw.start_ts
           AND t.tid = p.pid  -- 主线程
           AND (
             COALESCE(p.uid, 0) >= 10000
@@ -483,6 +639,9 @@ steps:
         - name: anr_type
           label: "ANR 类型"
           type: string
+        - name: trigger_type
+          label: "触发类型"
+          type: string
         - name: anr_count
           label: "数量"
           type: number
@@ -506,11 +665,19 @@ steps:
         - name: quick_hint
           label: "快速提示"
           type: string
+        - name: root_cause_pattern_hints
+          label: "候选根因提示"
+          type: string
+        - name: not_final
+          label: "非最终根因"
+          type: boolean
     synthesize:
       role: overview
       fields:
         - key: anr_type
           label: ANR 类型
+        - key: trigger_type
+          label: 触发类型
         - key: anr_count
           label: 数量
         - key: type_display
@@ -526,32 +693,87 @@ steps:
         - condition: "anr_type === 'EXECUTING_SERVICE'"
           template: "服务超时 {{anr_count}} 次：Service 生命周期方法超时"
     sql: |
+      WITH classified AS (
+        SELECT
+          *,
+          CASE
+            WHEN anr_type = 'INPUT_DISPATCHING_TIMEOUT_NO_FOCUSED_WINDOW' THEN 'no_focus_window'
+            WHEN anr_type = 'INPUT_DISPATCHING_TIMEOUT' THEN 'input_dispatching_timeout'
+            WHEN anr_type = 'BROADCAST_OF_INTENT' THEN 'broadcast_timeout'
+            WHEN anr_type IN ('EXECUTING_SERVICE', 'START_FOREGROUND_SERVICE', 'FOREGROUND_SERVICE_TIMEOUT', 'FOREGROUND_SHORT_SERVICE_TIMEOUT') THEN 'service_timeout'
+            WHEN anr_type = 'CONTENT_PROVIDER_NOT_RESPONDING' THEN 'content_provider_timeout'
+            WHEN anr_type IN ('JOB_SERVICE_START', 'JOB_SERVICE_STOP', 'JOB_SERVICE_BIND', 'JOB_SERVICE_NOTIFICATION_NOT_PROVIDED') THEN 'job_scheduler_timeout'
+            WHEN anr_type = 'SYSTEM_SERVER_WATCHDOG_TIMEOUT' THEN 'system_watchdog_swt'
+            WHEN anr_type = 'BIND_APPLICATION' THEN 'bind_application_timeout'
+            WHEN anr_type = 'GPU_HANG' THEN 'gpu_hang'
+            WHEN anr_type = 'APP_TRIGGERED' THEN 'app_triggered_anr'
+            ELSE 'unknown'
+          END AS trigger_type,
+          TRIM(
+            (CASE
+              WHEN LOWER(COALESCE(subject, '')) GLOB '*deadlock*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*waiting to lock*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*monitor contention*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*futex*'
+                THEN 'deadlock,' ELSE '' END) ||
+            (CASE
+              WHEN LOWER(COALESCE(subject, '')) GLOB '*oom*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*lmk*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*memory*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*gc*'
+                THEN 'memory_leak_oom_pressure,' ELSE '' END) ||
+            (CASE
+              WHEN LOWER(COALESCE(subject, '')) GLOB '*cpu*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*iowait*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*load*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*sched*'
+                THEN 'high_load_anr,' ELSE '' END),
+            ','
+          ) AS root_cause_pattern_hint
+        FROM android_anrs
+        WHERE (
+            ('${process_name}' <> '' AND (process_name = '${process_name}' OR process_name GLOB '${process_name}:*'))
+            OR ('${package}' <> '' AND (process_name = '${package}' OR process_name GLOB '${package}:*'))
+            OR ('${process_name}' = '' AND '${package}' = '')
+          )
+          AND (anr_type = '${anr_type}' OR '${anr_type}' = '')
+      )
       SELECT
         anr_type,
+        trigger_type,
         COUNT(*) AS anr_count,
         GROUP_CONCAT(DISTINCT process_name) AS affected_processes,
         ROUND(AVG(anr_dur_ms), 2) AS avg_anr_dur_ms,
         ROUND(AVG(default_anr_dur_ms), 2) AS default_timeout_ms,
         CASE anr_type
           WHEN 'INPUT_DISPATCHING_TIMEOUT' THEN '输入超时 (5s无响应)'
+          WHEN 'INPUT_DISPATCHING_TIMEOUT_NO_FOCUSED_WINDOW' THEN '无焦点窗口输入超时 (5s)'
           WHEN 'BROADCAST_OF_INTENT' THEN '广播超时 (前台10s/后台60s)'
+          WHEN 'START_FOREGROUND_SERVICE' THEN '前台服务启动超时'
           WHEN 'EXECUTING_SERVICE' THEN '服务执行超时 (前台20s/后台200s)'
           WHEN 'CONTENT_PROVIDER_NOT_RESPONDING' THEN 'ContentProvider 超时'
-          WHEN 'NO_FOCUSED_WINDOW' THEN '无焦点窗口'
+          WHEN 'JOB_SERVICE_START' THEN 'JobService onStartJob 超时'
+          WHEN 'JOB_SERVICE_STOP' THEN 'JobService onStopJob 超时'
+          WHEN 'JOB_SERVICE_BIND' THEN 'JobService bind 超时'
+          WHEN 'SYSTEM_SERVER_WATCHDOG_TIMEOUT' THEN 'system_server Watchdog 超时'
+          WHEN 'GPU_HANG' THEN 'GPU Hang'
           ELSE anr_type
         END as type_display,
-        CASE anr_type
-          WHEN 'INPUT_DISPATCHING_TIMEOUT' THEN '检查主线程是否在处理耗时操作'
-          WHEN 'BROADCAST_OF_INTENT' THEN '检查 BroadcastReceiver.onReceive() 是否耗时'
-          WHEN 'EXECUTING_SERVICE' THEN '检查 Service 生命周期方法是否耗时'
-          WHEN 'CONTENT_PROVIDER_NOT_RESPONDING' THEN '检查 ContentProvider 查询是否耗时'
-          WHEN 'NO_FOCUSED_WINDOW' THEN '检查 Window 焦点获取是否异常'
-          ELSE '检查主线程阻塞原因'
-        END as quick_hint
-      FROM android_anrs
-      WHERE (process_name GLOB '${process_name}*' OR process_name GLOB '${package}*' OR ('${process_name}' = '' AND '${package}' = ''))
-        AND (anr_type = '${anr_type}' OR '${anr_type}' = '')
-      GROUP BY anr_type
+        CASE trigger_type
+          WHEN 'input_dispatching_timeout' THEN '检查主线程 direct blocker、Binder/锁/IO/调度压力'
+          WHEN 'no_focus_window' THEN '检查 resume/relayout/draw/focus 链，不把 nativePoll 单独定因'
+          WHEN 'broadcast_timeout' THEN '检查 BroadcastReceiver.onReceive()/goAsync()/finish()'
+          WHEN 'service_timeout' THEN '检查 Service 生命周期方法、前台服务启动和冷启动链'
+          WHEN 'content_provider_timeout' THEN '区分 provider publish 与 query/CRUD not responding'
+          WHEN 'job_scheduler_timeout' THEN '检查 JobService 回调和 JobScheduler bind/start 链'
+          WHEN 'system_watchdog_swt' THEN '按 system_server Watchdog/SWT 排查系统服务线程'
+          WHEN 'gpu_hang' THEN '检查 GPU/fence/buffer 与 RenderThread/SF 旁证'
+          ELSE '先确认触发类型，再检查主线程阻塞原因'
+        END as quick_hint,
+        COALESCE(NULLIF(GROUP_CONCAT(DISTINCT NULLIF(root_cause_pattern_hint, '')), ''), 'none') AS root_cause_pattern_hints,
+        1 AS not_final
+      FROM classified
+      GROUP BY anr_type, trigger_type
       ORDER BY anr_count DESC
     save_as: overview
     condition: detection.data[0]?.total_anr_count > 0
@@ -577,6 +799,9 @@ steps:
         - name: anr_type
           label: "ANR 类型"
           type: string
+        - name: trigger_type
+          label: "触发类型"
+          type: string
         - name: anr_dur_ms
           label: "超时时长"
           type: duration
@@ -594,8 +819,17 @@ steps:
         - name: type_display
           label: "类型"
           type: string
+        - name: timeout_source
+          label: "窗口来源"
+          type: string
+        - name: analysis_focus
+          label: "分析重点"
+          type: string
         - name: subject_preview
           label: "摘要"
+          type: string
+        - name: root_cause_pattern_hints
+          label: "候选提示"
           type: string
     synthesize:
       role: list
@@ -613,36 +847,121 @@ steps:
           label: 进程名
         - key: type_display
           label: 类型
+        - key: trigger_type
+          label: 触发类型
         - key: anr_dur_ms
           label: 超时时长
           format: "{{value}} ms"
     sql: |
+      WITH normalized AS (
+        SELECT
+          *,
+          CASE
+            WHEN anr_type = 'INPUT_DISPATCHING_TIMEOUT_NO_FOCUSED_WINDOW' THEN 'no_focus_window'
+            WHEN anr_type = 'INPUT_DISPATCHING_TIMEOUT' THEN 'input_dispatching_timeout'
+            WHEN anr_type = 'BROADCAST_OF_INTENT' THEN 'broadcast_timeout'
+            WHEN anr_type IN ('EXECUTING_SERVICE', 'START_FOREGROUND_SERVICE', 'FOREGROUND_SERVICE_TIMEOUT', 'FOREGROUND_SHORT_SERVICE_TIMEOUT') THEN 'service_timeout'
+            WHEN anr_type = 'CONTENT_PROVIDER_NOT_RESPONDING' THEN 'content_provider_timeout'
+            WHEN anr_type IN ('JOB_SERVICE_START', 'JOB_SERVICE_STOP', 'JOB_SERVICE_BIND', 'JOB_SERVICE_NOTIFICATION_NOT_PROVIDED') THEN 'job_scheduler_timeout'
+            WHEN anr_type = 'SYSTEM_SERVER_WATCHDOG_TIMEOUT' THEN 'system_watchdog_swt'
+            WHEN anr_type = 'BIND_APPLICATION' THEN 'bind_application_timeout'
+            WHEN anr_type = 'GPU_HANG' THEN 'gpu_hang'
+            WHEN anr_type = 'APP_TRIGGERED' THEN 'app_triggered_anr'
+            ELSE 'unknown'
+          END AS trigger_type,
+          COALESCE(
+            NULLIF(anr_dur_ms, 0),
+            default_anr_dur_ms,
+            CASE
+              WHEN anr_type IN ('INPUT_DISPATCHING_TIMEOUT', 'INPUT_DISPATCHING_TIMEOUT_NO_FOCUSED_WINDOW') THEN 5000
+              WHEN anr_type = 'BROADCAST_OF_INTENT' THEN 10000
+              WHEN anr_type = 'EXECUTING_SERVICE' THEN 20000
+              WHEN anr_type IN ('START_FOREGROUND_SERVICE', 'FOREGROUND_SERVICE_TIMEOUT') THEN 30000
+              WHEN anr_type = 'FOREGROUND_SHORT_SERVICE_TIMEOUT' THEN 180000
+              WHEN anr_type IN ('JOB_SERVICE_START', 'JOB_SERVICE_STOP', 'JOB_SERVICE_BIND', 'JOB_SERVICE_NOTIFICATION_NOT_PROVIDED') THEN 8000
+              WHEN anr_type = 'BIND_APPLICATION' THEN 15000
+              WHEN anr_type IN ('CONTENT_PROVIDER_NOT_RESPONDING', 'GPU_HANG', 'APP_TRIGGERED', 'UNKNOWN_ANR_TYPE') THEN 5000
+              ELSE 5000
+            END
+          ) AS analysis_timeout_ms,
+          CASE
+            WHEN NULLIF(anr_dur_ms, 0) IS NOT NULL THEN 'actual_anr_duration'
+            WHEN default_anr_dur_ms IS NOT NULL THEN 'perfetto_default'
+            ELSE 'heuristic_fallback'
+          END AS timeout_source,
+          COALESCE(NULLIF(TRIM(
+            (CASE
+              WHEN LOWER(COALESCE(subject, '')) GLOB '*deadlock*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*waiting to lock*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*monitor contention*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*futex*'
+                THEN 'deadlock,' ELSE '' END) ||
+            (CASE
+              WHEN LOWER(COALESCE(subject, '')) GLOB '*oom*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*lmk*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*memory*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*gc*'
+                THEN 'memory_leak_oom_pressure,' ELSE '' END) ||
+            (CASE
+              WHEN LOWER(COALESCE(subject, '')) GLOB '*cpu*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*iowait*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*load*'
+                OR LOWER(COALESCE(subject, '')) GLOB '*sched*'
+                THEN 'high_load_anr,' ELSE '' END),
+            ','
+          ), ''), 'none') AS root_cause_pattern_hints
+        FROM android_anrs
+        WHERE (
+            ('${process_name}' <> '' AND (process_name = '${process_name}' OR process_name GLOB '${process_name}:*'))
+            OR ('${package}' <> '' AND (process_name = '${package}' OR process_name GLOB '${package}:*'))
+            OR ('${process_name}' = '' AND '${package}' = '')
+          )
+          AND (anr_type = '${anr_type}' OR '${anr_type}' = '')
+      )
       SELECT
         error_id,
         process_name,
         pid,
+        upid,
         anr_type,
+        trigger_type,
         ROUND(anr_dur_ms, 2) as anr_dur_ms,
-        ROUND(default_anr_dur_ms, 2) as timeout_ms,
+        ROUND(analysis_timeout_ms, 2) as timeout_ms,
         printf('%d', ts) as anr_ts,
-        printf('%d', CAST(default_anr_dur_ms * 1e6 AS INTEGER)) as timeout_ns,
+        printf('%d', CAST(analysis_timeout_ms * 1e6 AS INTEGER)) as timeout_ns,
         intent,
         component,
         SUBSTR(subject, 1, 150) AS subject_preview,
-        -- Perfetto 跳转参数
-        printf('%d', CAST(ts - default_anr_dur_ms * 1e6 AS INTEGER)) as perfetto_start,
+        printf('%d', CAST(ts - analysis_timeout_ms * 1e6 AS INTEGER)) as perfetto_start,
         printf('%d', ts) as perfetto_end,
         CASE anr_type
           WHEN 'INPUT_DISPATCHING_TIMEOUT' THEN '输入超时'
+          WHEN 'INPUT_DISPATCHING_TIMEOUT_NO_FOCUSED_WINDOW' THEN '无焦点窗口输入超时'
           WHEN 'BROADCAST_OF_INTENT' THEN '广播超时'
+          WHEN 'START_FOREGROUND_SERVICE' THEN '前台服务启动超时'
           WHEN 'EXECUTING_SERVICE' THEN '服务超时'
           WHEN 'CONTENT_PROVIDER_NOT_RESPONDING' THEN 'CP超时'
-          WHEN 'NO_FOCUSED_WINDOW' THEN '无焦点窗口'
+          WHEN 'JOB_SERVICE_START' THEN 'JobService start 超时'
+          WHEN 'JOB_SERVICE_STOP' THEN 'JobService stop 超时'
+          WHEN 'JOB_SERVICE_BIND' THEN 'JobService bind 超时'
+          WHEN 'SYSTEM_SERVER_WATCHDOG_TIMEOUT' THEN 'system_server Watchdog'
+          WHEN 'GPU_HANG' THEN 'GPU Hang'
           ELSE anr_type
-        END as type_display
-      FROM android_anrs
-      WHERE (process_name GLOB '${process_name}*' OR process_name GLOB '${package}*' OR ('${process_name}' = '' AND '${package}' = ''))
-        AND (anr_type = '${anr_type}' OR '${anr_type}' = '')
+        END as type_display,
+        timeout_source,
+        CASE trigger_type
+          WHEN 'input_dispatching_timeout' THEN '主线程 direct blocker、Binder/锁/IO/调度压力'
+          WHEN 'no_focus_window' THEN 'resume → relayout → draw/focus 链'
+          WHEN 'broadcast_timeout' THEN 'onReceive/goAsync/finish 与工作线程'
+          WHEN 'service_timeout' THEN 'Service 生命周期和前台服务启动'
+          WHEN 'content_provider_timeout' THEN 'provider publish/query 与 Binder 线程'
+          WHEN 'job_scheduler_timeout' THEN 'JobService 回调和 JobScheduler bind/start'
+          WHEN 'system_watchdog_swt' THEN 'system_server Watchdog/SWT 系统服务线程'
+          WHEN 'gpu_hang' THEN 'RenderThread/SF/fence 旁证'
+          ELSE '确认触发类型后再定根因边界'
+        END AS analysis_focus,
+        root_cause_pattern_hints
+      FROM normalized
       ORDER BY ts ASC
     save_as: anr_events
     condition: detection.data[0]?.total_anr_count > 0
@@ -654,7 +973,7 @@ steps:
     display:
       level: detail
       layer: list
-      title: "ANR 期间 Top CPU 进程"
+      title: "首个 ANR 窗口 Top CPU 进程"
       columns:
         - name: process_name
           label: "进程名"
@@ -669,28 +988,30 @@ steps:
           type: percentage
           format: percentage
     sql: |
+      WITH anr_window AS (
+        SELECT
+          ${anr_ctx.data[0].anr_ts} - ${anr_ctx.data[0].timeout_ns} AS start_ts,
+          ${anr_ctx.data[0].anr_ts} AS end_ts,
+          ${anr_ctx.data[0].timeout_ns} AS window_ns
+      ),
+      clipped AS (
+        SELECT
+          p.name AS process_name,
+          MIN(CASE WHEN ss.dur < 0 THEN aw.end_ts ELSE ss.ts + ss.dur END, aw.end_ts)
+            - MAX(ss.ts, aw.start_ts) AS clipped_ns
+        FROM sched_slice ss
+        JOIN thread t ON ss.utid = t.utid
+        JOIN process p ON t.upid = p.upid
+        CROSS JOIN anr_window aw
+        WHERE ss.ts < aw.end_ts
+          AND (CASE WHEN ss.dur < 0 THEN aw.end_ts ELSE ss.ts + ss.dur END) > aw.start_ts
+      )
       SELECT
-        p.name as process_name,
-        ROUND(SUM(
-          CASE
-            WHEN ss.ts < ${anr_ctx.data[0].anr_ts} AND ss.ts + ss.dur > ${anr_ctx.data[0].anr_ts} - ${anr_ctx.data[0].timeout_ns}
-            THEN MIN(ss.ts + ss.dur, ${anr_ctx.data[0].anr_ts}) - MAX(ss.ts, ${anr_ctx.data[0].anr_ts} - ${anr_ctx.data[0].timeout_ns})
-            ELSE 0
-          END
-        ) / 1e6, 2) as cpu_ms,
-        ROUND(100.0 * SUM(
-          CASE
-            WHEN ss.ts < ${anr_ctx.data[0].anr_ts} AND ss.ts + ss.dur > ${anr_ctx.data[0].anr_ts} - ${anr_ctx.data[0].timeout_ns}
-            THEN MIN(ss.ts + ss.dur, ${anr_ctx.data[0].anr_ts}) - MAX(ss.ts, ${anr_ctx.data[0].anr_ts} - ${anr_ctx.data[0].timeout_ns})
-            ELSE 0
-          END
-        ) / ${anr_ctx.data[0].timeout_ns}, 1) as cpu_pct
-      FROM sched_slice ss
-      JOIN thread t ON ss.utid = t.utid
-      JOIN process p ON t.upid = p.upid
-      WHERE ss.ts < ${anr_ctx.data[0].anr_ts}
-        AND ss.ts + ss.dur > ${anr_ctx.data[0].anr_ts} - ${anr_ctx.data[0].timeout_ns}
-      GROUP BY p.name
+        process_name,
+        ROUND(SUM(clipped_ns) / 1e6, 2) AS cpu_ms,
+        ROUND(100.0 * SUM(clipped_ns) / NULLIF((SELECT window_ns FROM anr_window), 0), 1) AS cpu_pct
+      FROM clipped
+      GROUP BY process_name
       ORDER BY cpu_ms DESC
       LIMIT 15
     save_as: top_processes
@@ -731,11 +1052,15 @@ steps:
       timeout_ns: timeout_ns
       process_name: process_name
       pid: pid
+      upid: upid
       anr_type: anr_type
+      error_id: error_id
+      intent: intent
+      component: component
       anr_dur_ms: anr_dur_ms
       perfetto_start: perfetto_start
       perfetto_end: perfetto_end
-    condition: detection.data[0]?.total_anr_count > 0
+    condition: "detection.data[0]?.total_anr_count > 0 && enable_detail_analysis !== false"
 
   # ============================================================================
   # 第四阶段：诊断规则
@@ -763,12 +1088,12 @@ steps:
         - condition: "severity === 'warning'"
           template: "🟡 警告：{{diagnosis}}"
         - template: "ANR 诊断：{{diagnosis}}"
-    inputs: [detection, cpu_health, memory_pressure, io_load, lock_waits, freeze_check, overview, anr_events, top_processes]
+    inputs: [detection, trigger_classification, cpu_health, memory_pressure, io_load, lock_waits, freeze_check, overview, anr_events, top_processes]
     rules:
       # === 系统级问题判定 ===
 
       # system_server 冻结（系统服务自身无调度）
-      - condition: "freeze_check.data[0]?.freeze_verdict === 'system_server_freeze'"
+      - condition: "(detection.data[0]?.total_anr_count || 0) === 1 && freeze_check.data[0]?.freeze_verdict === 'system_server_freeze'"
         severity: critical
         diagnosis: "system_server 运行占比仅 ${freeze_check.data[0].system_server_running_pct}%（疑似系统服务冻结）"
         confidence: high
@@ -778,7 +1103,7 @@ steps:
           - "结合内核调度与系统服务线程栈定位阻塞点"
 
       # 系统冻结（多个应用同时卡住）
-      - condition: "freeze_check.data[0]?.freeze_verdict === 'system_freeze'"
+      - condition: "(detection.data[0]?.total_anr_count || 0) === 1 && freeze_check.data[0]?.freeze_verdict === 'system_freeze'"
         severity: critical
         diagnosis: "系统级冻结：${freeze_check.data[0].frozen_apps}/${freeze_check.data[0].total_apps} 个应用主线程几乎无运行"
         confidence: high
@@ -786,6 +1111,25 @@ steps:
           - "这是系统级问题，非单个应用问题"
           - "检查系统服务是否正常"
           - "检查是否有内核级阻塞（内存/IO/锁）"
+
+      # 多 ANR 场景下，首个窗口系统冻结只能作为 baseline context
+      - condition: "(detection.data[0]?.total_anr_count || 0) > 1 && freeze_check.data[0]?.freeze_verdict === 'system_server_freeze'"
+        severity: warning
+        diagnosis: "首个 ANR 窗口 baseline 显示 system_server 运行占比仅 ${freeze_check.data[0].system_server_running_pct}%，需逐 ANR 复核后才能升级为系统根因"
+        confidence: medium
+        suggestions:
+          - "该 freeze_check 只覆盖首个 ANR 窗口"
+          - "多 ANR 必须逐事件检查 direct_blocker、日志和系统线程证据"
+          - "不要把首个窗口 system_server_freeze 直接推广到所有 ANR"
+
+      - condition: "(detection.data[0]?.total_anr_count || 0) > 1 && freeze_check.data[0]?.freeze_verdict === 'system_freeze'"
+        severity: warning
+        diagnosis: "首个 ANR 窗口 baseline 显示 ${freeze_check.data[0].frozen_apps}/${freeze_check.data[0].total_apps} 个应用主线程低活动，需逐 ANR 复核后才能升级为系统根因"
+        confidence: medium
+        suggestions:
+          - "该 freeze_check 只覆盖首个 ANR 窗口"
+          - "多 ANR 必须逐事件检查 direct_blocker、日志和系统上下文"
+          - "若后续 ANR 窗口没有系统冻结证据，只能作为候选背景"
 
       # 多个 ANR 同时发生
       - condition: "detection.data[0]?.total_anr_count > (multi_anr_threshold || 3) && detection.data[0]?.anr_span_seconds < (multi_anr_span_seconds || 10)"
@@ -797,7 +1141,7 @@ steps:
           - "检查系统是否过载或有资源争抢"
 
       # 内存压力导致
-      - condition: "memory_pressure.data?.length > 0"
+      - condition: "(detection.data[0]?.total_anr_count || 0) === 1 && memory_pressure.data?.length > 0"
         severity: critical
         diagnosis: "ANR 期间发生 LMK 杀进程，系统内存压力大"
         confidence: high
@@ -807,7 +1151,7 @@ steps:
           - "考虑减少内存使用"
 
       # CPU 过载
-      - condition: "cpu_health.data?.find(r => r.status === 'overloaded')"
+      - condition: "(detection.data[0]?.total_anr_count || 0) === 1 && cpu_health.data?.find(r => r.status === 'overloaded')"
         severity: critical
         diagnosis: "CPU ${cpu_health.data.find(r => r.status === 'overloaded').core_type} 核过载 (${cpu_health.data.find(r => r.status === 'overloaded').avg_util_pct}%)"
         confidence: high
@@ -816,26 +1160,26 @@ steps:
           - "检查后台进程 CPU 占用"
           - "top_processes 显示的进程可能是罪魁祸首"
 
-      # IO 阻塞
-      - condition: "io_load.data[0]?.io_wait_ms > (io_wait_threshold_ms || 500)"
+      # D-state 不可中断等待：只能作为低置信系统/内核等待候选，不能直接等同磁盘 IO
+      - condition: "(detection.data[0]?.total_anr_count || 0) === 1 && io_load.data[0]?.uninterruptible_wait_ms > (uninterruptible_wait_threshold_ms || io_wait_threshold_ms || 500)"
         severity: warning
-        diagnosis: "进程 ${io_load.data[0].process_name} IO 等待 ${io_load.data[0].io_wait_ms}ms"
-        confidence: medium
+        diagnosis: "进程 ${io_load.data[0].process_name} D-state 不可中断等待 ${io_load.data[0].uninterruptible_wait_ms}ms"
+        confidence: low
         suggestions:
-          - "大量 IO 等待可能影响系统响应"
-          - "检查是否有大量文件/数据库操作"
+          - "D-state 只能说明不可中断等待，不能单独证明磁盘 IO"
+          - "只有 blocked_function、slice 或 block IO 证据命中 io_schedule/fsync/blk/ext4/f2fs/filemap_fault 等路径时，才升级为 IO 根因"
 
       # Futex/Mutex 锁竞争
-      - condition: "(lock_waits?.data?.find(r => r.wait_type === 'futex')?.p95_wait_ms || 0) > (lock_contention_futex_p95_critical_ms || 20)"
-        severity: critical
-        diagnosis: "ANR 窗口 Futex P95 等待 ${lock_waits.data.find(r => r.wait_type === 'futex').p95_wait_ms}ms，存在明显锁竞争"
-        confidence: high
+      - condition: "(detection.data[0]?.total_anr_count || 0) === 1 && (lock_waits?.data?.find(r => r.wait_type === 'futex')?.p95_wait_ms || 0) > (lock_contention_futex_p95_critical_ms || 20)"
+        severity: warning
+        diagnosis: "ANR 窗口 Futex P95 等待 ${lock_waits.data.find(r => r.wait_type === 'futex').p95_wait_ms}ms，存在锁等待候选信号"
+        confidence: medium
         suggestions:
-          - "优先排查主线程相关锁的持锁时长和锁顺序"
-          - "避免在锁内执行 Binder/IO/数据库操作"
-          - "缩小临界区并降低共享写竞争"
+          - "这是包名级专家探针，不能作为最终根因"
+          - "必须结合逐 ANR direct_blocker_classification 和当前进程 MainThread lock_contention 再判断"
+          - "若确认主线程锁等待，再排查持锁线程、锁顺序和锁内 Binder/IO/数据库操作"
 
-      - condition: "(lock_waits?.data?.find(r => r.wait_type === 'mutex')?.p95_wait_ms || 0) > (lock_contention_mutex_p95_warning_ms || 10)"
+      - condition: "(detection.data[0]?.total_anr_count || 0) === 1 && (lock_waits?.data?.find(r => r.wait_type === 'mutex')?.p95_wait_ms || 0) > (lock_contention_mutex_p95_warning_ms || 10)"
         severity: warning
         diagnosis: "ANR 窗口 Mutex P95 等待 ${lock_waits.data.find(r => r.wait_type === 'mutex').p95_wait_ms}ms，锁等待偏高"
         confidence: medium
@@ -845,45 +1189,85 @@ steps:
 
       # === 应用级问题判定 ===
 
-      # 输入超时
-      - condition: "overview.data?.find(r => r.anr_type === 'INPUT_DISPATCHING_TIMEOUT')"
-        severity: critical
-        diagnosis: "输入事件超时 (INPUT_DISPATCHING_TIMEOUT)"
-        confidence: high
+      # 无焦点窗口输入超时：触发链不同于普通主线程 busy，不能只看 nativePoll/idle
+      - condition: "(detection.data[0]?.total_anr_count || 0) === 1 && trigger_classification.data?.find(r => r.trigger_type === 'no_focus_window')"
+        severity: warning
+        diagnosis: "触发类型分流：无焦点窗口输入超时，需要窗口焦点链证据闭环"
+        confidence: medium
         suggestions:
-          - "主线程 5 秒未处理输入事件"
-          - "检查主线程是否执行耗时操作"
-          - "检查是否有 Binder 调用阻塞"
+          - "按 Activity resume → relayout → draw/focus 顺序检查窗口建立链路"
+          - "若主线程只呈现 nativePoll/epoll，不要单独归因为 Looper 空闲"
+          - "结合 WindowManager/InputDispatcher/AnrManager 日志确认焦点丢失阶段"
 
-      # 广播超时
-      - condition: "overview.data?.find(r => r.anr_type === 'BROADCAST_OF_INTENT')"
-        severity: critical
-        diagnosis: "广播处理超时 (BROADCAST_OF_INTENT)"
-        confidence: high
+      # JobScheduler 超时：Android 14+ 常见细分触发类型
+      - condition: "(detection.data[0]?.total_anr_count || 0) === 1 && trigger_classification.data?.find(r => r.trigger_type === 'job_scheduler_timeout')"
+        severity: warning
+        diagnosis: "触发类型分流：JobScheduler 相关 ANR，需要 JobService 回调或绑定链路证据"
+        confidence: medium
         suggestions:
-          - "BroadcastReceiver.onReceive() 执行超时"
-          - "前台广播超时时间为 10 秒"
-          - "将耗时操作移到 Service 或 IntentService"
+          - "检查 onStartJob/onStopJob/onBind 是否在主线程执行耗时操作"
+          - "检查 JobScheduler 与应用进程之间的 Binder 调用是否有对端等待"
+          - "不要只按普通 Service 超时处理，需保留 JobService 回调语义"
 
-      # 服务超时
-      - condition: "overview.data?.find(r => r.anr_type === 'EXECUTING_SERVICE')"
-        severity: critical
-        diagnosis: "服务执行超时 (EXECUTING_SERVICE)"
-        confidence: high
+      # system_server Watchdog/SWT：系统级触发，不默认归因到 App
+      - condition: "(detection.data[0]?.total_anr_count || 0) === 1 && trigger_classification.data?.find(r => r.trigger_type === 'system_watchdog_swt')"
+        severity: warning
+        diagnosis: "触发类型分流：system_server Watchdog/SWT，需要系统服务线程证据闭环"
+        confidence: medium
         suggestions:
-          - "Service 生命周期方法执行超时"
-          - "前台服务超时时间为 20 秒"
-          - "检查 onCreate/onStartCommand/onBind 是否耗时"
+          - "优先排查 system_server Handler、锁和 Binder 线程池"
+          - "除非有明确同步 Binder 反向证据，否则不要归因为目标 App"
+          - "结合 system_server 线程状态、monitor contention 与系统日志闭环"
 
-      # ContentProvider 超时
-      - condition: "overview.data?.find(r => r.anr_type === 'CONTENT_PROVIDER_NOT_RESPONDING')"
-        severity: critical
-        diagnosis: "ContentProvider 超时 (CONTENT_PROVIDER_NOT_RESPONDING)"
-        confidence: high
+      # 目标进程 CPU 占用高：候选 high-load 证据，不等同最终根因
+      - condition: "(detection.data[0]?.total_anr_count || 0) === 1 && top_processes.data?.find(p => p.process_name === anr_events.data?.[0]?.process_name && p.cpu_pct > 85)"
+        severity: warning
+        diagnosis: "目标进程在 ANR 窗口 CPU 占比 ${top_processes.data.find(p => p.process_name === anr_events.data?.[0]?.process_name && p.cpu_pct > 85).cpu_pct}%"
+        confidence: medium
         suggestions:
-          - "ContentProvider 查询或操作超时"
-          - "检查数据库查询是否耗时"
-          - "考虑使用异步查询"
+          - "这是 high_load_anr 候选证据，需要和主线程热点、调度延迟或 GC/内存压力交叉验证"
+          - "优先检查主线程 Running 热点和后台线程是否抢占关键核心"
+          - "不要仅凭 CPU 占比高给出最终根因"
+
+      # 输入超时触发类型（非最终根因）
+      - condition: "(detection.data[0]?.total_anr_count || 0) === 1 && trigger_classification.data?.find(r => r.trigger_type === 'input_dispatching_timeout')"
+        severity: warning
+        diagnosis: "触发类型分流：输入事件超时，需要 direct_blocker/线程状态/日志证据闭环"
+        confidence: medium
+        suggestions:
+          - "主线程 5 秒未处理输入是触发机制，不是最终根因"
+          - "检查逐 ANR direct_blocker_classification 中的 Binder/锁/IO/调度候选"
+          - "只有线程状态、对端或日志证据闭环后才能升级为根因"
+
+      # 广播超时触发类型（非最终根因）
+      - condition: "(detection.data[0]?.total_anr_count || 0) === 1 && trigger_classification.data?.find(r => r.trigger_type === 'broadcast_timeout')"
+        severity: warning
+        diagnosis: "触发类型分流：广播处理超时，需要 onReceive/goAsync/finish 链路证据"
+        confidence: medium
+        suggestions:
+          - "广播超时只说明超时入口，不能直接等同业务代码根因"
+          - "区分前台/后台广播窗口，并检查工作线程或 Binder 对端"
+          - "需要当前 ANR 的线程状态、日志或组件证据闭环"
+
+      # 服务超时触发类型（非最终根因）
+      - condition: "(detection.data[0]?.total_anr_count || 0) === 1 && trigger_classification.data?.find(r => r.trigger_type === 'service_timeout')"
+        severity: warning
+        diagnosis: "触发类型分流：服务生命周期超时，需要 Service/FGS 链路证据"
+        confidence: medium
+        suggestions:
+          - "Service/FGS 超时是触发类型，不能单独作为最终根因"
+          - "检查 onCreate/onStartCommand/onBind/startForeground 调用链"
+          - "结合 direct_blocker 与日志证据确认是主线程、对端还是系统资源问题"
+
+      # ContentProvider 超时触发类型（非最终根因）
+      - condition: "(detection.data[0]?.total_anr_count || 0) === 1 && trigger_classification.data?.find(r => r.trigger_type === 'content_provider_timeout')"
+        severity: warning
+        diagnosis: "触发类型分流：ContentProvider 超时，需要 provider 发布/查询链路证据"
+        confidence: medium
+        suggestions:
+          - "ContentProvider not responding 只说明触发入口"
+          - "检查 provider 主线程、Binder 线程、数据库/文件 IO 和调用方等待"
+          - "没有逐事件阻塞证据时不要写成最终根因"
 
 output:
   format: structured

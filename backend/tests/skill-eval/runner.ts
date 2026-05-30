@@ -11,7 +11,8 @@
 import path from 'path';
 import { TraceProcessorService } from '../../src/services/traceProcessorService';
 import { SkillExecutor, createSkillExecutor, LayeredResult } from '../../src/services/skillEngine/skillExecutor';
-import { SkillDefinition, StepResult, SkillExecutionResult, AtomicStep } from '../../src/services/skillEngine/types';
+import { SkillDefinition, StepResult, SkillExecutionResult, SkillExecutionContext } from '../../src/services/skillEngine/types';
+import { validateSkillInputs } from '../../src/services/skillEngine/skillValidator';
 import yaml from 'js-yaml';
 import fs from 'fs';
 
@@ -302,6 +303,65 @@ export class SkillEvaluator {
       error: stepResult.error,
       executionTimeMs: stepResult.executionTimeMs || 0,
     };
+  }
+
+  /**
+   * Execute selected steps in order through SkillExecutor's real step path.
+   * This avoids running an entire heavy composite while still exercising
+   * input validation, prerequisite checks, conditions, SQL substitution, and
+   * save_as context wiring between the requested steps.
+   */
+  async executeStepSequence(stepIds: string[], params: Record<string, any> = {}): Promise<EvalStepResult[]> {
+    if (!this.executor || !this.traceId || !this.skill) {
+      throw new Error('SkillEvaluator not initialized. Call loadTrace() first.');
+    }
+
+    const validation = validateSkillInputs(this.skill.name, this.skill.inputs, params);
+    if (validation.errors.length > 0) {
+      const msg = validation.errors.map(error => `${error.paramName}: ${error.message}`).join('; ');
+      throw new Error(`Input validation failed: ${msg}`);
+    }
+
+    const executor = this.executor as any;
+    const prereqCheck = await executor.checkPrerequisites(this.skill, this.traceId);
+    if (!prereqCheck.success) {
+      throw new Error(`Skipped: ${prereqCheck.error}`);
+    }
+
+    const context: SkillExecutionContext = {
+      traceId: this.traceId,
+      params: validation.params,
+      inherited: {},
+      results: {},
+      variables: {},
+      moduleIncludes: await this.getAvailablePrerequisiteModules(),
+    };
+
+    const results: EvalStepResult[] = [];
+    for (const stepId of stepIds) {
+      const step = this.skill.steps?.find(s => s.id === stepId);
+      if (!step) {
+        throw new Error(`Step not found: ${stepId}`);
+      }
+
+      const stepResult = await executor.executeStep(step, context, this.skill.name) as StepResult;
+      if (stepResult.success) {
+        context.results[step.id] = stepResult;
+        if ('save_as' in step && step.save_as) {
+          context.variables[step.save_as] = executor.extractSaveAsValue(stepResult);
+        }
+      }
+
+      results.push({
+        success: stepResult.success,
+        stepId,
+        data: this.extractStepData(stepResult),
+        error: stepResult.error,
+        executionTimeMs: stepResult.executionTimeMs || 0,
+      });
+    }
+
+    return results;
   }
 
   private extractStepData(stepResult: StepResult): any[] {

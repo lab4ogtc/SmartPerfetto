@@ -73,7 +73,12 @@ display:
       unit: ms
 
 sql: |
-  WITH waits AS (
+  WITH bounds AS (
+    SELECT
+      COALESCE(${start_ts}, (SELECT COALESCE(MIN(ts), 0) FROM slice)) AS start_ts,
+      COALESCE(${end_ts}, (SELECT COALESCE(MAX(CASE WHEN dur < 0 THEN ts ELSE ts + dur END), 0) FROM slice)) AS end_ts
+  ),
+  waits AS (
     SELECT
       CASE
         WHEN LOWER(s.name) LIKE '%futex%' THEN 'futex'
@@ -81,14 +86,18 @@ sql: |
         WHEN LOWER(s.name) LIKE '%rwlock%' OR LOWER(s.name) LIKE '%spinlock%' THEN 'lock'
         ELSE 'other'
       END as wait_type,
-      s.dur / 1e6 as wait_ms
+      (
+        MIN(CASE WHEN s.dur < 0 THEN b.end_ts ELSE s.ts + s.dur END, b.end_ts)
+          - MAX(s.ts, b.start_ts)
+      ) / 1e6 as wait_ms
     FROM slice s
+    CROSS JOIN bounds b
     LEFT JOIN thread_track tt ON s.track_id = tt.id
     LEFT JOIN thread t ON tt.utid = t.utid
     LEFT JOIN process p ON t.upid = p.upid
-    WHERE (p.name GLOB '${package}*' OR '${package}' = '')
-      AND (${start_ts} IS NULL OR s.ts >= ${start_ts})
-      AND (${end_ts} IS NULL OR s.ts < ${end_ts})
+    WHERE ('${package}' = '' OR p.name = '${package}' OR p.name GLOB '${package}:*')
+      AND s.ts < b.end_ts
+      AND (CASE WHEN s.dur < 0 THEN b.end_ts ELSE s.ts + s.dur END) > b.start_ts
       AND (
         LOWER(s.name) LIKE '%futex%'
         OR LOWER(s.name) LIKE '%mutex%'
