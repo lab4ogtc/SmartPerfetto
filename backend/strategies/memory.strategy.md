@@ -32,6 +32,44 @@ compound_patterns:
   - "memory.*leak"
   - "memory.*pressure"
 
+final_report_contract:
+  required_sections:
+    - id: memory_evidence_scope
+      label: 内存证据范围
+      description: '说明当前结论基于哪些内存证据源，并列出缺失或不可证明的证据。'
+      pattern_groups:
+        - ['证据范围', '证据来源', '数据来源', 'evidence\s+scope', 'evidence\s+source']
+        - ['PSS', 'RSS', 'Java\s+Heap', 'Native\s+Heap', 'Graphics', 'dma[-_ ]?buf', 'GC', 'LMK', 'heap\s+graph', '缺失', 'missing']
+    - id: memory_type_breakdown
+      label: 内存类型拆分
+      description: '把 Java、Native、Graphics/dma-buf、RSS/PSS、GC、LMK/freezer 等口径分开。'
+      pattern_groups:
+        - ['内存类型', '类型拆分', '分类', 'breakdown', 'Java\s+Heap', 'Native\s+Heap', 'Graphics', 'dma[-_ ]?buf']
+        - ['泄漏', 'leak', '增长', 'churn', '分配', '回收', 'GC', 'LMK', 'freezer', 'OOM', '压力', 'pressure']
+    - id: memory_confidence_boundary
+      label: 置信度与缺失证据
+      description: '明确高内存、泄漏、GC、LMK/freezer/OOM、外部诊断 API 之间的证据边界。'
+      pattern_groups:
+        - ['证据不足', '缺失', 'missing', 'limitation', '限制', '置信', 'confidence', '需补', '建议采集']
+        - ['不等于', '不能', '不得', '区分', '边界', 'separate', 'not']
+
+phase_hints:
+  - id: memory_evidence_gate
+    keywords: ['memory', '内存', 'heap', 'rss', 'pss', 'gc', 'lmk', 'memory_analysis', '证据']
+    constraints: '先确认 memory_analysis/lmk/GC/heap graph/dmabuf 等证据哪些存在。结论必须按证据类型分层；缺失 Native/SO/匿名 mmap/thread stack/ApplicationExitInfo/MemoryLimiter 等来源时只写数据缺口，不能当成已证明。'
+    critical_tools: ['memory_analysis']
+    critical: true
+  - id: lmk_freezer_oom_boundary
+    keywords: ['lmk', 'oom', 'freezer', 'kill', '杀进程', '低内存', '内存压力']
+    constraints: 'LMK、freezer、Java OOM、Native OOM、Android 17 MemoryLimiter 是不同机制。只有对应事件、ApplicationExitInfo 或进程状态证据存在时才能命名；否则写成候选或采集建议。'
+    critical_tools: ['lmk_analysis', 'lmk_kill_attribution', 'oom_adjuster_score_timeline']
+    critical: false
+  - id: gc_churn_boundary
+    keywords: ['gc', 'churn', 'allocation', '分配', '回收', '抖动', 'pause']
+    constraints: 'GC 与卡顿/ANR 重叠只能说明相关性。必须结合 GC pause、allocation churn、线程状态或帧/ANR窗口证据，避免把后台 GC 或普通回收直接写成根因。'
+    critical_tools: ['memory_analysis', 'gc_analysis']
+    critical: false
+
 plan_template:
   mandatory_aspects:
     - id: memory_trend_and_gc
@@ -40,6 +78,13 @@ plan_template:
 ---
 
 #### 内存分析（用户提到 内存、memory、OOM、泄漏、LMK）
+
+**核心原则：**
+1. **先分证据源**：PSS/RSS、Java Heap、Native Heap、Graphics/dma-buf、GC、LMK/freezer、heap graph、ApplicationExitInfo/MemoryLimiter 等是不同口径。
+2. **高内存不是泄漏**：必须先判断趋势、对象/类型归属、GC 后是否回落、缓存策略和进程角色，不能只凭峰值下结论。
+3. **LMK/freezer/OOM 不能混用**：LMK 是系统低内存杀进程，freezer 是 cached process 冻结机制，Java/Native OOM 是进程内分配失败，MemoryLimiter 是版本敏感的系统退出原因。
+4. **外部诊断是补充证据**：ApplicationExitInfo、线上 OOM/KOOM、heap dump、APM 指标可以补上下文，但必须标明来源、版本/API 边界和与当前 trace 的对应关系。
+5. **缺失证据要进入结论**：trace 没有 heap graph、dmabuf、smaps、ApplicationExitInfo 或长窗口趋势时，只能输出候选和下一步采集建议。
 
 #### 内存场景关键 Stdlib 表
 
@@ -87,8 +132,9 @@ invoke_skill("memory_rss_high_watermark")
 
 **输出结构：**
 
-1. **内存概览**：总内存、已用内存、可用内存、趋势（增长/稳定/下降）
-2. **LMK 事件**（如有）：被杀次数、受影响进程、OOM-adj 分布
-3. **内存热点**：内存占用最大的进程/组件
-4. **根因分析**：泄漏证据、压力来源
-5. **优化建议**：按内存类型（Java 堆/Native/GPU/文件映射）分类
+1. **证据范围**：列出当前可用证据（PSS/RSS、Java Heap、Native Heap、Graphics/dma-buf、GC、LMK/freezer、heap graph、外部 API）和缺失证据
+2. **内存概览**：总内存、已用内存、可用内存、趋势（增长/稳定/下降）
+3. **内存类型拆分**：Java Heap / Native Heap / Graphics-dma-buf / RSS-PSS / mmap-SO / thread stack 中哪些有证据，哪些不可见
+4. **LMK/freezer/OOM 事件**（如有）：被杀/冻结/退出次数、受影响进程、OOM-adj 或 ApplicationExitInfo 来源；没有直接事件时不能命名
+5. **根因分析**：泄漏、分配突增、缓存、GC churn、图形/Native 占用、系统压力之间的证据边界和置信度
+6. **优化建议**：按内存类型和证据强度分类；把缺失证据转化为具体采集建议

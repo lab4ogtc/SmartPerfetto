@@ -1,0 +1,309 @@
+# Android Internal Wiki Scene Increment TODO
+
+## Goal
+
+Turn the completed Android Internal Wiki reading record into scene-by-scene,
+verifiable SmartPerfetto Skill and Strategy increments.
+
+This TODO is the execution ledger for the second phase after
+`android-internal-wiki-skill-strategy-review.md`. The earlier batch shipped
+global evidence guardrails and a few overclaim fixes. This phase must not stay
+at generic prompt policy. Each increment must improve a concrete scene contract,
+Skill output, or testable routing/report behavior.
+
+## Current Result Review
+
+### Already Strong Enough To Avoid Rewriting
+
+- `backend/strategies/anr.strategy.md`
+  - Current coverage already includes ANR type/timeouts, `freeze_verdict`,
+    event-window clipping, direct blocker classification, nativePollOnce
+    caveats, Binder/lock/IO/GC/scheduler boundaries, multi-ANR isolation,
+    `logcat_event_context`, and system-vs-app attribution.
+  - Wiki material still has value, but the next ANR increment should first
+    improve the user-facing output contract and tests, not duplicate the
+    strategy body.
+
+- `backend/strategies/startup.strategy.md`
+  - Current coverage already includes startup type correction, TTID/TTFD,
+    startup detail artifacts, Binder/IO/GC/JIT/thermal/memory pressure,
+    content provider, WebView/Flutter, slow-reason taxonomy, and final report
+    contract.
+  - Remaining wiki work should be small and evidence-specific, such as
+    external diagnostic API/version caveats or 16 KB/native-loading checks when
+    directly testable.
+
+- `backend/strategies/scrolling.strategy.md` and
+  `backend/strategies/pipeline.strategy.md`
+  - Current coverage is strong for mixed rendering, host-vs-producer-vs-SF
+    attribution, architecture-specific jank, and FrameTimeline boundaries.
+  - Remaining work should target missing deterministic evidence around
+    BufferQueue/fence/graphic-memory or refresh-rate policy, with trace tests.
+
+- `backend/strategies/power.strategy.md`
+  - Current coverage already has data gates, Wattson/rail vs fallback, battery
+    drain chain, wakelock thresholds, Doze, thermal, and confidence levels.
+  - Remaining wiki work is narrower: JobScheduler/WorkManager/FGS pending-vs-
+    stop reasons, Android 16/17 background limits, and explicit validation
+    paths when rail data is missing.
+
+- `backend/strategies/network.strategy.md`
+  - Current coverage already guards packet-level evidence from DNS/connect/TLS/
+    TTFB overclaims.
+  - Future network work should only add request-stage logic if the repo has a
+    deterministic Skill, trace, or user-provided telemetry input to validate it.
+
+### Thin Or Under-Tested Areas
+
+- `backend/strategies/memory.strategy.md`
+  - Current strategy is much thinner than the wiki evidence model. It does not
+    yet force Java Heap, Native Heap, Graphics/dma-buf, SO mappings, anonymous
+    mmap, RSS/PSS, GC churn, LMK, freezer, and modern MemoryLimiter/API
+    boundaries into the report contract.
+
+- `backend/skills/config/conclusion_scene_templates.base.yaml`
+  - ANR and memory scene output requirements are weaker than their strategies
+    and wiki-derived evidence contracts. This is a high-leverage surface because
+    it shapes final user-facing conclusions.
+
+- Storage and SQLite
+  - There is an `io` conclusion scene and generic strategy coverage, but no
+    dedicated scene strategy for file/SP/fsync vs SQLite/Room/provider
+    attribution. Wiki articles contain enough material to split this later.
+
+- Input and interaction
+  - `interaction.strategy.md` and `scroll-response.strategy.md` cover the happy
+    interaction path. Wiki material adds InputDispatcher stale events,
+    no-focused-window ANR, focus/window metadata, and `FINISHED` ack semantics
+    that need focused validation before broad prompt expansion.
+
+- Graphics memory and BufferQueue/fence
+  - Pipeline skills contain many architecture modules, but wiki review points
+    to a testable gap around GraphicBuffer/dma-buf memory vs BufferQueue state
+    vs fence waits.
+
+## Definition Of Done For Each Increment
+
+Each TODO item can be marked done only when all applicable gates pass:
+
+- Architecture review: the change uses existing strategy, template, Skill YAML,
+  and test surfaces rather than TypeScript hardcoding.
+- Evidence contract: the output names evidence source, subsystem/stage,
+  confidence, and missing data when applicable.
+- Focused tests: add or update the owning unit/eval tests for changed behavior.
+- Validation: run `cd backend && npm run validate:strategies` for strategy or
+  strategy-template changes, and `cd backend && npm run validate:skills` for
+  `.skill.yaml` Skill changes.
+- Scene template config changes require focused Jest coverage because
+  `validate:skills` does not currently validate
+  `backend/skills/config/conclusion_scene_templates.base.yaml`.
+- Required project gates: run `cd backend && npm run build` and
+  `cd backend && npm run test:scene-trace-regression`.
+- Landing gate: run `npm run verify:pr` from repo root before final commit/push.
+- Review gate: run independent read-only plan review before non-trivial
+  implementation, and read-only post-diff review before commit.
+
+## Execution Order
+
+### Batch 1 - Output Contract Hardening For Already-Covered ANR And Thin Memory
+
+- [x] TODO-001: ANR conclusion output contract
+  - Target files:
+    - `backend/skills/config/conclusion_scene_templates.base.yaml`
+    - `backend/src/agent/core/__tests__/conclusionSceneTemplates.test.ts`
+  - Current strategy coverage:
+    - `anr.strategy.md` already has strong typed-window and evidence-boundary
+      rules.
+  - Gap:
+    - The conclusion scene template only asks for one blocking evidence item and
+      broad categories. It does not force ANR type, timeout source,
+      system-confirmed vs watchdog/suspected, subject-vs-root-cause process,
+      direct blocker, evidence gap, or nativePollOnce caveat into concise final
+      output.
+  - Implementation:
+    - Add concise output requirements to the `anr` scene template.
+    - Add focused tests asserting the template includes the ANR evidence
+      contract and does not regress generic scene loading.
+    - Phrase "system-confirmed vs watchdog/suspected" as a provenance and
+      missing-data requirement: the report must state the confirmation source
+      or say that confirmation evidence is absent.
+  - Verification:
+    - `cd backend && npx jest src/agent/core/__tests__/conclusionSceneTemplates.test.ts --runInBand`.
+    - Do not rely on `validate:skills` for this config file; it does not scan
+      conclusion scene templates today.
+  - Completed in Batch 1:
+    - Added ANR final-output requirements for timeout provenance, confirmation
+      source or evidence gap, victim process vs root-cause process/component,
+      binder/lock peer evidence, nativePollOnce caveats, and resource
+      categories including GC/memory pressure.
+    - Covered by focused scene-template tests.
+
+- [x] TODO-002: Memory strategy and conclusion contract
+  - Target files:
+    - `backend/strategies/memory.strategy.md`
+    - `backend/skills/config/conclusion_scene_templates.base.yaml`
+    - Strategy loader / conclusion template tests as needed.
+  - Current strategy coverage:
+    - Memory strategy calls `memory_analysis`, `lmk_analysis`, heap/bitmap/GC/
+      dmabuf helper skills, but it is mostly a high-level checklist.
+  - Gap:
+    - Wiki review requires memory reports to separate Java Heap, Native Heap,
+      Graphics/dma-buf, SO/ELF mappings, anonymous mmap, thread stacks,
+      RSS/PSS, LMK, freezer, GC pause/churn, heap graph, and external
+      ApplicationExitInfo or MemoryLimiter evidence.
+  - Implementation:
+    - Add a memory `final_report_contract` and phase hints.
+    - Add output requirements that prevent "high memory == leak" and
+      "LMK/freezer/OOM are interchangeable" conclusions.
+    - Keep the first slice to evidence classification, non-mixing rules, and
+      missing-evidence wording. Do not imply that every trace can provide
+      Native/SO/anonymous-mmap/thread-stack/ApplicationExitInfo/MemoryLimiter
+      proof.
+  - Verification:
+    - Strategy validation.
+    - Focused conclusion template tests.
+    - Update `activePhaseReminder.test.ts`: the fallback test must move to a
+      scene that still has no `phase_hints` after memory gains hints.
+    - Update `strategyLoader.spdxHeader.test.ts`: assert memory phase hints and
+      memory final report contract section ids.
+    - Add/extend final-report contract gate coverage: incomplete memory reports
+      should be detected, complete memory reports should pass.
+    - Add/extend OpenAI continuation coverage so memory contract gaps trigger
+      final-report continuation when the report omits required memory sections.
+    - Existing `memory_analysis` eval if runnable with current fixtures; if not,
+      document the fixture gap and rely on loader/gate/template tests for this
+      narrow prompt/contract slice.
+  - Completed in Batch 1:
+    - Added memory final-report contract sections for evidence scope, memory
+      type breakdown, and confidence/missing-evidence boundaries.
+    - Added phase hints for evidence classification, LMK/freezer/OOM boundary
+      handling, and GC-churn attribution.
+    - Tightened scene-template wording so memory reports separate Java Heap,
+      Native Heap, Graphics/dma-buf, RSS/PSS, GC, LMK/freezer, and external
+      diagnostics without equating high memory with a leak.
+    - Covered by loader, active-phase reminder, final-result gate, OpenAI
+      continuation, and scene-template tests.
+
+### Batch 2 - Storage, SQLite, Provider, And I/O
+
+- [ ] TODO-003: Storage/SQLite scene split
+  - Target files:
+    - Existing `general.strategy.md` or a new dedicated storage/IO strategy only
+      if routing supports it cleanly.
+    - `backend/skills/config/conclusion_scene_templates.base.yaml`
+    - Existing I/O, Binder, ANR, and startup strategy references.
+  - Wiki input:
+    - File I/O vs SharedPreferences/QueuedWork/fsync, SQLite connection pool,
+      WAL/checkpoint, CursorWindow, Room migration, ContentProvider caller vs
+      provider-side blocking, and storage capacity/corruption are separate
+      proof paths.
+  - Implementation:
+    - Define the staged evidence contract before adding any new SQL.
+    - Avoid treating D-state or a long fsync as database root cause without
+      SQLite/provider evidence.
+  - Verification:
+    - Add focused tests near routing/template surfaces first; defer deep Skill
+      SQL until a trace fixture proves it.
+
+### Batch 3 - Input, Focus, And Interaction Latency
+
+- [ ] TODO-004: InputDispatcher and focus-window evidence
+  - Target files:
+    - `backend/strategies/interaction.strategy.md`
+    - `backend/strategies/scroll-response.strategy.md`
+    - `backend/strategies/anr.strategy.md` only if a real gap remains after
+      TODO-001.
+  - Wiki input:
+    - Stale events, no-focused-window ANR, InputChannel lifecycle, async
+      dispatch/FINISHED ack, WindowInfosListener, and target-window choice are
+      separate from app main-thread execution.
+  - Implementation:
+    - Add concise stage boundaries and output requirements.
+    - Do not expand this until tests can validate prompt/routing behavior.
+  - Verification:
+    - Focused prompt/strategy tests plus trace regression.
+
+### Batch 4 - Graphics Memory, BufferQueue, Fence, And Refresh Policy
+
+- [ ] TODO-005: Graphics-memory and BufferQueue/fence contract
+  - Target files:
+    - `backend/strategies/scrolling.strategy.md`
+    - `backend/strategies/pipeline.strategy.md`
+    - Pipeline Skill YAML only after SQL/test feasibility review.
+  - Wiki input:
+    - BufferQueue state machine, BLAST, GraphicBuffer/dma-buf physical memory,
+      fence wait semantics, HWC/SF release path, refresh-rate votes, and
+      FrameTimeline confidence boundaries.
+  - Implementation:
+    - First add report-stage distinctions: BufferQueue logic vs dma-buf memory
+      vs fence wait vs SF/HWC policy.
+    - Add deterministic Skill SQL only with fixture coverage.
+  - Verification:
+    - Existing scrolling trace regression plus focused tests for prompt text.
+
+### Batch 5 - Power Background Execution
+
+- [ ] TODO-006: JobScheduler/WorkManager/FGS power governance
+  - Target files:
+    - `backend/strategies/power.strategy.md`
+    - Power Skill YAML only if existing Skills expose the required fields.
+  - Wiki input:
+    - Job pending reason vs stop reason, WorkManager constraints, FGS timeout,
+      Android 16/17 quotas and excessive CPU triggers, wakelock Vitals windows,
+      alarm and listener allow-while-idle boundaries.
+  - Implementation:
+    - Add a concise background-execution evidence section.
+    - Keep Android version/policy claims as version-sensitive unless verified
+      against current official docs in the implementing turn.
+  - Verification:
+    - Strategy validation and focused tests. Power Skill smoke if fixture data
+      exists.
+
+### Batch 6 - Request-Stage Network And Online Diagnostics
+
+- [ ] TODO-007: Request-stage network evidence contract
+  - Target files:
+    - `backend/strategies/network.strategy.md`
+    - Optional new Skill only if request-stage telemetry has a real input
+      source.
+  - Wiki input:
+    - DNS/connect/TLS/TTFB/body/decode, HTTPDNS cache/source/TTL, ECH, satellite
+      or constrained networks, connectivity selection, client/server logs, and
+      APM signals.
+  - Implementation:
+    - Keep packet trace, request telemetry, access-layer logs, and external APM
+      as separate evidence classes.
+    - Do not infer request stages from `android_network_packets` alone.
+  - Verification:
+    - Strategy/template tests first; Skill work only with deterministic inputs.
+
+### Batch 7 - Observability And Diagnostic APIs
+
+- [ ] TODO-008: Versioned diagnostic API caveats
+  - Target files:
+    - Shared strategy templates or knowledge templates, not TypeScript.
+  - Wiki input:
+    - ApplicationExitInfo, ApplicationStartInfo, ProfilingManager,
+      ProfilingTrigger, Play Vitals, App Performance Score, online telemetry,
+      and A/B statistics.
+  - Implementation:
+    - Add only reusable caveats that keep trace proof separate from external
+      aggregate evidence.
+    - Verify current official docs before adding date-sensitive API or policy
+      thresholds.
+  - Verification:
+    - Prompt/loader tests and `validate:strategies`.
+
+## Current Next Step
+
+Batch 1 is implemented and validated:
+
+- Focused Jest passed for scene templates, memory strategy loading, active
+  phase reminders, final-result gate, and OpenAI continuation behavior.
+- `validate:strategies`, backend build, scene trace regression, and real
+  OpenAI startup E2E passed.
+- Read-only post-diff review found no actionable regressions.
+- Repository-level `npm run verify:pr` passed, including all 6 scene trace
+  regression fixtures.
+
+After this batch is committed and pushed to `main`, continue with Batch 2.

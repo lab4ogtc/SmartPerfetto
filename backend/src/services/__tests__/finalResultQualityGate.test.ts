@@ -525,6 +525,69 @@ describe('final result quality gate', () => {
     })).toBeUndefined();
   });
 
+  it('flags memory reports that omit evidence scope and memory-type boundaries', () => {
+    const shortMemoryReport = [
+      '# 内存分析报告',
+      '',
+      '## 综合结论',
+      '',
+      'PSS 持续上涨，可能存在泄漏，需要优化内存。',
+    ].join('\n');
+
+    const issue = assessFinalResultQuality({
+      result: result({
+        conclusion: shortMemoryReport,
+        findings: [{
+          severity: 'warning',
+          title: '内存上涨',
+          description: 'PSS trend increased',
+          evidence: ['PSS +120MB'],
+        } as any],
+      }),
+      query: '分析内存上涨和 GC 抖动',
+      sceneType: 'memory',
+    });
+
+    expect(issue?.code).toBe('scene_contract_incomplete');
+    expect(issue?.message).toContain('内存证据范围');
+    expect(issue?.message).toContain('内存类型拆分');
+    expect(issue?.message).toContain('置信度与缺失证据');
+  });
+
+  it('accepts memory reports that separate evidence source, memory type, and missing proof', () => {
+    const richMemoryReport = [
+      '# 内存分析报告',
+      '',
+      '## 综合结论',
+      '',
+      'PSS/RSS 在 60s 窗口内上涨 120MB，GC pause 频繁，但当前证据只能支持内存压力候选，不能直接判定泄漏。',
+      '',
+      '## 证据范围',
+      '',
+      '- 证据来源：PSS、RSS、Java Heap、GC、LMK 窗口统计可用；Native Heap、Graphics/dma-buf、heap graph 缺失。',
+      '',
+      '## 内存类型拆分',
+      '',
+      '- Java Heap 增长 80MB，GC churn 增加；Native Heap 和 Graphics-dma-buf 当前没有直接证据。',
+      '- RSS/PSS 同步上涨，LMK/freezer/OOM 事件未在窗口内命中。',
+      '',
+      '## 置信度与缺失证据',
+      '',
+      '- 证据不足：没有 heap graph 和 dmabuf 采样，高内存不等于泄漏，LMK/freezer/OOM 需要区分。',
+      '- 建议采集 heap graph、smaps/dmabuf 和更长窗口趋势后再提升置信度。',
+      '',
+      '## 优化建议',
+      '',
+      '- 先按 Java 分配热点和缓存生命周期排查，并补充 Native/Graphics 证据。',
+    ].join('\n');
+
+    expect(assessFinalResultQuality({
+      result: result({ conclusion: richMemoryReport }),
+      query: '分析内存上涨和 GC 抖动',
+      sceneType: 'memory',
+    })).toBeUndefined();
+  });
+
   it('does not override runtime results that are already marked partial', () => {
     expect(assessFinalResultQuality({
       result: result({

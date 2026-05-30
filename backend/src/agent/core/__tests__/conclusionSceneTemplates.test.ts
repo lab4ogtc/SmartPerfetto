@@ -113,6 +113,12 @@ describe('conclusionSceneTemplates', () => {
 
     expect(hints.sceneId).toBe('memory');
     expect(hints.sceneName).toContain('内存');
+    const requirements = hints.outputRequirementLines.join('\n');
+    expect(requirements).toContain('Java Heap');
+    expect(requirements).toContain('Native Heap');
+    expect(requirements).toContain('Graphics/dma-buf');
+    expect(requirements).toContain('LMK/freezer');
+    expect(requirements).toContain('高内存不等于泄漏');
   });
 
   test('startup template preserves TTID/TTFD and external-signal boundaries', () => {
@@ -167,7 +173,16 @@ describe('conclusionSceneTemplates', () => {
     });
 
     expect(hints.sceneId).toBe('anr');
-    expect(hints.focusLines.join('\n')).toContain('阻塞');
+    const promptText = [
+      ...hints.focusLines,
+      ...hints.outputRequirementLines,
+    ].join('\n');
+    expect(promptText).toContain('阻塞');
+    expect(promptText).toContain('ANR 类型');
+    expect(promptText).toContain('timeout_source');
+    expect(promptText).toContain('确认来源或证据缺口');
+    expect(promptText).toContain('受害进程和根因进程');
+    expect(promptText).toContain('nativePollOnce');
   });
 
   test('falls back to generic template when no scene hints are present', () => {

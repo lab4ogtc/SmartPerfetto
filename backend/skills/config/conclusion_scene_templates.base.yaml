@@ -75,7 +75,10 @@ scenes:
       - "- 结论要回答“谁在阻塞主线程、阻塞了多久、为什么没恢复”。"
     output_requirement_lines:
       - "- ANR 场景至少给出 1 个阻塞证据（阻塞时长/等待对象/Binder 调用或锁竞争）。"
-      - "- 资源问题要区分：锁竞争、同步 Binder、I/O 阻塞、调度饥饿。"
+      - "- 必须写明 ANR 类型、timeout_source/证据窗口、确认来源或证据缺口；不能把 watchdog/客户端卡顿监控当成系统确认 ANR。"
+      - "- 必须区分受害进程和根因进程/组件，Binder/锁等待要说明对端或 owner 是否有证据。"
+      - "- nativePollOnce/epoll_wait 只能作为空闲或证据不足信号，不能单独作为最终根因。"
+      - "- 资源问题要区分：锁竞争、同步 Binder、I/O 阻塞、调度饥饿、GC/内存压力。"
     next_step_line: "- “下一步”优先回放 ANR 前后 5s 的主线程调用链并定位最长阻塞链路。"
     require_top_clusters: false
 
@@ -88,7 +91,9 @@ scenes:
       - "- 结论要回答“内存增长来自哪里，GC 是否有效”。"
     output_requirement_lines:
       - "- 内存场景至少引用 1 个指标（PSS/RSS/Java Heap/GC 停顿/LMK 事件）。"
-      - "- 资源问题要明确是泄漏趋势、分配突增、缓存策略或回收效率问题。"
+      - "- 必须说明当前证据属于 Java Heap、Native Heap、Graphics/dma-buf、RSS/PSS、GC、LMK/freezer 或外部诊断中的哪一类；缺失的证据要写成限制。"
+      - "- 高内存不等于泄漏，GC 重叠不等于根因，LMK/freezer/OOM 不能混用；必须给出证据边界和置信度。"
+      - "- 资源问题要明确是泄漏趋势、分配突增、缓存策略、回收效率、图形/Native 占用，还是系统内存压力。"
     next_step_line: "- “下一步”优先定位内存增长最快对象与线程，并验证 GC 后回落幅度。"
     require_top_clusters: false
 

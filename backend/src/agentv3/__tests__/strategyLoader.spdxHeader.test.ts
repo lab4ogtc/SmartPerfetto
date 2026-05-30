@@ -77,6 +77,12 @@ describe('strategyLoader tolerates leading SPDX HTML comments', () => {
       'root_cause_references',
       'audience_recommendations',
     ]));
+
+    expect(getFinalReportContract('memory')?.requiredSections.map(section => section.id)).toEqual(expect.arrayContaining([
+      'memory_evidence_scope',
+      'memory_type_breakdown',
+      'memory_confidence_boundary',
+    ]));
   });
 
   it('keeps contract-only smart strategy out of normal scene registration', () => {
@@ -96,7 +102,16 @@ describe('strategyLoader tolerates leading SPDX HTML comments', () => {
 
   it('returns empty phase_hints array for scenes without hints', () => {
     expect(getPhaseHints('general')).toEqual([]);
-    expect(getPhaseHints('memory')).toEqual([]);
+  });
+
+  it('loads memory phase_hints for evidence-boundary reminders', () => {
+    const hints = getPhaseHints('memory');
+    expect(hints.map(hint => hint.id)).toEqual(expect.arrayContaining([
+      'memory_evidence_gate',
+      'lmk_freezer_oom_boundary',
+      'gc_churn_boundary',
+    ]));
+    expect(hints.find(hint => hint.id === 'memory_evidence_gate')?.criticalTools).toContain('memory_analysis');
   });
 
   it('keeps the AgentV3 output template wired for machine-parseable claim provenance', () => {

@@ -82,18 +82,17 @@ describe('buildActivePhaseReminder', () => {
   });
 
   it('falls back to a short phase pointer for scenes without phase_hints', () => {
-    // memory has no phase_hints in its strategy frontmatter
-    const memoryPlan: AnalysisPlanV3 = {
+    const genericPlan: AnalysisPlanV3 = {
       phases: [
-        { id: 'p1', name: '内存分析', goal: '查找泄漏', expectedTools: ['memory_analysis'], status: 'in_progress' },
+        { id: 'p1', name: '通用分析', goal: '确认整体表现', expectedTools: ['execute_sql'], status: 'in_progress' },
       ],
       successCriteria: 'x',
       submittedAt: 0,
       toolCallLog: [],
     };
-    const reminder = buildActivePhaseReminder(memoryPlan, 'memory');
-    expect(reminder).toContain('内存分析');
-    expect(reminder).toContain('查找泄漏');
+    const reminder = buildActivePhaseReminder(genericPlan, 'general');
+    expect(reminder).toContain('通用分析');
+    expect(reminder).toContain('确认整体表现');
   });
 
   it('does not guess the current phase when no phase is in_progress', () => {

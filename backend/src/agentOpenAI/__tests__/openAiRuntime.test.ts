@@ -646,6 +646,33 @@ describe('OpenAIRuntime plan completion guard', () => {
     })).toBe(true);
   });
 
+  it('requests final-report continuation when the memory scene contract is incomplete', () => {
+    const runtime = new OpenAIRuntime({} as any) as any;
+    const planStatus = {
+      complete: true,
+      hasPlan: true,
+      pendingPhases: [],
+    };
+
+    expect(runtime.shouldRequestFinalReportAfterPlanComplete({
+      quickMode: false,
+      planStatus,
+      conclusion: [
+        '# 内存分析报告',
+        '',
+        '## 综合结论',
+        '',
+        'PSS 持续上涨，可能存在泄漏，需要优化内存。',
+      ].join('\n'),
+      fallbackConclusion: undefined,
+      completedByPlanIdle: false,
+      timedOut: false,
+      finalReportContinuations: 0,
+      query: '分析内存上涨和 GC 抖动',
+      sceneType: 'memory',
+    })).toBe(true);
+  });
+
   it('uses a full-report continuation prompt that preserves scene-specific sections', () => {
     const runtime = new OpenAIRuntime({} as any) as any;
 
