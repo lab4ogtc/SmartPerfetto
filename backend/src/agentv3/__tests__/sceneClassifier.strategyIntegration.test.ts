@@ -49,6 +49,14 @@ describe('classifyScene with real strategy frontmatter', () => {
     expect(classifyScene('GraphicBuffer 和 BufferQueue 槽位是不是同一个证据')).toBe('pipeline');
   });
 
+  it('routes background power governance questions to power', () => {
+    expect(classifyScene('JobScheduler runtime quota pending reason stop reason 怎么看')).toBe('power');
+    expect(classifyScene('WorkManager foreground worker STOP_REASON_QUOTA during background drain')).toBe('power');
+    expect(classifyScene('Foreground Service dataSync timeout Service.onTimeout battery drain')).toBe('power');
+    expect(classifyScene('setExactAndAllowWhileIdle exact alarm wakeup battery drain')).toBe('power');
+    expect(classifyScene('Android vitals partial wakelock excessive 24h 怎么确认')).toBe('power');
+  });
+
   it('keeps explicit frame-drop phrasing on scrolling without broad frame keyword matches', () => {
     expect(classifyScene('analyze frame drops in this trace')).toBe('scrolling');
     expect(classifyScene('frame drop in this trace')).toBe('scrolling');
@@ -60,5 +68,13 @@ describe('classifyScene with real strategy frontmatter', () => {
     expect(classifyScene('dmabuf graphics memory leak OOM')).toBe('memory');
     expect(classifyScene('game fence wait GPU frame pacing')).toBe('game');
     expect(classifyScene('点击响应慢 present latency')).toBe('interaction');
+  });
+
+  it('does not let background-power routing steal stronger scenes', () => {
+    expect(classifyScene('ANR 中 JobScheduler stop reason timeout')).toBe('anr');
+    expect(classifyScene('启动阶段 WorkManager 初始化慢')).toBe('startup');
+    expect(classifyScene('InputDispatcher ACK timeout with FGS running')).toBe('interaction');
+    expect(classifyScene('WorkManager network traffic is high')).toBe('network');
+    expect(classifyScene('network traffic is high')).toBe('network');
   });
 });

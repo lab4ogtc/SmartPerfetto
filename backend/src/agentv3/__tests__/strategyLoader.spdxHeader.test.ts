@@ -118,6 +118,22 @@ describe('strategyLoader tolerates leading SPDX HTML comments', () => {
     )?.triggerPatterns).toEqual(expect.arrayContaining([
       'BufferQueue|BLAST|queueBuffer|dequeueBuffer',
     ]));
+
+    const powerContract = getFinalReportContract('power');
+    expect(powerContract?.requiredSections.map(section => section.id)).toEqual(expect.arrayContaining([
+      'job_work_fgs_governance_boundary',
+      'alarm_wakeup_vitals_boundary',
+    ]));
+    expect(powerContract?.requiredSections.find(section =>
+      section.id === 'job_work_fgs_governance_boundary',
+    )?.triggerPatterns).toEqual(expect.arrayContaining([
+      'JobScheduler|WorkManager|Foreground Service|\\bFGS\\b|foreground worker|JobParameters|WorkInfo|UIDT|user[- ]initiated data transfer',
+    ]));
+    expect(powerContract?.requiredSections.find(section =>
+      section.id === 'alarm_wakeup_vitals_boundary',
+    )?.triggerPatterns).toEqual(expect.arrayContaining([
+      'allow[- ]while[- ]idle|setExactAndAllowWhileIdle|exact alarm|AlarmManager|wakeup alarm|excessive wakeups',
+    ]));
   });
 
   it('keeps contract-only smart strategy out of normal scene registration', () => {
@@ -180,6 +196,23 @@ describe('strategyLoader tolerates leading SPDX HTML comments', () => {
     const scrollingHints = getPhaseHints('scrolling');
     expect(scrollingHints.map(hint => hint.id)).toContain('display_pipeline_boundary');
     expect(scrollingHints.find(hint => hint.id === 'display_pipeline_boundary')?.criticalTools).toContain('present_fence_timing');
+  });
+
+  it('loads power phase_hints for background execution and alarm wakeup boundaries', () => {
+    const hints = getPhaseHints('power');
+    expect(hints.map(hint => hint.id)).toEqual(expect.arrayContaining([
+      'background_execution_governance',
+      'alarm_wakeup_boundary',
+    ]));
+    expect(hints.find(hint => hint.id === 'background_execution_governance')?.criticalTools).toEqual(expect.arrayContaining([
+      'android_job_scheduler_events',
+      'suspend_wakeup_analysis',
+      'lookup_knowledge',
+    ]));
+    expect(hints.find(hint => hint.id === 'alarm_wakeup_boundary')?.criticalTools).toEqual(expect.arrayContaining([
+      'wakeup_frequency_summary',
+      'android_kernel_wakelock_summary',
+    ]));
   });
 
   it('keeps the AgentV3 output template wired for machine-parseable claim provenance', () => {

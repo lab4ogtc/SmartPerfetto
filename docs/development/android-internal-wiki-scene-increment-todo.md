@@ -291,7 +291,7 @@ Each TODO item can be marked done only when all applicable gates pass:
 
 ### Batch 5 - Power Background Execution
 
-- [ ] TODO-006: JobScheduler/WorkManager/FGS power governance
+- [x] TODO-006: JobScheduler/WorkManager/FGS power governance
   - Target files:
     - `backend/strategies/power.strategy.md`
     - Power Skill YAML only if existing Skills expose the required fields.
@@ -306,6 +306,32 @@ Each TODO item can be marked done only when all applicable gates pass:
   - Verification:
     - Strategy validation and focused tests. Power Skill smoke if fixture data
       exists.
+  - Completed in Batch 5:
+    - Verified version-sensitive Android behavior against current official docs
+      on 2026-05-30 before encoding it: Android 15 FGS timeouts, Android 16
+      JobScheduler quota behavior, JobScheduler pending reasons,
+      JobParameters/WorkInfo stop reasons, UIDT, Android vitals wakelock
+      windows, and AlarmManager allow-while-idle/exact-alarm boundaries.
+    - Added `power` routing for concrete background governance surfaces such as
+      JobScheduler, WorkManager, Foreground Service/FGS, UIDT, exact alarm,
+      allow-while-idle, wakeup alarm, partial wakelock, and Android vitals
+      without adding generic `job`/`alarm`/`quota` keywords that would steal
+      unrelated scenes.
+    - Added conditional `power` final-report contracts split into
+      Job/Work/FGS governance and Alarm/Wakeup/Vitals boundaries. Job quota
+      reports do not have to include alarm sections, and wakelock/alarm reports
+      do not have to include Job/FGS sections.
+    - Added power phase hints and strategy body guidance that separate trace
+      evidence from app/API logs, pending reason from stop reason, FGS timeout
+      from Job quota, UIDT from generic transfer jobs, and local trace windows
+      from Play/Vitals 24h aggregate judgments.
+    - Did not modify Power Skill YAML because existing trace Skills expose
+      JobScheduler execution windows and wakelock/wakeup events, but not
+      JobScheduler pending reason history or JobParameters/WorkInfo stop reason
+      fields.
+    - Added focused tests for loader contracts, phase hints, real classifier
+      routing, final-result contract gating, and OpenAI final-report
+      continuation behavior.
 
 ### Batch 6 - Request-Stage Network And Online Diagnostics
 
@@ -344,16 +370,15 @@ Each TODO item can be marked done only when all applicable gates pass:
 
 ## Current Next Step
 
-Batch 4 is implemented and validated through the landing gates:
+Batch 5 is implemented and passed the landing gates:
 
-- Focused Jest passed for strategy loading, phase-hint matching, real registry
-  routing, plan-template frontmatter, and final-result contract behavior.
-- `validate:strategies`, `validate:skills`, backend build, and scene trace
-  regression passed.
-- Read-only post-diff review passed after fixes for conditional pipeline
-  contract triggers and explicit `frame drop(s)` scrolling routing.
-- Repository-level `npm run verify:pr` passed, including root quality gates,
-  frontend prebuild check, Rust checks, backend core tests, and trace
-  regression.
+- Focused Jest passed for strategy loading, real registry routing, final-result
+  contract behavior, and OpenAI final-report continuation behavior.
+- `validate:strategies`, backend build, scene trace regression, and
+  `git diff --check` passed.
+- Read-only post-diff review passed after the routing fix that removed bare
+  background-execution keywords from `power`.
+- Repository-level `npm run verify:pr` passed, including `validate:skills`,
+  `validate:strategies`, typecheck/build, core tests, and trace regression.
 
-Next: continue with Batch 5.
+Next: commit/push Batch 5, then continue with Batch 6.

@@ -725,6 +725,151 @@ describe('final result quality gate', () => {
     })).toBeUndefined();
   });
 
+  it('flags power reports that omit Job/Work/FGS governance boundaries for job quota questions', () => {
+    const shortPowerReport = [
+      '# 功耗分析报告',
+      '',
+      '## 综合结论',
+      '',
+      '后台任务耗电高，JobScheduler quota 可能异常，需要减少后台任务。',
+      '',
+      '## 关键证据链',
+      '',
+      '- android_job_scheduler_events 显示后台任务运行窗口较长。',
+    ].join('\n');
+
+    const issue = assessFinalResultQuality({
+      result: result({
+        conclusion: shortPowerReport,
+        findings: [{
+          severity: 'warning',
+          title: '后台任务耗电',
+          description: 'Job runtime overlapped with battery drain',
+          evidence: ['android_job_scheduler_events dur_ms=540000'],
+        } as any],
+      }),
+      query: '分析 JobScheduler runtime quota pending reason stop reason',
+      sceneType: 'power',
+    });
+
+    expect(issue?.code).toBe('scene_contract_incomplete');
+    expect(issue?.message).toContain('Job/Work/FGS 治理边界');
+    expect(issue?.message).not.toContain('Alarm/Wakeup/Vitals 边界');
+  });
+
+  it('accepts Job/Work/FGS power reports without requiring alarm or Vitals sections', () => {
+    const richPowerReport = [
+      '# 功耗分析报告',
+      '',
+      '## 综合结论',
+      '',
+      '后台 Job 与掉电窗口重叠，但当前只能支持 background execution 候选，不能直接判定 Android 16 quota 是根因。',
+      '',
+      '## Job/Work/FGS 治理边界',
+      '',
+      '- JobScheduler/WorkManager/FGS/UIDT 需要分层：trace 中 android_job_scheduler_events 只证明 JobScheduler 执行窗口。',
+      '- pending reason/getPendingJobReasons 解释为什么未运行；stop reason/getStopReason、JobParameters 和 WorkInfo 才解释为什么被停止。',
+      '- Android 16 runtime quota、standby bucket 和 Foreground Service 并发规则属于版本敏感边界；当前缺失 logcat、dumpsys 和 app telemetry，因此 confidence 为中等。',
+      '- FGS dataSync/mediaProcessing timeout 与 Service.onTimeout 需要服务类型和 Android 15+ 日志，当前不可直接宣称。',
+      '',
+      '## 优化建议',
+      '',
+      '- 补充 JobScheduler pending history、WorkInfo.stopReason、JobParameters.getStopReason 和 FGS service telemetry 后再提升置信度。',
+    ].join('\n');
+
+    expect(assessFinalResultQuality({
+      result: result({ conclusion: richPowerReport }),
+      query: '分析 JobScheduler runtime quota pending reason stop reason',
+      sceneType: 'power',
+    })).toBeUndefined();
+  });
+
+  it('flags power reports that omit Alarm/Wakeup/Vitals boundaries for alarm and wakelock questions', () => {
+    const shortWakeupReport = [
+      '# 功耗分析报告',
+      '',
+      '## 综合结论',
+      '',
+      'wakeup 次数高，说明 exact alarm 和 wakelock 违规。',
+      '',
+      '## 关键证据链',
+      '',
+      '- wakeup_frequency_summary 显示 wakeups/min 偏高。',
+    ].join('\n');
+
+    const issue = assessFinalResultQuality({
+      result: result({
+        conclusion: shortWakeupReport,
+        findings: [{
+          severity: 'warning',
+          title: 'wakeup high',
+          description: 'wakeup rate high',
+          evidence: ['wakeup_frequency_summary wakeups_per_min=2.4'],
+        } as any],
+      }),
+      query: '分析 setExactAndAllowWhileIdle exact alarm wakeup Android vitals partial wakelock',
+      sceneType: 'power',
+    });
+
+    expect(issue?.code).toBe('scene_contract_incomplete');
+    expect(issue?.message).toContain('Alarm/Wakeup/Vitals 边界');
+    expect(issue?.message).not.toContain('Job/Work/FGS 治理边界');
+  });
+
+  it('accepts Alarm/Wakeup/Vitals power reports without requiring Job/Work/FGS sections', () => {
+    const richWakeupReport = [
+      '# 功耗分析报告',
+      '',
+      '## 综合结论',
+      '',
+      '本地 trace 只证明 wakeup 与 wakelock 活跃，不能直接判定 exact alarm 权限或 Play vitals 违规。',
+      '',
+      '## Alarm/Wakeup/Vitals 边界',
+      '',
+      '- AlarmManager exact alarm / allow-while-idle / setExactAndAllowWhileIdle 需要 app API 或 dumpsys alarm 证据；当前 trace 只看到 android_wakeups。',
+      '- Android vitals excessive partial wakelock 需要 24h 聚合，2h 总计参考；stuck partial wakelock 需要 1h 后台持有参考。本 trace window 只有局部 observed window。',
+      '- android_kernel_wakelock 与 wakeups 只能支持局部候选；SCHEDULE_EXACT_ALARM permission、USE_EXACT_ALARM 和 external_aggregate 缺失，因此不能提升为政策违规结论。',
+      '',
+      '## 采集建议',
+      '',
+      '- 补充 dumpsys alarm、Play vitals 聚合、wakelock tag、app alarm scheduling log 后再判断。',
+    ].join('\n');
+
+    expect(assessFinalResultQuality({
+      result: result({ conclusion: richWakeupReport }),
+      query: '分析 setExactAndAllowWhileIdle exact alarm wakeup Android vitals partial wakelock',
+      sceneType: 'power',
+    })).toBeUndefined();
+  });
+
+  it('does not require background-governance sections for generic power reports', () => {
+    const genericPowerReport = [
+      '# 功耗分析报告',
+      '',
+      '## 综合结论',
+      '',
+      'power_rails 可用，CPU rail=12.4mWh，GPU rail=1.2mWh，battery drain rate=3.1%/h，温控未触发。',
+      '',
+      '## 数据完整度判定',
+      '',
+      '- power_rails、battery_counters、cpu_freq_idle 可用；gpu_work_period 缺失。',
+      '',
+      '## 全局能量/掉电趋势',
+      '',
+      '- hardware_power_rails 显示 CPU 是主要能耗；Wattson thread estimate 与 CPU utilization 对齐。',
+      '',
+      '## 待机健康度',
+      '',
+      '- suspend 占比正常，screen-off CPU 未见异常，当前结论 confidence=中等。',
+    ].join('\n');
+
+    expect(assessFinalResultQuality({
+      result: result({ conclusion: genericPowerReport }),
+      query: '分析功耗和 thermal throttling',
+      sceneType: 'power',
+    })).toBeUndefined();
+  });
+
   it('flags memory reports that omit evidence scope and memory-type boundaries', () => {
     const shortMemoryReport = [
       '# 内存分析报告',

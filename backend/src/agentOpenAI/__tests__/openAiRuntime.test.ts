@@ -673,6 +673,33 @@ describe('OpenAIRuntime plan completion guard', () => {
     })).toBe(true);
   });
 
+  it('requests final-report continuation when the power background-governance contract is incomplete', () => {
+    const runtime = new OpenAIRuntime({} as any) as any;
+    const planStatus = {
+      complete: true,
+      hasPlan: true,
+      pendingPhases: [],
+    };
+
+    expect(runtime.shouldRequestFinalReportAfterPlanComplete({
+      quickMode: false,
+      planStatus,
+      conclusion: [
+        '# 功耗分析报告',
+        '',
+        '## 综合结论',
+        '',
+        '后台 JobScheduler 耗电高，可能是 quota 导致，需要减少后台任务。',
+      ].join('\n'),
+      fallbackConclusion: undefined,
+      completedByPlanIdle: false,
+      timedOut: false,
+      finalReportContinuations: 0,
+      query: '分析 JobScheduler runtime quota pending reason stop reason',
+      sceneType: 'power',
+    })).toBe(true);
+  });
+
   it('uses a full-report continuation prompt that preserves scene-specific sections', () => {
     const runtime = new OpenAIRuntime({} as any) as any;
 

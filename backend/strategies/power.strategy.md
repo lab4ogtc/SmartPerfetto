@@ -26,12 +26,51 @@ keywords:
   - drain
   - energy
   - thermal
+  - allow-while-idle
+  - setExactAndAllowWhileIdle
+  - exact alarm
+  - wakeup alarm
+  - Android vitals
+  - partial wakelock
 compound_patterns:
   - "电池.*掉"
   - "耗电.*原因"
   - "功耗.*分析"
   - "battery.*drain"
   - "power.*analysis"
+  - '(JobScheduler|WorkManager|JobParameters|WorkInfo).*(quota|stop reason|pending reason|timeout|standby bucket|expedited|foreground worker|后台|耗电|power|battery)'
+  - '(quota|stop reason|pending reason|timeout|standby bucket|expedited).*(JobScheduler|WorkManager|JobParameters|WorkInfo)'
+  - '(Foreground Service|foreground service|\bFGS\b|dataSync|mediaProcessing|shortService).*(timeout|quota|battery|power|耗电|后台|前台服务|前景服务)'
+  - '(timeout|quota).*(Foreground Service|foreground service|\bFGS\b|dataSync|mediaProcessing|shortService)'
+  - '(UIDT|user[- ]initiated data transfer).*(transfer|job|quota|power|battery|耗电|后台)'
+  - '(allow[- ]while[- ]idle|setExactAndAllowWhileIdle|exact alarm|wakeup alarm|AlarmManager).*(battery|power|wake|wakeup|doze|idle|耗电|唤醒|待机)'
+  - '(wakelock|wake lock|partial wakelock|Vitals|excessive wakeups).*(background|battery|power|24h|2h|1h|stuck|excessive|耗电|后台|唤醒)'
+
+final_report_contract:
+  required_sections:
+    - id: job_work_fgs_governance_boundary
+      label: Job/Work/FGS 治理边界
+      description: '当问题涉及 JobScheduler、WorkManager、Foreground Service、UIDT 或 Android 16 quota 时，区分 trace 事件、app/API 诊断、pending reason、stop reason、版本/状态边界和缺失证据。'
+      trigger_patterns:
+        - 'JobScheduler|WorkManager|Foreground Service|\bFGS\b|foreground worker|JobParameters|WorkInfo|UIDT|user[- ]initiated data transfer'
+        - 'pending\s+reason|stop\s+reason|getPendingJobReasons?|getPendingJobReasonStats|getStopReason|runtime\s+quota|job\s+quota|standby\s+bucket|expedited\s+job'
+        - 'Android\s*1[56].*(?:quota|foreground service|JobScheduler|WorkManager|FGS|timeout)'
+        - 'dataSync|mediaProcessing|shortService|Service\.onTimeout|前台服务|前景服务|后台任务|作业调度'
+      pattern_groups:
+        - ['Job/Work/FGS', 'JobScheduler', 'WorkManager', 'Foreground Service', '\bFGS\b', 'UIDT', 'user[- ]initiated', '后台执行', 'background execution']
+        - ['pending reason', 'stop reason', 'getPendingJobReason', 'getPendingJobReasons', 'getPendingJobReasonStats', 'getStopReason', 'runtime quota', 'job quota', '\bquota\b', 'standby bucket', 'timeout', 'Service\.onTimeout']
+        - ['trace', 'logcat', 'WorkInfo', 'JobParameters', 'dumpsys', 'app telemetry', '外部', 'missing', '缺失', '版本', 'Android\s*1[4567]', 'confidence', '置信度', '不能', '不可']
+    - id: alarm_wakeup_vitals_boundary
+      label: Alarm/Wakeup/Vitals 边界
+      description: '当问题涉及 AlarmManager、wakeup、allow-while-idle、wakelock 或 Android/Play Vitals 时，区分本地 trace 窗口、Alarm API/权限证据、24h 聚合阈值和缺失数据。'
+      trigger_patterns:
+        - 'allow[- ]while[- ]idle|setExactAndAllowWhileIdle|exact alarm|AlarmManager|wakeup alarm|excessive wakeups'
+        - 'wakelock|wake lock|partial wakelock|Android vitals|Play vitals|stuck partial|excessive partial|Vitals'
+        - '\bwakeups?\b|唤醒'
+      pattern_groups:
+        - ['Alarm/Wakeup/Vitals', 'AlarmManager', 'exact alarm', 'allow[- ]while[- ]idle', 'setExactAndAllowWhileIdle', 'wakeup', 'wakeups?', 'wakelock', 'wake lock', 'partial wakelock', 'vitals']
+        - ['24h', '2h', '1h', 'one hour', 'two hours', 'observed window', 'trace window', '局部', '24\s*小时', '2\s*小时', '1\s*小时', '观测窗口', 'Play vitals', 'Android vitals', 'excessive', 'stuck']
+        - ['trace', 'dumpsys alarm', 'android_wakeups', 'android_kernel_wakelock', 'external_aggregate', '外部聚合', 'missing', '缺失', 'permission', 'SCHEDULE_EXACT_ALARM', 'USE_EXACT_ALARM', '置信度', '不能', '不可']
 
 phase_hints:
   - id: power_data_gate
@@ -48,6 +87,16 @@ phase_hints:
     keywords: ['battery drain', 'standby drain', '掉电', '待机耗电', '后台耗电', 'wakelock', 'doze', 'job', 'network']
     constraints: '用户问掉电/待机耗电时优先调用 battery_drain_attribution，把 battery drain rate、Doze、suspend/wakeup、wakelock、screen-off CPU、job、network 串起来；缺 rail 数据时只能给事件链归因。'
     critical_tools: ['battery_drain_attribution', 'wakeup_frequency_summary', 'screen_off_background_cpu_attribution', 'modem_network_correlation_summary']
+    critical: false
+  - id: background_execution_governance
+    keywords: ['JobScheduler', 'WorkManager', 'Foreground Service', 'FGS', 'foreground worker', 'UIDT', 'pending reason', 'stop reason', 'runtime quota', 'standby bucket', 'expedited job', 'dataSync', 'mediaProcessing', 'shortService']
+    constraints: '后台执行治理必须把 JobScheduler pending reason（为何未运行）与 JobParameters/WorkInfo stop reason（为何停止）分开。Perfetto 的 job event 只能证明执行窗口；Android 15/16 quota、FGS timeout、UIDT 和 standby bucket 结论必须标注版本、target/app state、app 日志/API 或 dumpsys 证据缺口。'
+    critical_tools: ['battery_drain_attribution', 'android_job_scheduler_events', 'android_kernel_wakelock_summary', 'battery_doze_state_timeline', 'screen_off_background_cpu_attribution', 'suspend_wakeup_analysis', 'lookup_knowledge']
+    critical: false
+  - id: alarm_wakeup_boundary
+    keywords: ['AlarmManager', 'exact alarm', 'allow-while-idle', 'setExactAndAllowWhileIdle', 'wakeup alarm', 'wakeups', 'wakelock', 'partial wakelock', 'Android vitals', 'Play vitals', 'excessive wakeups']
+    constraints: 'Alarm/wakeup 只能从本地 trace 证明唤醒、wakelock、suspend/Doze 现象；不能仅凭 wakeup 反推 AlarmManager API、exact-alarm 权限或 Play Vitals 违规。Vitals 需要 24h/聚合窗口，短 trace 只能写局部参考。'
+    critical_tools: ['wakeup_frequency_summary', 'suspend_wakeup_analysis', 'android_kernel_wakelock_summary', 'battery_drain_attribution', 'lookup_knowledge']
     critical: false
   - id: thermal_chain
     keywords: ['thermal', 'throttling', '发热', '温控', '降频', '热节流', 'gpu work period', 'mali']
@@ -89,15 +138,16 @@ plan_template:
 1. **数据完整度**：先判断 `power_rails` / `battery_counters` / `cpu_freq_idle` / `gpu_work_period` 是否可用。
 2. **全局量纲**：优先用 `power_rails_energy_breakdown` 看硬件 rail 实测 mWh，再用 `battery_drain_rate_summary` 看 trace 窗口掉电趋势。
 3. **待机健康度**：screen-off / standby 问题必须看 `suspend_wakeup_analysis` 和 `wakeup_frequency_summary`，再看 `android_kernel_wakelock_summary`。
-4. **归因链路**：CPU 用 `screen_off_background_cpu_attribution` / `wattson_thread_power_attribution` / `cpu_freq_residency_summary`；网络只用 `modem_network_correlation_summary` 做 correlation；GPU/温控再走 GPU/thermal 链。
-5. **可信度分层**：结论必须标注 `hardware_power_rails` / `wattson_estimate` / `battery_counter_trend` / `event_chain_fallback` / `insufficient_data`。
+4. **后台执行治理**：JobScheduler / WorkManager / FGS / UIDT / Alarm / Wakelock 要分清 trace 事件、app/API 日志、dumpsys、Play/Vitals 聚合和 Android 版本政策；不能把本地事件直接写成平台治理结论。
+5. **归因链路**：CPU 用 `screen_off_background_cpu_attribution` / `wattson_thread_power_attribution` / `cpu_freq_residency_summary`；网络只用 `modem_network_correlation_summary` 做 correlation；GPU/温控再走 GPU/thermal 链。
+6. **可信度分层**：结论必须标注 `hardware_power_rails` / `wattson_estimate` / `battery_counter_trend` / `event_chain_fallback` / `external_policy_or_aggregate` / `insufficient_data`。
 
 #### Wakelock / Vitals 阈值语义
 
 - partial wakelock 24h 累计 >= 2h：Android vitals excessive 参考阈值。
 - 单个后台 partial wakelock >= 1h：stuck wakelock 参考阈值。
 - P90/P99 > 60min：重点排查。
-- SmartPerfetto 的单条 trace 通常不是 24h 数据；除非 trace 覆盖完整统计周期，否则只能输出“局部证据 / 换算参考 / 需长期采样确认”，不能直接判定 Play vitals 违规。
+- Android vitals 只在 app 后台或前台服务持有 partial wakelock 时计入，并存在音频、位置、JobScheduler user-initiated 等豁免；SmartPerfetto 的单条 trace 通常不是 24h 数据。除非 trace 覆盖完整统计周期或用户提供 Play/Vitals 聚合数据，否则只能输出“局部证据 / 换算参考 / 需长期采样确认”，不能直接判定 Play vitals 违规。
 
 **Phase 0 — 数据完整度门禁：**
 
@@ -164,6 +214,35 @@ invoke_skill("modem_network_correlation_summary")
 
 输出要明确标注：这是状态/事件链证据，能说明“是否频繁唤醒、是否无法进入 Doze、是否有 wakelock”，但不是 rail 级功耗量化。
 
+**Phase 3.5 — 后台执行治理证据（按需）：**
+
+当用户提到 JobScheduler、WorkManager、Foreground Service/FGS、UIDT、quota、pending reason、stop reason、AlarmManager、allow-while-idle、wakeup 或 Android vitals 时，在功耗归因前先做治理边界拆分：
+
+```
+invoke_skill("android_job_scheduler_events", { package: "<包名>" })
+invoke_skill("android_kernel_wakelock_summary")
+invoke_skill("wakeup_frequency_summary")
+invoke_skill("suspend_wakeup_analysis")
+invoke_skill("battery_doze_state_timeline")
+```
+
+报告必须分清这些证据面：
+
+| 证据面 | 能证明什么 | 不能直接证明什么 |
+|---|---|---|
+| `android_job_scheduler_events` | JobScheduler 执行窗口、服务名、包名、UID | pending reason、stop reason、quota 触发原因、WorkManager worker 业务语义 |
+| `JobScheduler#getPendingJobReason(s)` / dumpsys / app 日志 | Job 为什么未运行：constraint、quota、standby bucket、background restriction 等候选原因 | 已运行任务为何停止 |
+| `JobParameters.getStopReason()` / `WorkInfo.getStopReason()` / app telemetry | 正在运行的 Job/Worker 为什么停止：timeout、quota、constraint、device state、background restriction 等 | 未运行任务的完整等待历史；未来 Android 版本可能新增 reason |
+| FGS logcat / service telemetry | `dataSync`、`mediaProcessing`、`shortService` timeout 或 `Service.onTimeout()` 路径 | 没有服务日志时，不能只凭 CPU/Job trace 认定 FGS timeout |
+| `android_wakeups` / wakelock / suspend / Doze | 本地 trace 窗口内是否唤醒频繁、阻止 suspend、Doze 状态异常 | 具体 AlarmManager API、exact alarm 权限、Play Vitals 24h 聚合违规 |
+
+版本/政策边界：
+
+- Android 15：`dataSync` / `mediaProcessing` FGS 在后台 24h 内共享各自 6h budget，超限后系统调用 `Service.onTimeout(int, int)`；`shortService` 是更短的约 3 分钟路径。没有 Android 版本、targetSdk、service type 或 logcat/API 证据时，只能写“版本敏感候选”。
+- Android 16：JobScheduler regular/expedited runtime quota 会受 standby bucket、top/visible 起始状态、FGS 并发影响；WorkManager、JobScheduler、DownloadManager 都会受影响。FGS 并发不再是 Job quota 豁免证据。
+- UIDT：Android 14+ 的 user-initiated data transfer 是长耗时用户触发传输的边界；trace 只能看到 Job/网络/CPU 现象，是否 UIDT 需要 JobInfo/API 或 app 日志。
+- Alarm / allow-while-idle：wakeup trace 只能证明设备被唤醒；exact alarm、`setExactAndAllowWhileIdle`、`SCHEDULE_EXACT_ALARM` / `USE_EXACT_ALARM` 权限和 Android 17 listener API 需要 app/API/dumpsys 证据。
+
 **Phase 4 — GPU/温控/频率交叉验证（按需）：**
 
 温控/降频/发热导致性能问题时优先：
@@ -186,5 +265,6 @@ invoke_skill("thermal_throttling_chain", { package: "<包名>" })
 2. **全局能量/掉电趋势**：硬件 rail mWh、Wattson 估算 mWh、battery drain rate 分开列
 3. **待机健康度**：suspend 占比、wakeup/min、wakelock Top、screen-off CPU 是否异常
 4. **时间窗口关联**：耗电/唤醒/降频发生在什么阶段，是否与启动、滑动、后台任务、网络活动重叠
-5. **结论可信度**：hardware_power_rails / wattson_estimate / battery_counter_trend / event_chain_fallback / insufficient_data
-6. **采集建议**：缺哪些数据就给具体 Perfetto 配置方向，不泛泛而谈；CLI 可建议 `smp capture android --preset power --app <pkg> --duration <sec>`
+5. **后台执行治理边界**（仅相关时）：Job pending reason vs stop reason、WorkManager/JobScheduler/FGS/UIDT、Alarm/wakeup/Vitals 的证据来源、版本边界和缺失数据
+6. **结论可信度**：hardware_power_rails / wattson_estimate / battery_counter_trend / event_chain_fallback / external_policy_or_aggregate / insufficient_data
+7. **采集建议**：缺哪些数据就给具体 Perfetto 配置方向，不泛泛而谈；CLI 可建议 `smp capture android --preset power --app <pkg> --duration <sec>`
