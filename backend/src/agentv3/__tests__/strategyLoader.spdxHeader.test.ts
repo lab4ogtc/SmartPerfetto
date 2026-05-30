@@ -38,7 +38,7 @@ describe('strategyLoader tolerates leading SPDX HTML comments', () => {
   });
 
   it('returns non-empty content for known scenes', () => {
-    for (const scene of ['scrolling', 'startup', 'anr', 'memory', 'general']) {
+    for (const scene of ['scrolling', 'startup', 'anr', 'memory', 'io', 'general']) {
       const content = getStrategyContent(scene);
       expect(content).toBeDefined();
       expect((content || '').length).toBeGreaterThan(100);
@@ -83,6 +83,12 @@ describe('strategyLoader tolerates leading SPDX HTML comments', () => {
       'memory_type_breakdown',
       'memory_confidence_boundary',
     ]));
+
+    expect(getFinalReportContract('io')?.requiredSections.map(section => section.id)).toEqual(expect.arrayContaining([
+      'io_evidence_class',
+      'app_api_boundary',
+      'io_confidence_boundary',
+    ]));
   });
 
   it('keeps contract-only smart strategy out of normal scene registration', () => {
@@ -112,6 +118,15 @@ describe('strategyLoader tolerates leading SPDX HTML comments', () => {
       'gc_churn_boundary',
     ]));
     expect(hints.find(hint => hint.id === 'memory_evidence_gate')?.criticalTools).toContain('memory_analysis');
+  });
+
+  it('loads io phase_hints for storage evidence boundaries', () => {
+    const hints = getPhaseHints('io');
+    expect(hints.map(hint => hint.id)).toEqual(expect.arrayContaining([
+      'io_evidence_ladder',
+      'sqlite_sharedprefs_provider_boundary',
+    ]));
+    expect(hints.find(hint => hint.id === 'io_evidence_ladder')?.criticalTools).toContain('block_io_analysis');
   });
 
   it('keeps the AgentV3 output template wired for machine-parseable claim provenance', () => {

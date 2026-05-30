@@ -14,7 +14,10 @@
  */
 
 import type { SceneType } from './sceneClassifier';
-import { getPlanTemplate as getPlanTemplateFromFrontmatter } from './strategyLoader';
+import {
+  getPlanTemplate as getPlanTemplateFromFrontmatter,
+  getRegisteredScenes,
+} from './strategyLoader';
 
 export interface ScenePlanTemplateAspect {
   /**
@@ -139,13 +142,14 @@ export function getScenePlanTemplate(scene: SceneType): ScenePlanTemplate | unde
  * both frontmatter-sourced and legacy hardcoded scenes.
  */
 export function listScenePlanTemplateKeys(): SceneType[] {
-  // Union legacy keys with any scene that has a frontmatter-sourced
-  // template, deduplicated. We can't import the loader's full registry
-  // here without paying the strategy-load cost on every call, so we
-  // start from the legacy keys (always present) and let dual-read in
-  // `getScenePlanTemplate` cover migrated-only scenes when callers ask
-  // about a specific scene id.
-  return Object.keys(SCENE_PLAN_TEMPLATES);
+  const keys = new Set<SceneType>(Object.keys(SCENE_PLAN_TEMPLATES));
+  for (const def of getRegisteredScenes()) {
+    const frontmatterTemplate = getPlanTemplateFromFrontmatter(def.scene);
+    if (frontmatterTemplate && frontmatterTemplate.mandatoryAspects.length > 0) {
+      keys.add(def.scene);
+    }
+  }
+  return Array.from(keys);
 }
 
 export interface PlanValidationResult {

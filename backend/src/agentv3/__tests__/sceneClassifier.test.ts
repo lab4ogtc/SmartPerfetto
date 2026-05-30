@@ -66,6 +66,33 @@ jest.mock('../strategyLoader', () => ({
       compoundPatterns: [],
     },
     {
+      scene: 'io',
+      priority: 5,
+      keywords: [
+        'io',
+        'i/o',
+        'storage',
+        'disk',
+        'fsync',
+        'sqlite',
+        'room',
+        'sharedpreferences',
+        'queuedwork',
+        'contentprovider',
+        'cursorwindow',
+        'mediaprovider',
+        'scoped storage',
+        '存储',
+        '磁盘',
+        '数据库',
+        '文件',
+      ],
+      compoundPatterns: [
+        /(?:SQLite|Room|database|数据库).*(?:慢|阻塞|等待|ANR|启动)/i,
+        /(?:SharedPreferences|QueuedWork|ContentProvider|CursorWindow).*(?:慢|阻塞|等待|ANR|启动)/i,
+      ],
+    },
+    {
       scene: 'general',
       priority: 99,
       keywords: [],
@@ -109,6 +136,13 @@ describe('classifyScene', () => {
       expect(classifyScene('给出概览')).toBe('overview');
     });
 
+    it('should classify pure IO and storage queries', () => {
+      expect(classifyScene('SQLite 查询很慢')).toBe('io');
+      expect(classifyScene('SharedPreferences 退出时卡住')).toBe('io');
+      expect(classifyScene('fsync 导致主线程等待')).toBe('io');
+      expect(classifyScene('MediaProvider scoped storage 访问很慢')).toBe('io');
+    });
+
     it('should classify multi-trace result comparison queries', () => {
       expect(classifyScene('把当前 Trace 的结果与另外一个 Trace 的分析结果进行对比')).toBe('multi_trace_result_comparison');
       expect(classifyScene('compare analysis results for two snapshots')).toBe('multi_trace_result_comparison');
@@ -143,6 +177,8 @@ describe('classifyScene', () => {
       // "ANR 导致的启动卡顿" has keywords from both ANR and startup
       // ANR (priority 1) should win over startup (priority 2)
       expect(classifyScene('ANR 导致的启动问题')).toBe('anr');
+      expect(classifyScene('ANR 中 SQLite fsync 导致卡死')).toBe('anr');
+      expect(classifyScene('启动阶段 SQLite fsync 很慢')).toBe('startup');
     });
   });
 

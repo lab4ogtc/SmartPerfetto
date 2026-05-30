@@ -22,6 +22,7 @@
  */
 
 import * as path from 'path';
+import { getStrategyFilePath } from '../strategyLoader';
 import { renderPhaseHint, type PhaseHintProposal, type RenderResult } from './phaseHintsRenderer';
 import { applyPhaseHintPatch } from './strategyPatchApplier';
 import { createWorktree, removeWorktree, type WorktreeHandle } from './worktreeRunner';
@@ -58,6 +59,12 @@ export type ProposeResult =
     }
   | { ok: false; reason: ProposeRejectReason; details: string };
 
+function resolveStrategyPatchPath(scene: string, worktreePath: string): string {
+  const sourcePath = getStrategyFilePath(scene);
+  const fileName = sourcePath ? path.basename(sourcePath) : `${scene}.strategy.md`;
+  return path.join(worktreePath, 'backend', 'strategies', fileName);
+}
+
 /**
  * Drive the full pipeline. On success, the worktree is left intact so the
  * caller can run downstream checks; the worktree handle is returned for
@@ -82,7 +89,7 @@ export async function proposeStrategyPatch(input: ProposeStrategyPatchInput): Pr
     };
   }
 
-  const strategyFilePath = path.join(handle.worktreePath, 'backend', 'strategies', `${input.scene}.strategy.md`);
+  const strategyFilePath = resolveStrategyPatchPath(input.scene, handle.worktreePath);
   const apply = applyPhaseHintPatch(strategyFilePath, rendered.yaml);
   if (!apply.ok) {
     await removeWorktree(handle, true);

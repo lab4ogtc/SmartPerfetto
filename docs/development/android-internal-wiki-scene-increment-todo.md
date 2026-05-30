@@ -186,7 +186,7 @@ Each TODO item can be marked done only when all applicable gates pass:
 
 ### Batch 2 - Storage, SQLite, Provider, And I/O
 
-- [ ] TODO-003: Storage/SQLite scene split
+- [x] TODO-003: Storage/SQLite scene split
   - Target files:
     - Existing `general.strategy.md` or a new dedicated storage/IO strategy only
       if routing supports it cleanly.
@@ -204,6 +204,20 @@ Each TODO item can be marked done only when all applicable gates pass:
   - Verification:
     - Add focused tests near routing/template surfaces first; defer deep Skill
       SQL until a trace fixture proves it.
+  - Completed in Batch 2:
+    - Added a dedicated `io` strategy with frontmatter routing, final-report
+      contract sections, phase hints, and a plan template for I/O evidence
+      classification and app API boundary review.
+    - Split final-output requirements across File I/O, SharedPreferences/
+      QueuedWork/fsync, SQLite/Room/connection pool/WAL/checkpoint/
+      CursorWindow, ContentProvider, MediaProvider, and scoped storage.
+    - Guarded against D-state or long fsync being treated as a database root
+      cause without SQLite/provider/path/stack evidence.
+    - Updated plan-template discovery so frontmatter-only scene plan templates
+      are covered without hardcoding the new `io` scene in TypeScript.
+    - Covered routing boundaries with mocked and real strategy-registry tests:
+      pure storage/SQLite/provider queries route to `io`, while ANR, startup,
+      media, and network keep precedence for their own evidence.
 
 ### Batch 3 - Input, Focus, And Interaction Latency
 
@@ -296,14 +310,17 @@ Each TODO item can be marked done only when all applicable gates pass:
 
 ## Current Next Step
 
-Batch 1 is implemented and validated:
+Batch 2 is implemented and validated through the pre-landing gates:
 
-- Focused Jest passed for scene templates, memory strategy loading, active
-  phase reminders, final-result gate, and OpenAI continuation behavior.
+- Focused Jest passed for strategy loading, routing, real registry
+  integration, plan-template frontmatter, scene-template output, final result
+  contract behavior, and runtime strategy filename resolution.
 - `validate:strategies`, backend build, scene trace regression, and real
   OpenAI startup E2E passed.
-- Read-only post-diff review found no actionable regressions.
-- Repository-level `npm run verify:pr` passed, including all 6 scene trace
-  regression fixtures.
+- Read-only post-diff review passed after fixing the runtime strategy filename
+  resolution issue it found.
+- Repository-level `npm run verify:pr` passed, including root quality,
+  frontend prebuild, Rust checks/tests, backend core Jest, and all 6 scene
+  trace regression fixtures.
 
-After this batch is committed and pushed to `main`, continue with Batch 2.
+After this batch is committed and pushed to `main`, continue with Batch 3.

@@ -153,6 +153,23 @@ describe('conclusionSceneTemplates', () => {
     expect(promptText).toContain('不得直接归因为 DNS/连接/TLS/首包慢');
   });
 
+  test('io template preserves storage, database, and provider evidence boundaries', () => {
+    const hints = buildConclusionScenePromptHints({
+      intent: createIntent({ aspects: ['io'], primaryGoal: '分析 SQLite fsync 和 ContentProvider 是否导致卡顿' }),
+      findings: [],
+      deepReasonLabel: '为什么慢',
+    });
+
+    const requirements = hints.outputRequirementLines.join('\n');
+    expect(hints.sceneId).toBe('io');
+    expect(requirements).toContain('SharedPreferences/QueuedWork');
+    expect(requirements).toContain('SQLite/Room');
+    expect(requirements).toContain('ConnectionPool/WAL/checkpoint/CursorWindow');
+    expect(requirements).toContain('ContentProvider/MediaProvider');
+    expect(requirements).toContain('D-state 或 fsync');
+    expect(requirements).toContain('不能在缺少 SQLite/Provider/路径/栈证据时升级为数据库根因');
+  });
+
   test('generic template requires evidence type and version boundary', () => {
     const hints = buildConclusionScenePromptHints({
       intent: createIntent({ primaryGoal: '帮我看一下整体表现', aspects: ['overview'] }),

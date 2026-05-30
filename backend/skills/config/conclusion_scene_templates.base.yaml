@@ -133,6 +133,8 @@ scenes:
     output_requirement_lines:
       - "- I/O 场景至少给出 1 个时延证据（读写时长、队列等待、页缺失次数）。"
       - "- 必须说明证据属于 block I/O、D-state 等待、主线程文件 I/O、SQLite/DB slice、页缺失、容量/损坏线索中的哪一类。"
+      - "- 必须区分 File I/O、SharedPreferences/QueuedWork/fsync、SQLite/Room/ConnectionPool/WAL/checkpoint/CursorWindow、ContentProvider/MediaProvider/scoped storage。"
+      - "- D-state 或 fsync 只能说明 I/O 等待候选，不能在缺少 SQLite/Provider/路径/栈证据时升级为数据库根因。"
       - "- 资源问题要明确是存储瓶颈、访问模式不佳，还是主线程误用同步 I/O。"
     next_step_line: "- “下一步”优先定位主线程相关同步 I/O，并拆分为异步或批处理。"
     require_top_clusters: false

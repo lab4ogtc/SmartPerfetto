@@ -46,7 +46,7 @@ describe('plan_template frontmatter pipeline', () => {
     // aspect; scenes that still rely on the legacy map have `id` undefined.
     const migrated = [
       'scrolling', 'startup', 'anr', 'teaching', 'scroll_response',
-      'pipeline', 'memory', 'game', 'overview', 'touch_tracking',
+      'pipeline', 'memory', 'io', 'game', 'overview', 'touch_tracking',
     ];
     for (const scene of migrated) {
       const tpl = getScenePlanTemplate(scene);

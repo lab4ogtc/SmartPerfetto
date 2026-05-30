@@ -2,7 +2,7 @@
 <!-- Copyright (C) 2024-2026 Gracker (Chris) | SmartPerfetto -->
 
 ---
-scene: runtime-correctness
+scene: runtime_correctness
 priority: 5
 effort: medium
 required_capabilities:

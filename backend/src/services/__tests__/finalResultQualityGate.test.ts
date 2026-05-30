@@ -588,6 +588,65 @@ describe('final result quality gate', () => {
     })).toBeUndefined();
   });
 
+  it('flags io reports that turn fsync into database root cause without boundaries', () => {
+    const shortIoReport = [
+      '# I/O 分析报告',
+      '',
+      '## 综合结论',
+      '',
+      '主线程 fsync 很慢，所以数据库是根因，需要优化 DB。',
+    ].join('\n');
+
+    const issue = assessFinalResultQuality({
+      result: result({
+        conclusion: shortIoReport,
+        findings: [{
+          severity: 'warning',
+          title: 'fsync stall',
+          description: 'main thread fsync 120ms',
+          evidence: ['blocked_function=do_fsync dur=120ms'],
+        } as any],
+      }),
+      query: '分析 SQLite fsync 为什么导致卡顿',
+      sceneType: 'io',
+    });
+
+    expect(issue?.code).toBe('scene_contract_incomplete');
+    expect(issue?.message).toContain('I/O 证据类型');
+    expect(issue?.message).toContain('文件/数据库/Provider 边界');
+    expect(issue?.message).toContain('置信度与补证');
+  });
+
+  it('accepts io reports that separate evidence class, API boundary, and missing proof', () => {
+    const richIoReport = [
+      '# I/O 分析报告',
+      '',
+      '## 综合结论',
+      '',
+      '主线程在窗口内出现 D-state 和 fsync 等待，但当前只能支持 I/O 等待候选，不能直接判定 SQLite 数据库是业务根因。',
+      '',
+      '## I/O 证据类型',
+      '',
+      '- 证据类型：D-state 主线程文件 I/O 命中 do_fsync 120ms；block I/O 队列等待可用，page fault 未见明显集中。',
+      '',
+      '## 文件/数据库/Provider 边界',
+      '',
+      '- File I/O 有 fsync 证据；SQLite/Room、SharedPreferences/QueuedWork、ContentProvider/CursorWindow/MediaProvider 证据缺失。',
+      '- 需要区分路径栈证据和 DB slice；当前不能把 fsync 自动升级为 SQLite 根因。',
+      '',
+      '## 置信度与补证',
+      '',
+      '- 置信度中等：D-state/fsync 与卡顿窗口重叠，但业务根因需要 SQLite/数据库 stack 或 provider-side trace 补证。',
+      '- 下一步建议采集 Java/native stack、SQLite/Room trace、block I/O 和路径信息。',
+    ].join('\n');
+
+    expect(assessFinalResultQuality({
+      result: result({ conclusion: richIoReport }),
+      query: '分析 SQLite fsync 为什么导致卡顿',
+      sceneType: 'io',
+    })).toBeUndefined();
+  });
+
   it('does not override runtime results that are already marked partial', () => {
     expect(assessFinalResultQuality({
       result: result({

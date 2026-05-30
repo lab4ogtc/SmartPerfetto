@@ -79,6 +79,25 @@ describe('proposeStrategyPatch', () => {
     expect(updated).toContain(result.phaseHintId);
   });
 
+  it('resolves strategy filenames through the registry for underscore scene ids', async () => {
+    fs.writeFileSync(
+      path.join(strategyDir, 'runtime-correctness.strategy.md'),
+      '---\nscene: runtime_correctness\nphase_hints:\n  - id: overview\n    keywords: [\'runtime\']\n    constraints: \'c\'\n    critical_tools: [\'t\']\n    critical: true\n---\n\nbody\n',
+    );
+
+    const result = await proposeStrategyPatch({
+      proposal,
+      scene: 'runtime_correctness',
+      jobId,
+      workingDir,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(path.basename(result.strategyFilePath)).toBe('runtime-correctness.strategy.md');
+    expect(fs.readFileSync(result.strategyFilePath, 'utf-8')).toContain(result.phaseHintId);
+  });
+
   it('returns render_failed for invalid proposals', async () => {
     const bad = { ...proposal, failureCategoryEnum: 'made_up' as never };
     const result = await proposeStrategyPatch({
