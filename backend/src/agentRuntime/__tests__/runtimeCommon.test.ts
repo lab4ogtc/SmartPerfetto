@@ -3,6 +3,8 @@
 // This file is part of SmartPerfetto. See LICENSE for details.
 
 import { describe, expect, it } from '@jest/globals';
+import fs from 'fs';
+import path from 'path';
 import {
   buildQuickConversationContext,
   buildRuntimeSessionMapKey,
@@ -13,6 +15,7 @@ import {
   providerScopeFromAnalysisOptions,
   setLruCacheEntry,
   toProtocolHypothesis,
+  type RuntimeHypothesisSource,
 } from '../runtimeCommon';
 
 describe('runtimeCommon', () => {
@@ -117,7 +120,12 @@ describe('runtimeCommon', () => {
     ]);
   });
 
-  it('maps runtime hypotheses into protocol hypotheses with provider-specific provenance', () => {
+  it.each<RuntimeHypothesisSource>([
+    'claude',
+    'openai',
+    'pi-agent-core',
+    'opencode',
+  ])('maps confirmed runtime hypotheses into protocol provenance for %s', (source) => {
     const protocol = toProtocolHypothesis({
       id: 'h1',
       statement: 'Main thread is CPU-bound',
@@ -126,12 +134,57 @@ describe('runtimeCommon', () => {
       evidence: 'art-1',
       formedAt: 10,
       resolvedAt: 20,
-    }, 'openai');
+    }, source);
 
-    expect(protocol.proposedBy).toBe('openai');
-    expect(protocol.supportingEvidence[0]).toMatchObject({
-      source: 'openai',
+    expect(protocol.proposedBy).toBe(source);
+    expect(protocol.relevantAgents).toEqual([source]);
+    expect(protocol.supportingEvidence).toEqual([expect.objectContaining({
+      source,
       description: 'art-1',
-    });
+    })]);
+    expect(protocol.contradictingEvidence).toEqual([]);
+  });
+
+  it('maps rejected runtime hypotheses into contradicting evidence only', () => {
+    const protocol = toProtocolHypothesis({
+      id: 'h2',
+      statement: 'GPU is blocked',
+      status: 'rejected',
+      basis: 'counterexample',
+      evidence: 'art-2',
+      formedAt: 30,
+      resolvedAt: 40,
+    }, 'opencode');
+
+    expect(protocol.supportingEvidence).toEqual([]);
+    expect(protocol.contradictingEvidence).toEqual([expect.objectContaining({
+      source: 'opencode',
+      description: 'art-2',
+    })]);
+  });
+
+  it('does not turn formed hypothesis evidence into protocol evidence', () => {
+    const protocol = toProtocolHypothesis({
+      id: 'h3',
+      statement: 'Binder is noisy',
+      status: 'formed',
+      basis: 'initial clue',
+      evidence: 'not-yet-proven',
+      formedAt: 50,
+    }, 'pi-agent-core');
+
+    expect(protocol.supportingEvidence).toEqual([]);
+    expect(protocol.contradictingEvidence).toEqual([]);
+    expect(protocol.updatedAt).toBe(50);
+  });
+
+  it('keeps concrete runtimes from reintroducing private hypothesis converters', () => {
+    const srcRoot = path.resolve(__dirname, '..');
+    const privateConverterPattern = /\bfunction\s+toProtocolHypothesis\s*\(/;
+
+    expect(fs.readFileSync(path.join(srcRoot, 'piAgentCoreRuntime.ts'), 'utf8'))
+      .not.toMatch(privateConverterPattern);
+    expect(fs.readFileSync(path.join(srcRoot, 'openCodeRuntime.ts'), 'utf8'))
+      .not.toMatch(privateConverterPattern);
   });
 });

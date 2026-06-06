@@ -22,6 +22,11 @@ import type { KnowledgeScope } from '../services/scopedKnowledgeStore';
 export const SDK_SESSION_FRESHNESS_MS = 4 * 60 * 60 * 1000;
 export const DEFAULT_RUNTIME_CACHE_LIMIT = 50;
 
+// Protocol provenance labels are shorter than runtime kind ids by design:
+// Claude/OpenAI use "claude"/"openai", while Pi/OpenCode match their public
+// runtime kind strings.
+export type RuntimeHypothesisSource = 'claude' | 'openai' | 'pi-agent-core' | 'opencode';
+
 export function providerScopeFromAnalysisOptions(options: AnalysisOptions): ProviderScope | undefined {
   if (!options.tenantId || !options.workspaceId) return undefined;
   return {
@@ -220,7 +225,7 @@ export function captureSkillDisplayEntities(
 
 export function toProtocolHypothesis(
   h: Hypothesis,
-  source: 'claude' | 'openai',
+  source: RuntimeHypothesisSource,
 ): ProtocolHypothesis {
   const statusMap: Record<string, ProtocolHypothesis['status']> = {
     formed: 'proposed',

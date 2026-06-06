@@ -15,7 +15,6 @@ import type {
   IOrchestrator,
 } from '../agent/core/orchestratorTypes';
 import type { Finding, StreamingUpdate } from '../agent/types';
-import type { Hypothesis as ProtocolHypothesis } from '../agent/types/agentProtocol';
 import type { ArchitectureInfo } from '../agent/detectors/types';
 import { createArchitectureDetector } from '../agent/detectors/architectureDetector';
 import { sessionContextManager } from '../agent/context/enhancedSessionContext';
@@ -68,6 +67,7 @@ import {
   captureSkillDisplayEntities,
   createRuntimeSkillNotesBudget,
   knowledgeScopeFromAnalysisOptions,
+  toProtocolHypothesis as toRuntimeProtocolHypothesis,
 } from './runtimeCommon';
 import {
   createJsonSchemaFromZodRawShape,
@@ -1086,43 +1086,6 @@ export async function runOpenCodePrompt(
   return { promptResponse, messagesResponse };
 }
 
-function toProtocolHypothesis(hypothesis: Hypothesis): ProtocolHypothesis {
-  const statusMap: Record<string, ProtocolHypothesis['status']> = {
-    formed: 'proposed',
-    confirmed: 'confirmed',
-    rejected: 'rejected',
-  };
-  const confidenceMap: Record<string, number> = { formed: 0.5, confirmed: 0.85, rejected: 0.1 };
-  return {
-    id: hypothesis.id,
-    description: hypothesis.statement,
-    status: statusMap[hypothesis.status] || 'proposed',
-    confidence: confidenceMap[hypothesis.status] ?? 0.5,
-    supportingEvidence: hypothesis.evidence && hypothesis.status === 'confirmed'
-      ? [{
-          id: `${hypothesis.id}-ev`,
-          type: 'observation',
-          description: hypothesis.evidence,
-          source: 'opencode',
-          strength: 0.8,
-        }]
-      : [],
-    contradictingEvidence: hypothesis.evidence && hypothesis.status === 'rejected'
-      ? [{
-          id: `${hypothesis.id}-ev`,
-          type: 'observation',
-          description: hypothesis.evidence,
-          source: 'opencode',
-          strength: 0.8,
-        }]
-      : [],
-    proposedBy: 'opencode',
-    relevantAgents: ['opencode'],
-    createdAt: hypothesis.formedAt,
-    updatedAt: hypothesis.resolvedAt || hypothesis.formedAt,
-  };
-}
-
 function estimateConfidence(findings: readonly Finding[], partial?: boolean): number {
   if (findings.length === 0) return partial ? 0.25 : 0.35;
   const avg = findings.reduce((sum, finding) => sum + (finding.confidence ?? 0.5), 0) / findings.length;
@@ -1401,7 +1364,7 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
       sessionId,
       success: true,
       findings,
-      hypotheses: prep.hypotheses.map(toProtocolHypothesis),
+      hypotheses: prep.hypotheses.map(h => toRuntimeProtocolHypothesis(h, 'opencode')),
       conclusion,
       confidence: estimateConfidence(findings, partial),
       rounds: 1,

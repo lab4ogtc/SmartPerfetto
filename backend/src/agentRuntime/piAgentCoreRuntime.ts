@@ -7,7 +7,6 @@ import { pathToFileURL } from 'url';
 import type { IOrchestrator } from '../agent/core/orchestratorTypes';
 import type { AnalysisOptions, AnalysisResult } from '../agent/core/orchestratorTypes';
 import type { Finding, StreamingUpdate } from '../agent/types';
-import type { Hypothesis as ProtocolHypothesis } from '../agent/types/agentProtocol';
 import { createArchitectureDetector } from '../agent/detectors/architectureDetector';
 import type { ArchitectureInfo } from '../agent/detectors/types';
 import { sessionContextManager } from '../agent/context/enhancedSessionContext';
@@ -73,6 +72,7 @@ import {
   captureSkillDisplayEntities,
   createRuntimeSkillNotesBudget,
   knowledgeScopeFromAnalysisOptions,
+  toProtocolHypothesis as toRuntimeProtocolHypothesis,
 } from './runtimeCommon';
 
 export type ExperimentalPiAgentCoreRuntimeKind = typeof EXPERIMENTAL_PI_AGENT_CORE_RUNTIME_KIND;
@@ -411,43 +411,6 @@ function estimateConfidence(findings: Finding[], partial: boolean): number {
   const avg = findings.reduce((sum, finding) => sum + (finding.confidence ?? 0.5), 0) / findings.length;
   const confidence = Math.min(1, Math.max(0, avg));
   return partial ? Math.min(confidence, 0.55) : confidence;
-}
-
-function toProtocolHypothesis(hypothesis: Hypothesis): ProtocolHypothesis {
-  const statusMap: Record<string, ProtocolHypothesis['status']> = {
-    formed: 'proposed',
-    confirmed: 'confirmed',
-    rejected: 'rejected',
-  };
-  const confidenceMap: Record<string, number> = { formed: 0.5, confirmed: 0.85, rejected: 0.1 };
-  return {
-    id: hypothesis.id,
-    description: hypothesis.statement,
-    status: statusMap[hypothesis.status] || 'proposed',
-    confidence: confidenceMap[hypothesis.status] ?? 0.5,
-    supportingEvidence: hypothesis.evidence && hypothesis.status === 'confirmed'
-      ? [{
-          id: `${hypothesis.id}-ev`,
-          type: 'observation',
-          description: hypothesis.evidence,
-          source: 'pi-agent-core',
-          strength: 0.8,
-        }]
-      : [],
-    contradictingEvidence: hypothesis.evidence && hypothesis.status === 'rejected'
-      ? [{
-          id: `${hypothesis.id}-ev`,
-          type: 'observation',
-          description: hypothesis.evidence,
-          source: 'pi-agent-core',
-          strength: 0.8,
-        }]
-      : [],
-    proposedBy: 'pi-agent-core',
-    relevantAgents: ['pi-agent-core'],
-    createdAt: hypothesis.formedAt,
-    updatedAt: hypothesis.resolvedAt || hypothesis.formedAt,
-  };
 }
 
 function summarizePiToolResult(result: unknown): string {
@@ -909,7 +872,7 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
         sessionId,
         success: false,
         findings: [],
-        hypotheses: prep.hypotheses.map(toProtocolHypothesis),
+        hypotheses: prep.hypotheses.map(h => toRuntimeProtocolHypothesis(h, 'pi-agent-core')),
         conclusion: errorMessage || 'Pi Agent Core analysis failed.',
         confidence: 0,
         rounds: Math.max(rounds, 1),
@@ -964,7 +927,7 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
       sessionId,
       success: true,
       findings,
-      hypotheses: prep.hypotheses.map(toProtocolHypothesis),
+      hypotheses: prep.hypotheses.map(h => toRuntimeProtocolHypothesis(h, 'pi-agent-core')),
       conclusion,
       confidence: estimateConfidence(findings, partial),
       rounds: Math.max(rounds, 1),

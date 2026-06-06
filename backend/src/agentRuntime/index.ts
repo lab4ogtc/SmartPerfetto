@@ -79,4 +79,5 @@ export {
   providerScopeFromAnalysisOptions,
   setLruCacheEntry,
   toProtocolHypothesis,
+  type RuntimeHypothesisSource,
 } from './runtimeCommon';
