@@ -103,11 +103,8 @@ export const PRODUCTION_RUNTIME_DESCRIPTORS = [
     capabilities: createCapabilities(PI_AGENT_CORE_RUNTIME_KIND, 'Pi Agent Core'),
     createOrchestrator: input => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { PiAgentCoreRuntime } = require('./piAgentCoreRuntime') as typeof import('./piAgentCoreRuntime');
-      return new PiAgentCoreRuntime(
-        input.traceProcessorService,
-        input.selection as RuntimeSelection<typeof PI_AGENT_CORE_RUNTIME_KIND>,
-      );
+      const { createPiAgentCoreRuntime } = require('./piAgentCoreRuntime') as typeof import('./piAgentCoreRuntime');
+      return createPiAgentCoreRuntime(input);
     },
     getDiagnostics: ({ env, kind }: RuntimeDiagnosticsInput<typeof PI_AGENT_CORE_RUNTIME_KIND>) => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -125,7 +122,7 @@ export const PRODUCTION_RUNTIME_DESCRIPTORS = [
     createOrchestrator: input => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const { OpenCodeRuntime } = require('./openCodeRuntime') as typeof import('./openCodeRuntime');
-      return new OpenCodeRuntime(input);
+      return new OpenCodeRuntime(input, { env: input.env });
     },
     getDiagnostics: ({ env, kind }: RuntimeDiagnosticsInput<typeof OPENCODE_RUNTIME_KIND>) => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires

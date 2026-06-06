@@ -10,6 +10,7 @@ import {
   type ExperimentalAgentRuntimeKind,
   resolveExperimentalAgentRuntimeSelection,
 } from './experimentalRuntime';
+import { createRuntimeFactoryEnv } from './runtimeFactoryEnv';
 import { createRuntimeRegistryForSelection } from './runtimeRegistry';
 
 export type BackendAgentRuntimeKind = AgentRuntimeKind;
@@ -94,5 +95,7 @@ export function createAgentOrchestrator(input: CreateAgentOrchestratorInput): IO
   return registry.createOrchestrator(selection.kind, {
     traceProcessorService: input.traceProcessorService,
     selection,
+    env: createRuntimeFactoryEnv(selection, input.providerScope),
+    providerScope: input.providerScope,
   });
 }

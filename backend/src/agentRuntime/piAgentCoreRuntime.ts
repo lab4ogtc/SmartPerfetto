@@ -1343,13 +1343,17 @@ export function createPiAgentCoreRuntime(
   input: RuntimeFactoryInput,
   options: PiAgentCoreRuntimeOptions = {},
 ): IOrchestrator {
+  const runtimeOptions: PiAgentCoreRuntimeOptions = {
+    ...options,
+    env: options.env ?? input.env,
+  };
   return new PiAgentCoreRuntime(
     input.traceProcessorService,
     input.selection.kind === EXPERIMENTAL_PI_AGENT_CORE_RUNTIME_KIND ||
       input.selection.kind === PI_AGENT_CORE_RUNTIME_KIND
       ? input.selection as RuntimeSelection<PiAgentCoreRuntimeKind>
       : { kind: PI_AGENT_CORE_RUNTIME_KIND, source: 'env' },
-    options,
+    runtimeOptions,
   );
 }
 

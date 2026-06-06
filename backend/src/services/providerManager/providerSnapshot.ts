@@ -3,6 +3,7 @@
 // This file is part of SmartPerfetto. See LICENSE for details.
 
 import crypto from 'crypto';
+import { mergeIsolatedProviderEnv } from './envIsolation';
 import type { ProviderService } from './providerService';
 import type { AgentRuntimeKind, ProviderConfig, ProviderScope, ProviderTuning } from './types';
 
@@ -36,40 +37,63 @@ export interface ProviderRuntimeSnapshotResolution {
   snapshotHash: string;
 }
 
-const SENSITIVE_CONNECTION_FIELDS: Array<keyof ProviderConfig['connection']> = [
+const CLAUDE_SENSITIVE_CONNECTION_FIELDS: Array<keyof ProviderConfig['connection']> = [
   'apiKey',
   'claudeApiKey',
   'claudeAuthToken',
-  'openaiApiKey',
-  'piAgentCoreModelJson',
-  'openCodeModelJson',
   'awsBearerToken',
   'awsAccessKeyId',
   'awsSecretAccessKey',
   'awsSessionToken',
 ];
 
-const SECRET_ENV_KEYS = [
+const OPENAI_SENSITIVE_CONNECTION_FIELDS: Array<keyof ProviderConfig['connection']> = [
+  'apiKey',
+  'openaiApiKey',
+];
+
+const PI_AGENT_CORE_SENSITIVE_CONNECTION_FIELDS: Array<keyof ProviderConfig['connection']> = [
+  'piAgentCoreModelJson',
+];
+
+const OPENCODE_SENSITIVE_CONNECTION_FIELDS: Array<keyof ProviderConfig['connection']> = [
+  'apiKey',
+  'openaiApiKey',
+  'openCodeModelJson',
+];
+
+const CLAUDE_SECRET_ENV_KEYS = [
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_AUTH_TOKEN',
-  'OPENAI_API_KEY',
   'AWS_BEARER_TOKEN_BEDROCK',
   'AWS_ACCESS_KEY_ID',
   'AWS_SECRET_ACCESS_KEY',
   'AWS_SESSION_TOKEN',
 ];
 
-const PROVIDER_RUNTIME_ENV_KEYS = [
+const OPENAI_SECRET_ENV_KEYS = [
+  'OPENAI_API_KEY',
+];
+
+const PI_AGENT_CORE_SECRET_ENV_KEYS = [
+  'SMARTPERFETTO_PI_AGENT_CORE_MODEL_JSON',
+  'SMARTPERFETTO_PI_AGENT_CORE_SYSTEM_PROMPT',
+];
+
+const OPENCODE_SECRET_ENV_KEYS = [
+  'OPENAI_API_KEY',
+  'SMARTPERFETTO_OPENCODE_MODEL_JSON',
+  'SMARTPERFETTO_OPENCODE_SYSTEM_PROMPT',
+  'SMARTPERFETTO_OPENCODE_MCP_COMMAND_JSON',
+];
+
+const CLAUDE_RUNTIME_ENV_KEYS = [
   'SMARTPERFETTO_AGENT_RUNTIME',
   'CLAUDE_MODEL',
   'CLAUDE_LIGHT_MODEL',
   'CLAUDE_SUB_AGENT_MODEL',
-  'OPENAI_MODEL',
-  'OPENAI_LIGHT_MODEL',
   'ANTHROPIC_BASE_URL',
   'ANTHROPIC_BEDROCK_BASE_URL',
-  'OPENAI_BASE_URL',
-  'OPENAI_AGENTS_PROTOCOL',
   'CLAUDE_CODE_USE_BEDROCK',
   'AWS_REGION',
   'AWS_PROFILE',
@@ -85,10 +109,40 @@ const PROVIDER_RUNTIME_ENV_KEYS = [
   'CLAUDE_CLASSIFIER_TIMEOUT_MS',
   'CLAUDE_ENABLE_SUB_AGENTS',
   'CLAUDE_ENABLE_VERIFICATION',
+];
+
+const OPENAI_RUNTIME_ENV_KEYS = [
+  'SMARTPERFETTO_AGENT_RUNTIME',
+  'OPENAI_MODEL',
+  'OPENAI_LIGHT_MODEL',
+  'OPENAI_BASE_URL',
+  'OPENAI_AGENTS_PROTOCOL',
   'OPENAI_MAX_TURNS',
   'OPENAI_FULL_PER_TURN_MS',
   'OPENAI_QUICK_PER_TURN_MS',
   'OPENAI_CLASSIFIER_TIMEOUT_MS',
+];
+
+const PI_AGENT_CORE_RUNTIME_ENV_KEYS = [
+  'SMARTPERFETTO_AGENT_RUNTIME',
+  'SMARTPERFETTO_PI_AGENT_CORE_MODULE_PATH',
+  'SMARTPERFETTO_PI_AGENT_CORE_FAKE_STREAM',
+];
+
+const OPENCODE_RUNTIME_ENV_KEYS = [
+  'SMARTPERFETTO_AGENT_RUNTIME',
+  'OPENAI_MODEL',
+  'OPENAI_LIGHT_MODEL',
+  'OPENAI_BASE_URL',
+  'SMARTPERFETTO_OPENCODE_MODEL',
+  'SMARTPERFETTO_OPENCODE_SDK_MODULE_PATH',
+  'SMARTPERFETTO_OPENCODE_PROJECT_DIR',
+  'SMARTPERFETTO_OPENCODE_SERVER_PORT',
+  'SMARTPERFETTO_OPENCODE_SERVER_TIMEOUT_MS',
+  'SMARTPERFETTO_OPENCODE_PROMPT_TIMEOUT_MS',
+  'SMARTPERFETTO_OPENCODE_ENABLE_STANDALONE_MCP',
+  'SMARTPERFETTO_OPENCODE_MCP_TIMEOUT_MS',
+  'SMARTPERFETTO_OPENCODE_REAL_ANALYSIS',
 ];
 
 type ResolvedTimeoutKey = keyof ProviderRuntimeSnapshot['resolvedTimeouts'];
@@ -157,6 +211,50 @@ function parseRuntimeEnv(value: string | undefined): AgentRuntimeKind | undefine
   }
 }
 
+function runtimeEnvironmentKeys(runtimeKind: AgentRuntimeKind): string[] {
+  switch (runtimeKind) {
+    case 'openai-agents-sdk':
+      return OPENAI_RUNTIME_ENV_KEYS;
+    case 'pi-agent-core':
+      return PI_AGENT_CORE_RUNTIME_ENV_KEYS;
+    case 'opencode':
+      return OPENCODE_RUNTIME_ENV_KEYS;
+    case 'claude-agent-sdk':
+    default:
+      return CLAUDE_RUNTIME_ENV_KEYS;
+  }
+}
+
+function runtimeSecretEnvKeys(runtimeKind: AgentRuntimeKind): string[] {
+  switch (runtimeKind) {
+    case 'openai-agents-sdk':
+      return OPENAI_SECRET_ENV_KEYS;
+    case 'pi-agent-core':
+      return PI_AGENT_CORE_SECRET_ENV_KEYS;
+    case 'opencode':
+      return OPENCODE_SECRET_ENV_KEYS;
+    case 'claude-agent-sdk':
+    default:
+      return CLAUDE_SECRET_ENV_KEYS;
+  }
+}
+
+function runtimeSensitiveConnectionFields(
+  runtimeKind: AgentRuntimeKind,
+): Array<keyof ProviderConfig['connection']> {
+  switch (runtimeKind) {
+    case 'openai-agents-sdk':
+      return OPENAI_SENSITIVE_CONNECTION_FIELDS;
+    case 'pi-agent-core':
+      return PI_AGENT_CORE_SENSITIVE_CONNECTION_FIELDS;
+    case 'opencode':
+      return OPENCODE_SENSITIVE_CONNECTION_FIELDS;
+    case 'claude-agent-sdk':
+    default:
+      return CLAUDE_SENSITIVE_CONNECTION_FIELDS;
+  }
+}
+
 function pickResolvedTimeouts(
   tuning: ProviderTuning | undefined,
   runtimeKind: AgentRuntimeKind,
@@ -184,7 +282,7 @@ function envRuntimeSnapshot(runtimeOverride?: AgentRuntimeKind): ProviderRuntime
   const runtimeKind = runtimeOverride
     ?? parseRuntimeEnv(process.env.SMARTPERFETTO_AGENT_RUNTIME)
     ?? 'claude-agent-sdk';
-  const env = pickEnv(process.env, [...PROVIDER_RUNTIME_ENV_KEYS, ...SECRET_ENV_KEYS]);
+  const env = process.env;
   const timeoutPrefix = runtimeKind === 'openai-agents-sdk' || runtimeKind === 'opencode'
     ? 'OPENAI'
     : 'CLAUDE';
@@ -208,7 +306,7 @@ function envRuntimeSnapshot(runtimeOverride?: AgentRuntimeKind): ProviderRuntime
     : runtimeKind === 'claude-agent-sdk'
       ? 'CLAUDE'
       : undefined;
-  const nonSecretEnv = pickEnv(process.env, PROVIDER_RUNTIME_ENV_KEYS);
+  const nonSecretEnv = pickEnv(env, runtimeEnvironmentKeys(runtimeKind));
   return {
     version: 1,
     providerId: null,
@@ -225,13 +323,22 @@ function envRuntimeSnapshot(runtimeOverride?: AgentRuntimeKind): ProviderRuntime
     baseUrl: inferBaseUrl(runtimeKind, nonSecretEnv),
     openaiProtocol: runtimeKind === 'openai-agents-sdk' ? env.OPENAI_AGENTS_PROTOCOL : undefined,
     environment: nonSecretEnv,
-    secretVersion: hashSecretEntries(SECRET_ENV_KEYS.map((key) => [key, process.env[key]])),
+    secretVersion: hashSecretEntries(runtimeSecretEnvKeys(runtimeKind).map((key) => [key, env[key]])),
   };
 }
 
-function providerSecretVersion(provider: ProviderConfig): string {
+function providerSecretVersion(
+  provider: ProviderConfig,
+  runtimeKind: AgentRuntimeKind,
+  env: Record<string, string | undefined>,
+): string {
   return hashSecretEntries(
-    SENSITIVE_CONNECTION_FIELDS.map((field) => [field, provider.connection[field] as string | undefined]),
+    [
+      ...runtimeSensitiveConnectionFields(runtimeKind)
+        .map((field) => [field, provider.connection[field] as string | undefined] as [string, string | undefined]),
+      ...runtimeSecretEnvKeys(runtimeKind)
+        .map((key) => [`env:${key}`, env[key]] as [string, string | undefined]),
+    ],
   );
 }
 
@@ -241,8 +348,9 @@ function providerRuntimeSnapshot(
   providerScope?: ProviderScope,
 ): ProviderRuntimeSnapshot {
   const runtimeKind = providerService.resolveAgentRuntime(provider);
-  const env = providerService.getEnvForProvider(provider.id, providerScope) ?? {};
-  const nonSecretEnv = pickEnv(env, PROVIDER_RUNTIME_ENV_KEYS);
+  const providerEnv = providerService.getEnvForProvider(provider.id, providerScope) ?? null;
+  const env = mergeIsolatedProviderEnv(process.env, providerEnv);
+  const nonSecretEnv = pickEnv(env, runtimeEnvironmentKeys(runtimeKind));
   return {
     version: 1,
     providerId: provider.id,
@@ -259,7 +367,7 @@ function providerRuntimeSnapshot(
       ? providerService.resolveOpenAIProtocol(provider)
       : undefined,
     environment: nonSecretEnv,
-    secretVersion: providerSecretVersion(provider),
+    secretVersion: providerSecretVersion(provider, runtimeKind, env),
   };
 }
 

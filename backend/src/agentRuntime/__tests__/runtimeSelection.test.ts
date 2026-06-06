@@ -7,6 +7,7 @@ import fs from 'fs';
 import path from 'path';
 
 let provider: any;
+let providerEnv: Record<string, string> | null;
 
 function createMockOrchestrator(runtime: string): any {
   const orchestrator = new EventEmitter() as any;
@@ -40,6 +41,7 @@ jest.mock('../../services/providerManager', () => ({
   getProviderService: () => ({
     getRawProvider: jest.fn(() => provider),
     getRawEffectiveProvider: jest.fn(() => provider),
+    getEnvForProvider: jest.fn(() => providerEnv),
     resolveAgentRuntime: jest.fn((p: any) => p.connection.agentRuntime),
   }),
 }));
@@ -51,6 +53,7 @@ describe('resolveAgentRuntimeSelection', () => {
 
   beforeEach(() => {
     provider = undefined;
+    providerEnv = null;
     delete process.env.SMARTPERFETTO_AGENT_RUNTIME;
     delete process.env.SMARTPERFETTO_ENABLE_EXPERIMENTAL_AGENT_RUNTIME;
     delete process.env.SMARTPERFETTO_EXPERIMENTAL_AGENT_RUNTIME;
@@ -352,6 +355,107 @@ describe('resolveAgentRuntimeSelection', () => {
       },
     );
     expect(createClaudeRuntime).not.toHaveBeenCalled();
+  });
+
+  it('passes provider-isolated env overlay into the public Pi runtime', async () => {
+    provider = {
+      id: 'provider-pi',
+      name: 'Pi Provider',
+      type: 'custom',
+      connection: { agentRuntime: 'pi-agent-core' },
+    };
+    providerEnv = {
+      SMARTPERFETTO_AGENT_RUNTIME: 'pi-agent-core',
+      SMARTPERFETTO_PI_AGENT_CORE_MODULE_PATH: '/provider/pi-agent-core.mjs',
+      SMARTPERFETTO_PI_AGENT_CORE_MODEL_JSON: '{"id":"provider-pi"}',
+      SMARTPERFETTO_PI_AGENT_CORE_SYSTEM_PROMPT: 'provider pi prompt',
+    };
+    const originalProcessPiModule = process.env.SMARTPERFETTO_PI_AGENT_CORE_MODULE_PATH;
+    const originalProcessOpenCodeProject = process.env.SMARTPERFETTO_OPENCODE_PROJECT_DIR;
+    process.env.SMARTPERFETTO_PI_AGENT_CORE_MODULE_PATH = '/process/pi-agent-core.mjs';
+    process.env.SMARTPERFETTO_OPENCODE_PROJECT_DIR = '/process/opencode';
+    const piRuntime = createMockOrchestrator('pi');
+    const createPiAgentCoreRuntime = jest.fn((_input: any) => piRuntime);
+    jest.doMock('../piAgentCoreRuntime', () => ({ createPiAgentCoreRuntime }));
+
+    try {
+      const traceProcessorService = { kind: 'trace-processor' } as any;
+      const { createAgentOrchestrator } = await import('../runtimeSelection');
+      const orchestrator = createAgentOrchestrator({ traceProcessorService, providerId: 'provider-pi' });
+
+      expect(orchestrator).toBe(piRuntime);
+      expectDirectUpdateEvents(orchestrator);
+      const runtimeInput = createPiAgentCoreRuntime.mock.calls[0][0] as any;
+      expect(runtimeInput.selection).toMatchObject({
+        kind: 'pi-agent-core',
+        source: 'provider',
+        providerId: 'provider-pi',
+      });
+      expect(runtimeInput.env.SMARTPERFETTO_PI_AGENT_CORE_MODULE_PATH)
+        .toBe('/provider/pi-agent-core.mjs');
+      expect(runtimeInput.env.SMARTPERFETTO_PI_AGENT_CORE_MODEL_JSON)
+        .toBe('{"id":"provider-pi"}');
+      expect(runtimeInput.env.SMARTPERFETTO_OPENCODE_PROJECT_DIR).toBeUndefined();
+    } finally {
+      if (originalProcessPiModule === undefined) delete process.env.SMARTPERFETTO_PI_AGENT_CORE_MODULE_PATH;
+      else process.env.SMARTPERFETTO_PI_AGENT_CORE_MODULE_PATH = originalProcessPiModule;
+      if (originalProcessOpenCodeProject === undefined) delete process.env.SMARTPERFETTO_OPENCODE_PROJECT_DIR;
+      else process.env.SMARTPERFETTO_OPENCODE_PROJECT_DIR = originalProcessOpenCodeProject;
+      jest.dontMock('../piAgentCoreRuntime');
+    }
+  });
+
+  it('passes provider-isolated env overlay into the public OpenCode runtime', async () => {
+    provider = {
+      id: 'provider-opencode',
+      name: 'OpenCode Provider',
+      type: 'custom',
+      connection: { agentRuntime: 'opencode' },
+    };
+    providerEnv = {
+      SMARTPERFETTO_AGENT_RUNTIME: 'opencode',
+      OPENAI_BASE_URL: 'https://provider-opencode.example/v1',
+      OPENAI_MODEL: 'opencode-provider-model',
+      SMARTPERFETTO_OPENCODE_SDK_MODULE_PATH: '/provider/opencode-sdk.mjs',
+      SMARTPERFETTO_OPENCODE_PROJECT_DIR: '/provider/opencode-project',
+      SMARTPERFETTO_OPENCODE_MCP_COMMAND_JSON: '["node","provider-mcp.js"]',
+    };
+    const originalProcessOpenCodeProject = process.env.SMARTPERFETTO_OPENCODE_PROJECT_DIR;
+    const originalProcessPiModule = process.env.SMARTPERFETTO_PI_AGENT_CORE_MODULE_PATH;
+    process.env.SMARTPERFETTO_OPENCODE_PROJECT_DIR = '/process/opencode';
+    process.env.SMARTPERFETTO_PI_AGENT_CORE_MODULE_PATH = '/process/pi-agent-core.mjs';
+    const openCodeRuntime = createMockOrchestrator('opencode');
+    const OpenCodeRuntime = jest.fn((_input: any, _options: any) => openCodeRuntime);
+    jest.doMock('../openCodeRuntime', () => ({ OpenCodeRuntime }));
+
+    try {
+      const traceProcessorService = { kind: 'trace-processor' } as any;
+      const { createAgentOrchestrator } = await import('../runtimeSelection');
+      const orchestrator = createAgentOrchestrator({
+        traceProcessorService,
+        providerId: 'provider-opencode',
+      });
+
+      expect(orchestrator).toBe(openCodeRuntime);
+      expectDirectUpdateEvents(orchestrator);
+      const [runtimeInput, runtimeOptions] = OpenCodeRuntime.mock.calls[0] as any[];
+      expect(runtimeInput.selection).toMatchObject({
+        kind: 'opencode',
+        source: 'provider',
+        providerId: 'provider-opencode',
+      });
+      expect(runtimeOptions.env.SMARTPERFETTO_OPENCODE_PROJECT_DIR)
+        .toBe('/provider/opencode-project');
+      expect(runtimeOptions.env.SMARTPERFETTO_OPENCODE_MCP_COMMAND_JSON)
+        .toBe('["node","provider-mcp.js"]');
+      expect(runtimeOptions.env.SMARTPERFETTO_PI_AGENT_CORE_MODULE_PATH).toBeUndefined();
+    } finally {
+      if (originalProcessOpenCodeProject === undefined) delete process.env.SMARTPERFETTO_OPENCODE_PROJECT_DIR;
+      else process.env.SMARTPERFETTO_OPENCODE_PROJECT_DIR = originalProcessOpenCodeProject;
+      if (originalProcessPiModule === undefined) delete process.env.SMARTPERFETTO_PI_AGENT_CORE_MODULE_PATH;
+      else process.env.SMARTPERFETTO_PI_AGENT_CORE_MODULE_PATH = originalProcessPiModule;
+      jest.dontMock('../openCodeRuntime');
+    }
   });
 
   it('creates the hidden experimental runtime as the direct orchestrator', async () => {

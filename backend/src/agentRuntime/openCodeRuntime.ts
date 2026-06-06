@@ -57,7 +57,7 @@ import { RPC_ERROR_CODES } from '../agentv3/standaloneMcpServer';
 import { applyFinalResultQualityGate } from '../services/finalResultQualityGate';
 import { getExtendedKnowledgeBase } from '../services/sqlKnowledgeBase';
 import { sanitizeCodeAwareText } from '../services/security/codeAwareOutputRegistry';
-import { getProviderService, type ProviderConfig } from '../services/providerManager';
+import { getProviderService, type ProviderConfig, type ProviderScope } from '../services/providerManager';
 import type { RuntimeSelection } from './runtimeSelection';
 import type { EngineCapabilities } from './runtimeDescriptorTypes';
 import type { RuntimeEngineDefinition, RuntimeFactoryInput } from './runtimeRegistry';
@@ -795,9 +795,12 @@ function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
-function getProviderForSelection(selection: RuntimeSelection<string>): ProviderConfig | undefined {
+function getProviderForSelection(
+  selection: RuntimeSelection<string>,
+  providerScope?: ProviderScope,
+): ProviderConfig | undefined {
   if (selection.source !== 'provider' || !selection.providerId) return undefined;
-  return getProviderService().getRawProvider(selection.providerId);
+  return getProviderService().getRawProvider(selection.providerId, providerScope);
 }
 
 function createOpenCodeProviderConfig(
@@ -837,8 +840,9 @@ function createOpenCodeProviderConfig(
 function resolveOpenCodeModelConfig(
   env: EnvLike,
   selection: RuntimeSelection<string>,
+  providerScope?: ProviderScope,
 ): OpenCodeModelConfig {
-  const provider = getProviderForSelection(selection);
+  const provider = getProviderForSelection(selection, providerScope);
   const providerModelJson = provider?.connection.openCodeModelJson?.trim();
   const rawModel = providerModelJson || env[OPENCODE_MODEL_JSON_ENV]?.trim();
   if (rawModel) {
@@ -1134,7 +1138,7 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
     options: OpenCodeRuntimeOptions = {},
   ) {
     super();
-    this.env = options.env ?? process.env;
+    this.env = options.env ?? input.env ?? process.env;
     this.moduleLoader = options.moduleLoader ?? loadOpenCodeSdkModule;
     this.selection = input.selection as RuntimeSelection<OpenCodeRuntimeKind>;
   }
@@ -1246,7 +1250,7 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
   ): Promise<AnalysisResult> {
     const startedAt = Date.now();
     const sdk = await this.moduleLoader(this.env);
-    const modelConfig = resolveOpenCodeModelConfig(this.env, this.selection);
+    const modelConfig = resolveOpenCodeModelConfig(this.env, this.selection, this.input.providerScope);
     const prep = await this.prepareAnalysis(query, sessionId, traceId, options);
     const abortController = new AbortController();
     const bridge = await startOpenCodeMcpBridge(
@@ -1631,7 +1635,7 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
     };
     const sharedSystemPrompt = buildSystemPrompt(analysisContext);
     const extraSystemPrompt = normalizeOptionalString(
-      getProviderForSelection(this.selection)?.connection.openCodeSystemPrompt,
+      getProviderForSelection(this.selection, this.input.providerScope)?.connection.openCodeSystemPrompt,
     ) || normalizeOptionalString(this.env[OPENCODE_SYSTEM_PROMPT_ENV]);
     return {
       systemPrompt: extraSystemPrompt

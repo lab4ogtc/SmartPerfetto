@@ -6,6 +6,7 @@ import type { IOrchestrator } from '../agent/core/orchestratorTypes';
 import type { TraceProcessorService } from '../services/traceProcessorService';
 import type { RuntimeSelection } from './runtimeSelection';
 import type { AgentRuntimeKind } from './runtimeKinds';
+import type { ProviderScope } from '../services/providerManager';
 
 export interface EngineCapabilities {
   kind: string;
@@ -17,6 +18,8 @@ export interface EngineCapabilities {
 export interface RuntimeFactoryInput {
   traceProcessorService: TraceProcessorService;
   selection: RuntimeSelection<string>;
+  env?: Record<string, string | undefined>;
+  providerScope?: ProviderScope;
 }
 
 export interface RuntimeEngineDefinition {
