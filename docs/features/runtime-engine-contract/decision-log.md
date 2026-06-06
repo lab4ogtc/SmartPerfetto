@@ -353,6 +353,11 @@ Rationale:
 
 ### D014 - AnalysisHarness Becomes Default Wrapper With Env Kill Switch
 
+Superseded: `docs/architecture/agent-runtime-abstraction-review.md` WS-D removed
+the default `AnalysisHarness` wrapper and `SMARTPERFETTO_ANALYSIS_HARNESS`
+rollback switch because the wrapper had no concrete consumer. This entry is
+kept as historical context, not current runtime selection behavior.
+
 Time: 2026-05-31 20:52:34 CST
 Milestone: M7 prerequisite
 

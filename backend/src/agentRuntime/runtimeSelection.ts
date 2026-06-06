@@ -5,7 +5,6 @@
 import type { TraceProcessorService } from '../services/traceProcessorService';
 import type { IOrchestrator } from '../agent/core/orchestratorTypes';
 import { getProviderService, type AgentRuntimeKind, type ProviderScope } from '../services/providerManager';
-import { createAnalysisHarness } from './analysisHarness';
 import { isProductionAgentRuntimeKind } from './runtimeKinds';
 import {
   type ExperimentalAgentRuntimeKind,
@@ -15,7 +14,6 @@ import { createRuntimeRegistryForSelection } from './runtimeRegistry';
 
 export type BackendAgentRuntimeKind = AgentRuntimeKind;
 export type ResolvedAgentRuntimeKind = BackendAgentRuntimeKind | ExperimentalAgentRuntimeKind;
-export const ANALYSIS_HARNESS_ENV = 'SMARTPERFETTO_ANALYSIS_HARNESS';
 
 export interface RuntimeSelection<K extends string = ResolvedAgentRuntimeKind> {
   kind: K;
@@ -39,13 +37,6 @@ export interface CreateAgentOrchestratorInput {
 
 function parseRuntimeEnv(value: string | undefined): BackendAgentRuntimeKind | undefined {
   return isProductionAgentRuntimeKind(value) ? value : undefined;
-}
-
-export function isAnalysisHarnessEnabled(
-  env: Record<string, string | undefined> = process.env,
-): boolean {
-  const value = env[ANALYSIS_HARNESS_ENV]?.trim().toLowerCase();
-  return value !== '0' && value !== 'false' && value !== 'off';
 }
 
 export function resolveAgentRuntimeSelection(
@@ -100,11 +91,8 @@ export function resolveAgentRuntimeSelection(
 export function createAgentOrchestrator(input: CreateAgentOrchestratorInput): IOrchestrator {
   const selection = resolveAgentRuntimeSelection(input.providerId, input.runtimeOverride, input.providerScope);
   const registry = createRuntimeRegistryForSelection(selection.kind);
-  const engine = registry.createOrchestrator(selection.kind, {
+  return registry.createOrchestrator(selection.kind, {
     traceProcessorService: input.traceProcessorService,
     selection,
   });
-  return isAnalysisHarnessEnabled()
-    ? createAnalysisHarness({ engine })
-    : engine;
 }

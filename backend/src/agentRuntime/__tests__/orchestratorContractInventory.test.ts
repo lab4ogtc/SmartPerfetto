@@ -113,11 +113,20 @@ describe('IOrchestrator contract inventory', () => {
     ]);
   });
 
-  it('tracks source consumers for optional hooks before the harness split', () => {
+  it('tracks source consumers for optional hooks on the route-facing facade', () => {
     for (const hook of CONSUMED_OPTIONAL_HOOKS) {
       expect(sourceMentionsHook(hook)).toBe(true);
     }
     expect(sourceMentionsHook('restoreSessionMapping')).toBe(false);
     expect(sourceMentionsHook('getProgressTracker')).toBe(false);
+  });
+
+  it('keeps the deleted analysis harness out of agentRuntime sources', () => {
+    const agentRuntimeRoot = path.join(__dirname, '..');
+    const implementationPath = path.join(agentRuntimeRoot, 'analysisHarness.ts');
+    const testPath = path.join(agentRuntimeRoot, '__tests__/analysisHarness.test.ts');
+
+    expect(fs.existsSync(implementationPath)).toBe(false);
+    expect(fs.existsSync(testPath)).toBe(false);
   });
 });

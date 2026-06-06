@@ -3,6 +3,8 @@
 // This file is part of SmartPerfetto. See LICENSE for details.
 
 import { EventEmitter } from 'events';
+import fs from 'fs';
+import path from 'path';
 
 let provider: any;
 
@@ -12,6 +14,26 @@ function createMockOrchestrator(runtime: string): any {
   orchestrator.analyze = jest.fn();
   orchestrator.reset = jest.fn();
   return orchestrator;
+}
+
+function expectEventEmitterContract(orchestrator: any): void {
+  expect(typeof orchestrator.on).toBe('function');
+  expect(typeof orchestrator.off).toBe('function');
+  expect(typeof orchestrator.emit).toBe('function');
+  expect(typeof orchestrator.removeAllListeners).toBe('function');
+}
+
+function expectDirectUpdateEvents(orchestrator: any): void {
+  expectEventEmitterContract(orchestrator);
+  const updates: any[] = [];
+  const handler = (update: any) => updates.push(update);
+  const update = { type: 'progress', message: 'runtime progress' };
+
+  orchestrator.on('update', handler);
+  orchestrator.emit('update', update);
+  orchestrator.off('update', handler);
+
+  expect(updates).toEqual([update]);
 }
 
 jest.mock('../../services/providerManager', () => ({
@@ -24,14 +46,12 @@ jest.mock('../../services/providerManager', () => ({
 
 describe('resolveAgentRuntimeSelection', () => {
   const originalRuntime = process.env.SMARTPERFETTO_AGENT_RUNTIME;
-  const originalHarness = process.env.SMARTPERFETTO_ANALYSIS_HARNESS;
   const originalExperimentalEnabled = process.env.SMARTPERFETTO_ENABLE_EXPERIMENTAL_AGENT_RUNTIME;
   const originalExperimentalRuntime = process.env.SMARTPERFETTO_EXPERIMENTAL_AGENT_RUNTIME;
 
   beforeEach(() => {
     provider = undefined;
     delete process.env.SMARTPERFETTO_AGENT_RUNTIME;
-    delete process.env.SMARTPERFETTO_ANALYSIS_HARNESS;
     delete process.env.SMARTPERFETTO_ENABLE_EXPERIMENTAL_AGENT_RUNTIME;
     delete process.env.SMARTPERFETTO_EXPERIMENTAL_AGENT_RUNTIME;
     jest.resetModules();
@@ -40,8 +60,6 @@ describe('resolveAgentRuntimeSelection', () => {
   afterEach(() => {
     if (originalRuntime === undefined) delete process.env.SMARTPERFETTO_AGENT_RUNTIME;
     else process.env.SMARTPERFETTO_AGENT_RUNTIME = originalRuntime;
-    if (originalHarness === undefined) delete process.env.SMARTPERFETTO_ANALYSIS_HARNESS;
-    else process.env.SMARTPERFETTO_ANALYSIS_HARNESS = originalHarness;
     if (originalExperimentalEnabled === undefined) delete process.env.SMARTPERFETTO_ENABLE_EXPERIMENTAL_AGENT_RUNTIME;
     else process.env.SMARTPERFETTO_ENABLE_EXPERIMENTAL_AGENT_RUNTIME = originalExperimentalEnabled;
     if (originalExperimentalRuntime === undefined) delete process.env.SMARTPERFETTO_EXPERIMENTAL_AGENT_RUNTIME;
@@ -294,8 +312,8 @@ describe('resolveAgentRuntimeSelection', () => {
     const { createAgentOrchestrator } = await import('../runtimeSelection');
     const orchestrator = createAgentOrchestrator({ traceProcessorService });
 
-    expect(orchestrator).not.toBe(claudeRuntime);
-    expect((orchestrator as any).engine).toBe(claudeRuntime);
+    expect(orchestrator).toBe(claudeRuntime);
+    expectDirectUpdateEvents(orchestrator);
     expect(createClaudeRuntime).toHaveBeenCalledWith(
       traceProcessorService,
       undefined,
@@ -321,8 +339,8 @@ describe('resolveAgentRuntimeSelection', () => {
     const { createAgentOrchestrator } = await import('../runtimeSelection');
     const orchestrator = createAgentOrchestrator({ traceProcessorService });
 
-    expect(orchestrator).not.toBe(openAIRuntime);
-    expect((orchestrator as any).engine).toBe(openAIRuntime);
+    expect(orchestrator).toBe(openAIRuntime);
+    expectDirectUpdateEvents(orchestrator);
     expect(createOpenAIRuntime).toHaveBeenCalledWith(
       traceProcessorService,
       {
@@ -336,25 +354,7 @@ describe('resolveAgentRuntimeSelection', () => {
     expect(createClaudeRuntime).not.toHaveBeenCalled();
   });
 
-  it('allows the default AnalysisHarness wrapper to be disabled by env kill switch', async () => {
-    process.env.SMARTPERFETTO_ANALYSIS_HARNESS = '0';
-    const claudeRuntime = createMockOrchestrator('claude');
-    const createClaudeRuntime = jest.fn(() => claudeRuntime);
-    jest.doMock('../../agentv3', () => ({ createClaudeRuntime }));
-
-    const traceProcessorService = { kind: 'trace-processor' } as any;
-    const { createAgentOrchestrator } = await import('../runtimeSelection');
-    const orchestrator = createAgentOrchestrator({ traceProcessorService });
-
-    expect(orchestrator).toBe(claudeRuntime);
-    expect(createClaudeRuntime).toHaveBeenCalledWith(
-      traceProcessorService,
-      undefined,
-      { kind: 'claude-agent-sdk', source: 'default' },
-    );
-  });
-
-  it('creates the hidden experimental runtime behind the default AnalysisHarness wrapper', async () => {
+  it('creates the hidden experimental runtime as the direct orchestrator', async () => {
     process.env.SMARTPERFETTO_ENABLE_EXPERIMENTAL_AGENT_RUNTIME = '1';
     process.env.SMARTPERFETTO_EXPERIMENTAL_AGENT_RUNTIME = 'experimental-pi-agent-core';
 
@@ -363,10 +363,11 @@ describe('resolveAgentRuntimeSelection', () => {
     const orchestrator = createAgentOrchestrator({ traceProcessorService, providerId: null });
 
     expect(orchestrator).not.toBeUndefined();
-    expect((orchestrator as any).engine?.constructor?.name).toBe('PiAgentCoreRuntime');
+    expect((orchestrator as any).constructor?.name).toBe('PiAgentCoreRuntime');
+    expectDirectUpdateEvents(orchestrator);
   });
 
-  it('creates the hidden experimental OpenCode runtime behind the default AnalysisHarness wrapper', async () => {
+  it('creates the hidden experimental OpenCode runtime as the direct orchestrator', async () => {
     process.env.SMARTPERFETTO_ENABLE_EXPERIMENTAL_AGENT_RUNTIME = '1';
     process.env.SMARTPERFETTO_EXPERIMENTAL_AGENT_RUNTIME = 'experimental-opencode';
 
@@ -375,10 +376,11 @@ describe('resolveAgentRuntimeSelection', () => {
     const orchestrator = createAgentOrchestrator({ traceProcessorService, providerId: null });
 
     expect(orchestrator).not.toBeUndefined();
-    expect((orchestrator as any).engine?.constructor?.name).toBe('OpenCodeRuntime');
+    expect((orchestrator as any).constructor?.name).toBe('OpenCodeRuntime');
+    expectDirectUpdateEvents(orchestrator);
   });
 
-  it('creates the public Pi runtime behind the default AnalysisHarness wrapper', async () => {
+  it('creates the public Pi runtime as the direct orchestrator', async () => {
     process.env.SMARTPERFETTO_AGENT_RUNTIME = 'pi-agent-core';
 
     const traceProcessorService = { kind: 'trace-processor' } as any;
@@ -386,20 +388,16 @@ describe('resolveAgentRuntimeSelection', () => {
     const orchestrator = createAgentOrchestrator({ traceProcessorService, providerId: null });
 
     expect(orchestrator).not.toBeUndefined();
-    expect((orchestrator as any).engine?.constructor?.name).toBe('PiAgentCoreRuntime');
+    expect((orchestrator as any).constructor?.name).toBe('PiAgentCoreRuntime');
+    expectDirectUpdateEvents(orchestrator);
   });
 
-  it('parses the AnalysisHarness env switch conservatively', async () => {
-    const {
-      ANALYSIS_HARNESS_ENV,
-      isAnalysisHarnessEnabled,
-    } = await import('../runtimeSelection');
+  it('keeps AnalysisHarness out of runtime selection source', () => {
+    const source = fs.readFileSync(path.join(__dirname, '../runtimeSelection.ts'), 'utf8');
 
-    expect(isAnalysisHarnessEnabled({})).toBe(true);
-    expect(isAnalysisHarnessEnabled({ [ANALYSIS_HARNESS_ENV]: '1' })).toBe(true);
-    expect(isAnalysisHarnessEnabled({ [ANALYSIS_HARNESS_ENV]: 'yes' })).toBe(true);
-    expect(isAnalysisHarnessEnabled({ [ANALYSIS_HARNESS_ENV]: '0' })).toBe(false);
-    expect(isAnalysisHarnessEnabled({ [ANALYSIS_HARNESS_ENV]: ' false ' })).toBe(false);
-    expect(isAnalysisHarnessEnabled({ [ANALYSIS_HARNESS_ENV]: 'OFF' })).toBe(false);
+    expect(source).not.toMatch(/AnalysisHarness/);
+    expect(source).not.toMatch(/createAnalysisHarness/);
+    expect(source).not.toMatch(/SMARTPERFETTO_ANALYSIS_HARNESS/);
+    expect(source).not.toMatch(/isAnalysisHarnessEnabled/);
   });
 });

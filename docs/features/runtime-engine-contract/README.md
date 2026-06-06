@@ -348,6 +348,11 @@ shared seams prove the contract.
 
 ### 5.3 Analysis Harness Responsibilities
 
+Superseded by `docs/architecture/agent-runtime-abstraction-review.md` WS-D:
+the default `AnalysisHarness` wrapper and its kill switch were removed because
+they had no concrete consumer. Future harness work should be consumer-driven,
+not a dormant wrapper in the agent runtime hot path.
+
 The future `AnalysisHarness` owns SmartPerfetto product semantics:
 
 - output language
