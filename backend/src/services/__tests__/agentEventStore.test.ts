@@ -122,6 +122,31 @@ describe('agent event store', () => {
     }
   });
 
+  it('marks the run cancelled when an analysis_cancelled event is persisted', () => {
+    persistSerializedAgentEvent(scope({ runId: 'run-cancelled', sessionId: 'session-cancelled' }), {
+      cursor: 1,
+      eventType: 'analysis_cancelled',
+      eventData: JSON.stringify({
+        type: 'analysis_cancelled',
+        data: { terminalRunStatus: 'cancelled' },
+      }),
+      createdAt: 1_777_000_001_500,
+    });
+
+    const db = openEnterpriseDb();
+    try {
+      expect(db.prepare('SELECT status, completed_at FROM analysis_runs WHERE id = ?').get('run-cancelled')).toEqual({
+        status: 'cancelled',
+        completed_at: 1_777_000_001_500,
+      });
+      expect(db.prepare('SELECT status FROM analysis_sessions WHERE id = ?').get('session-cancelled')).toEqual({
+        status: 'cancelled',
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   it('preserves quota_exceeded terminal status from analysis_completed payloads', () => {
     persistSerializedAgentEvent(scope({ runId: 'run-quota', sessionId: 'session-quota' }), {
       cursor: 1,

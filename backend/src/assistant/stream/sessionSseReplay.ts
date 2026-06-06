@@ -14,6 +14,7 @@ export interface SessionSseReplayState {
 
 export const TERMINAL_SSE_EVENT_TYPES = new Set([
   'analysis_completed',
+  'analysis_cancelled',
   'error',
   'end',
 ]);

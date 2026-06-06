@@ -53,6 +53,17 @@ describe('session SSE replay state', () => {
     expect(hasTerminalReplayAfter(state, 3)).toBe(false);
   });
 
+  it('treats analysis_cancelled as a terminal reconnect boundary', () => {
+    const state = createState();
+    appendReplayableSseEvent(state, 'progress', {step: 1});
+    appendReplayableSseEvent(state, 'analysis_cancelled', {
+      terminalRunStatus: 'cancelled',
+    });
+
+    expect(hasTerminalReplayAfter(state, 0)).toBe(true);
+    expect(hasTerminalReplayAfter(state, 2)).toBe(false);
+  });
+
   it('trims old replay events to the configured ring buffer size', () => {
     const state = createState();
 

@@ -40,8 +40,9 @@ interface AgentResumeRoutesDeps {
 function restoredSessionStatus(
   restoredRun: AnalyzeSessionRunContext | undefined,
   hasRecoveredResult: boolean,
-): 'completed' | 'failed' | 'quota_exceeded' {
+): 'completed' | 'failed' | 'cancelled' | 'quota_exceeded' {
   if (restoredRun?.status === 'quota_exceeded') return 'quota_exceeded';
+  if (restoredRun?.status === 'cancelled') return 'cancelled';
   if (restoredRun?.status === 'failed') return 'failed';
   if (
     restoredRun?.status === 'pending' ||

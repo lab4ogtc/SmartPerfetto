@@ -178,6 +178,14 @@ interface OpenCodeSdkModule {
   createOpencode(options?: Record<string, unknown>): Promise<OpenCodeInstance>;
 }
 
+interface OpenCodeActiveSession {
+  openCodeSessionId?: string;
+  server?: OpenCodeServerHandle;
+  client?: OpenCodeClient;
+  closeBridge?: () => Promise<void>;
+  aborted: boolean;
+}
+
 export type OpenCodeSdkModuleLoader = (env: EnvLike) => Promise<OpenCodeSdkModule>;
 
 export interface OpenCodeRuntimeOptions {
@@ -1018,10 +1026,12 @@ export async function runOpenCodePrompt(
     sessionId: string;
     projectDir: string;
     timeoutMs: number;
+    isAborted?: () => boolean;
   },
 ): Promise<{ promptResponse?: unknown; messagesResponse?: unknown }> {
-  const { sessionId, projectDir, timeoutMs } = options;
+  const { sessionId, projectDir, timeoutMs, isAborted } = options;
   if (opencode.client.session.promptAsync && opencode.client.session.messages) {
+    if (isAborted?.()) throw new Error('OpenCode prompt aborted');
     assertSdkSuccess(
       await opencode.client.session.promptAsync(promptInput),
       'OpenCode async prompt',
@@ -1029,11 +1039,14 @@ export async function runOpenCodePrompt(
     const startedAt = Date.now();
     let messagesResponse: unknown;
     while (Date.now() - startedAt < timeoutMs) {
+      if (isAborted?.()) throw new Error('OpenCode prompt aborted');
       await delay(PROMPT_POLL_INTERVAL_MS);
+      if (isAborted?.()) throw new Error('OpenCode prompt aborted');
       messagesResponse = unwrapSdkData(await opencode.client.session.messages({
         path: { id: sessionId },
         query: { directory: projectDir, limit: 50, order: 'asc' },
       }), 'OpenCode messages');
+      if (isAborted?.()) throw new Error('OpenCode prompt aborted');
       const latestAssistant = getLatestOpenCodeAssistantMessage(messagesResponse);
       if (isOpenCodeAssistantMessageComplete(latestAssistant)) {
         return { messagesResponse };
@@ -1042,6 +1055,7 @@ export async function runOpenCodePrompt(
         const statusResponse = await opencode.client.session.status({
           query: { directory: projectDir },
         });
+        if (isAborted?.()) throw new Error('OpenCode prompt aborted');
         assertSdkSuccess(statusResponse, 'OpenCode session status');
         if (isOpenCodeSessionIdle(statusResponse, sessionId) && extractOpenCodeAssistantText(messagesResponse)) {
           return { messagesResponse };
@@ -1051,7 +1065,9 @@ export async function runOpenCodePrompt(
     throw new Error(`OpenCode prompt timed out after ${timeoutMs}ms`);
   }
 
+  if (isAborted?.()) throw new Error('OpenCode prompt aborted');
   const promptResponse = unwrapSdkData(await opencode.client.session.prompt(promptInput), 'OpenCode prompt');
+  if (isAborted?.()) throw new Error('OpenCode prompt aborted');
   const messagesResponse = opencode.client.session.messages
     ? unwrapSdkData(await opencode.client.session.messages({
         path: { id: sessionId },
@@ -1133,6 +1149,7 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
   private readonly selection: RuntimeSelection<OpenCodeRuntimeKind>;
   private currentSessionId?: string;
   private currentServer?: OpenCodeServerHandle;
+  private readonly activeSessions = new Map<string, OpenCodeActiveSession>();
   private readonly artifactStores = new Map<string, ArtifactStore>();
   private readonly sessionNotes = new Map<string, AnalysisNote[]>();
   private readonly sessionPlans = new Map<string, { current: AnalysisPlanV3 | null; history: AnalysisPlanV3[] }>();
@@ -1180,6 +1197,7 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
 
     const previousHome = process.env.HOME;
     const previousConfigDir = process.env.OPENCODE_CONFIG_DIR;
+    let activeSession: OpenCodeActiveSession | undefined;
     try {
       process.env.HOME = homeDir;
       process.env.OPENCODE_CONFIG_DIR = configDir;
@@ -1189,10 +1207,17 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
         timeout,
         config: createOpenCodeHardenedConfig([], this.env),
       });
+      activeSession = {
+        server: opencode.server,
+        client: opencode.client,
+        aborted: false,
+      };
+      this.activeSessions.set(sessionId, activeSession);
       this.currentServer = opencode.server;
       const created = unwrapSdkData(await opencode.client.session.create({
         body: { title: `SmartPerfetto ${sessionId}` },
       }), 'OpenCode hidden session create');
+      activeSession.openCodeSessionId = created.id;
       this.currentSessionId = created.id;
       unwrapSdkData(await opencode.client.session.prompt({
         path: { id: created.id },
@@ -1208,7 +1233,7 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
       process.env.HOME = previousHome;
       if (previousConfigDir === undefined) delete process.env.OPENCODE_CONFIG_DIR;
       else process.env.OPENCODE_CONFIG_DIR = previousConfigDir;
-      this.closeServer();
+      await this.closeSessionHandle(sessionId, activeSession);
     }
 
     const duration = Date.now() - startedAt;
@@ -1265,6 +1290,7 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
     const previousConfigDir = process.env.OPENCODE_CONFIG_DIR;
     let promptResponse: unknown;
     let messagesResponse: unknown;
+    let activeSession: OpenCodeActiveSession | undefined;
     try {
       process.env.HOME = homeDir;
       process.env.OPENCODE_CONFIG_DIR = configDir;
@@ -1279,10 +1305,18 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
           modelConfig,
         ),
       });
+      activeSession = {
+        server: opencode.server,
+        client: opencode.client,
+        closeBridge: () => bridge.close().catch(() => undefined),
+        aborted: false,
+      };
+      this.activeSessions.set(sessionId, activeSession);
       this.currentServer = opencode.server;
       const created = unwrapSdkData(await opencode.client.session.create({
         body: { title: `SmartPerfetto ${sessionId}` },
       }), 'OpenCode session create');
+      activeSession.openCodeSessionId = created.id;
       this.currentSessionId = created.id;
       this.emitUpdate({
         type: 'progress',
@@ -1296,6 +1330,10 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
         },
         timestamp: Date.now(),
       });
+      const promptSession = activeSession;
+      if (!promptSession) {
+        throw new Error('OpenCode active session was not registered before prompt execution');
+      }
       const promptResult = await runOpenCodePrompt(opencode, {
         path: { id: created.id },
         query: { directory: projectDir },
@@ -1310,6 +1348,10 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
         sessionId: created.id,
         projectDir,
         timeoutMs: promptTimeout,
+        isAborted: () => (
+          this.activeSessions.get(sessionId) === promptSession &&
+          promptSession.aborted
+        ),
       });
       promptResponse = promptResult.promptResponse;
       messagesResponse = promptResult.messagesResponse;
@@ -1317,8 +1359,7 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
       process.env.HOME = previousHome;
       if (previousConfigDir === undefined) delete process.env.OPENCODE_CONFIG_DIR;
       else process.env.OPENCODE_CONFIG_DIR = previousConfigDir;
-      this.closeServer();
-      await bridge.close().catch(() => undefined);
+      await this.closeSessionHandle(sessionId, activeSession);
     }
 
     let conclusion = extractOpenCodeAssistantText(messagesResponse)
@@ -1638,12 +1679,30 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
 
   reset(): void {
     this.currentSessionId = undefined;
-    this.closeServer();
+    void this.abortAllSessions();
     this.removeAllListeners();
   }
 
-  async cleanupSession(_sessionId: string): Promise<void> {
-    this.closeServer();
+  async cleanupSession(sessionId: string): Promise<void> {
+    await this.abortSession(sessionId);
+    this.artifactStores.delete(sessionId);
+    this.sessionNotes.delete(sessionId);
+    this.sessionPlans.delete(sessionId);
+    this.sessionHypotheses.delete(sessionId);
+    this.sessionUncertaintyFlags.delete(sessionId);
+  }
+
+  async abortSession(sessionId: string): Promise<void> {
+    const handle = this.activeSessions.get(sessionId);
+    if (!handle) return;
+    handle.aborted = true;
+    if (handle.client?.session.abort && handle.openCodeSessionId) {
+      await handle.client.session.abort({
+        path: { id: handle.openCodeSessionId },
+      }).catch(() => undefined);
+    }
+    handle.server?.close();
+    await handle.closeBridge?.().catch(() => undefined);
   }
 
   restoreArchitectureCache(traceId: string, architecture: ArchitectureInfo): void {
@@ -1689,7 +1748,7 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
         providerId: sessionFields.agentRuntimeProviderId,
         providerSnapshotHash: sessionFields.agentRuntimeProviderSnapshotHash,
         opaque: {
-          openCodeSessionId: this.currentSessionId,
+          openCodeSessionId: this.activeSessions.get(sessionId)?.openCodeSessionId ?? this.currentSessionId,
         },
       }),
       agentRuntimeKind: OPENCODE_RUNTIME_KIND,
@@ -1727,10 +1786,24 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
     }
   }
 
-  private closeServer(): void {
-    const server = this.currentServer;
-    this.currentServer = undefined;
-    server?.close();
+  private async closeSessionHandle(
+    sessionId: string,
+    handle: OpenCodeActiveSession | undefined,
+  ): Promise<void> {
+    if (!handle) return;
+    if (this.currentServer === handle.server) this.currentServer = undefined;
+    if (this.currentSessionId === handle.openCodeSessionId) this.currentSessionId = undefined;
+    handle.server?.close();
+    await handle.closeBridge?.().catch(() => undefined);
+    if (this.activeSessions.get(sessionId) === handle) {
+      this.activeSessions.delete(sessionId);
+    }
+  }
+
+  private async abortAllSessions(): Promise<void> {
+    const sessions = Array.from(this.activeSessions.keys());
+    await Promise.all(sessions.map(sessionId => this.abortSession(sessionId)));
+    this.activeSessions.clear();
   }
 
   private emitUpdate(update: StreamingUpdate): void {

@@ -331,6 +331,7 @@ function startSessionRun(
   };
   session.activeRun = run;
   session.lastRun = run;
+  session.cancelState = { runId: run.runId, cancelled: false };
 
   // Record query in cross-turn history (append-only, never overwritten)
   if (!session.queryHistory) session.queryHistory = [];
@@ -362,12 +363,192 @@ function markSessionRunStatus(
 ): void {
   if (!session.activeRun) return;
   session.activeRun.status = status;
-  if (status === 'completed' || status === 'failed' || status === 'quota_exceeded') {
+  if (
+    status === 'completed' ||
+    status === 'failed' ||
+    status === 'cancelled' ||
+    status === 'quota_exceeded'
+  ) {
     session.activeRun.completedAt = Date.now();
   }
   session.activeRun.error = error;
   session.lastRun = { ...session.activeRun };
   persistSessionRunState(session, status, error);
+}
+
+function initializeCancelStateForRun(
+  session: AnalysisSession,
+  run: AnalyzeSessionRunContext,
+): void {
+  if (session.cancelState?.runId === run.runId && session.cancelState.cancelled) return;
+  session.cancelState = { runId: run.runId, cancelled: false };
+}
+
+function getSessionRunId(session: AnalysisSession): string | undefined {
+  return session.activeRun?.runId || session.lastRun?.runId;
+}
+
+function isSessionRunCancelled(
+  session: AnalysisSession,
+  runId: string | undefined = getSessionRunId(session),
+): boolean {
+  return Boolean(runId && session.cancelState?.runId === runId && session.cancelState.cancelled);
+}
+
+function markCurrentRunCancelled(session: AnalysisSession, reason: string): string | undefined {
+  const runId = getSessionRunId(session);
+  if (!runId) return undefined;
+  session.cancelState = { runId, cancelled: true, reason };
+  session.status = 'cancelled';
+  session.error = reason;
+  markSessionRunStatus(session, 'cancelled', reason);
+  return runId;
+}
+
+async function abortSessionBestEffort(
+  session: AnalysisSession,
+  component: string,
+): Promise<void> {
+  if (typeof session.orchestrator.abortSession !== 'function') return;
+  try {
+    await session.orchestrator.abortSession(session.sessionId, session.referenceTraceId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    session.logger.warn(component, 'Runtime abortSession failed during cancellation cleanup', {
+      sessionId: session.sessionId,
+      error: message,
+    });
+  }
+}
+
+function cleanupSessionBestEffort(sessionId: string, session: AnalysisSession, component: string): void {
+  if (typeof session.orchestrator.cleanupSession !== 'function') return;
+  try {
+    const cleanup = session.orchestrator.cleanupSession(sessionId);
+    void Promise.resolve(cleanup).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      session.logger.warn(component, 'Runtime cleanupSession failed', {
+        sessionId,
+        error: message,
+      });
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    session.logger.warn(component, 'Runtime cleanupSession failed', {
+      sessionId,
+      error: message,
+    });
+  }
+}
+
+async function abortAndCleanupSession(
+  sessionId: string,
+  session: AnalysisSession,
+  component: string,
+): Promise<void> {
+  await abortSessionBestEffort(session, component);
+  cleanupSessionBestEffort(sessionId, session, component);
+}
+
+function appendCancellationTerminalEvents(
+  session: AnalysisSession,
+  reason: string,
+): BufferedSseEvent[] {
+  const observability = buildStreamObservability(session);
+  const cancelled = appendAndPersistReplayableSessionEvent(session, 'analysis_cancelled', {
+    type: 'analysis_cancelled',
+    architecture: 'agent-driven',
+    ...observability,
+    message: reason,
+    reason,
+    terminalRunStatus: 'cancelled',
+    timestamp: Date.now(),
+  });
+  const end = appendAndPersistReplayableSessionEvent(session, 'end', {
+    timestamp: Date.now(),
+    ...observability,
+  });
+  return [cancelled, end];
+}
+
+function findCancellationTerminalEvents(events: readonly BufferedSseEvent[]): BufferedSseEvent[] {
+  let cancelledIndex = -1;
+  for (let index = events.length - 1; index >= 0; index--) {
+    if (events[index].eventType === 'analysis_cancelled') {
+      cancelledIndex = index;
+      break;
+    }
+  }
+  if (cancelledIndex < 0) return [];
+  const endIndex = events.findIndex((event, index) =>
+    index > cancelledIndex && event.eventType === 'end'
+  );
+  if (endIndex < 0) return [];
+  return events.slice(cancelledIndex, endIndex + 1);
+}
+
+function getCancellationTerminalEvents(
+  session: AnalysisSession,
+  reason: string,
+): BufferedSseEvent[] {
+  const buffered = findCancellationTerminalEvents(session.sseEventBuffer);
+  if (buffered.length > 0) return buffered;
+
+  const persisted = loadPersistedCompletedAnalysisSseEvents(session);
+  const persistedTerminal = findCancellationTerminalEvents(persisted);
+  if (persistedTerminal.length > 0) return persistedTerminal;
+
+  return appendCancellationTerminalEvents(session, reason);
+}
+
+function writeSessionEventsToClient(res: express.Response, events: readonly BufferedSseEvent[]): void {
+  for (const event of events) {
+    writeBufferedSessionEvent(res, event);
+  }
+}
+
+async function cancelSessionRun(
+  sessionId: string,
+  reason = 'Analysis cancelled by user',
+): Promise<AnalysisSession | undefined> {
+  const session = assistantAppService.getSession(sessionId);
+  if (!session) return undefined;
+
+  if (session.status === 'cancelled') {
+    return session;
+  }
+  if (
+    session.status !== 'pending' &&
+    session.status !== 'running' &&
+    session.status !== 'awaiting_user'
+  ) {
+    return session;
+  }
+
+  const runId = markCurrentRunCancelled(session, reason);
+  const smartCancelled = smartCancelBridge.cancel(sessionId);
+  if (smartCancelled) smartCancelBridge.tryClaimTerminal(sessionId);
+  const sceneCancelled = sceneStoryService.cancel(sessionId);
+  await abortSessionBestEffort(session, 'AgentRoutes');
+
+  const terminalEvents = appendCancellationTerminalEvents(session, reason);
+  for (const client of session.sseClients) {
+    try {
+      writeSessionEventsToClient(client, terminalEvents);
+      client.end();
+    } catch {
+      // client may already be closed
+    }
+  }
+  session.sseClients = [];
+  session.lastActivityAt = Date.now();
+  session.logger.info('AgentRoutes', 'Session cancelled by user', {
+    sessionId,
+    runId,
+    smartCancelled,
+    sceneCancelled,
+  });
+  return session;
 }
 
 // Attach/echo requestId for all agent endpoints.
@@ -391,7 +572,7 @@ interface AnalysisSession {
   sessionId: string;
   sseClients: express.Response[];
   result?: AgentRuntimeAnalysisResult;
-  status: 'pending' | 'running' | 'awaiting_user' | 'completed' | 'failed' | 'quota_exceeded';
+  status: 'pending' | 'running' | 'awaiting_user' | 'completed' | 'failed' | 'cancelled' | 'quota_exceeded';
   error?: string;
   traceId: string;
   tenantId?: string;
@@ -450,6 +631,7 @@ interface AnalysisSession {
   runSequence?: number;
   activeRun?: AnalyzeSessionRunContext;
   lastRun?: AnalyzeSessionRunContext;
+  cancelState?: { runId: string; cancelled: boolean; reason?: string };
   /** Cross-turn query history — appended on each turn, never overwritten */
   queryHistory: Array<{ turn: number; query: string; timestamp: number }>;
   /** Cross-turn conclusion history — appended after each turn completes */
@@ -713,6 +895,7 @@ function loadPersistedCompletedAnalysisSseEvents(session: AnalysisSession): Buff
     .filter(event =>
       event.eventType === 'snapshot_created' ||
       event.eventType === 'analysis_completed' ||
+      event.eventType === 'analysis_cancelled' ||
       event.eventType === 'scene_reconstruction_completed' ||
       event.eventType === 'end')
     .map(event => sanitizePersistedAnalysisCompletedEvent(session, event))
@@ -721,7 +904,9 @@ function loadPersistedCompletedAnalysisSseEvents(session: AnalysisSession): Buff
       eventType: event.eventType,
       eventData: event.eventData,
     }));
-  if (!events.some(event => event.eventType === 'analysis_completed') ||
+  const hasCompletedTerminal = events.some(event => event.eventType === 'analysis_completed');
+  const hasCancelledTerminal = events.some(event => event.eventType === 'analysis_cancelled');
+  if ((!hasCompletedTerminal && !hasCancelledTerminal) ||
       !events.some(event => event.eventType === 'end')) {
     return [];
   }
@@ -1481,6 +1666,14 @@ async function handleAnalyzeRequest(
       }).catch((error) => {
         const session = assistantAppService.getSession(sessionId);
         if (session) {
+          if (isSessionRunCancelled(session, runContext.runId)) {
+            session.logger.info('AgentRoutes', 'Ignoring smart analysis failure after cancellation', {
+              sessionId,
+              runId: runContext.runId,
+              error: error?.message || String(error),
+            });
+            return;
+          }
           session.logger.error('AgentRoutes', 'Smart analysis failed', error);
           session.status = 'failed';
           session.error = error.message;
@@ -1672,6 +1865,14 @@ async function handleAnalyzeRequest(
     }).catch((error) => {
       const session = assistantAppService.getSession(sessionId);
       if (session) {
+        if (isSessionRunCancelled(session, runContext.runId)) {
+          session.logger.info('AgentRoutes', 'Ignoring agent-driven analysis failure after cancellation', {
+            sessionId,
+            runId: runContext.runId,
+            error: error?.message || String(error),
+          });
+          return;
+        }
         session.logger.error('AgentRoutes', 'Agent-driven analysis failed', error);
         session.status = 'failed';
         session.error = error.message;
@@ -1875,6 +2076,18 @@ function handleSessionStream(req: express.Request, res: express.Response, sessio
       }
     );
     res.end();
+    assistantAppService.removeSseClient(sessionId, res);
+    return;
+  }
+
+  if (session.status === 'cancelled') {
+    const terminalEvents = getCancellationTerminalEvents(
+      session,
+      session.error || session.cancelState?.reason || 'Analysis cancelled by user',
+    );
+    writeSessionEventsToClient(res, terminalEvents);
+    res.end();
+    assistantAppService.removeSseClient(sessionId, res);
     return;
   }
 
@@ -1985,7 +2198,7 @@ router.get('/:sessionId/status', (req, res) => {
     }
   }
 
-  if (session.status === 'failed') {
+  if (session.status === 'failed' || session.status === 'cancelled') {
     response.error = session.error;
   }
 
@@ -2123,7 +2336,7 @@ router.get('/:sessionId/turns/:turnId', (req, res) => {
  *
  * Clean up an analysis session
  */
-router.delete('/:sessionId', (req, res) => {
+router.delete('/:sessionId', async (req, res) => {
   const { sessionId } = req.params;
 
   const session = getAuthorizedSession(req, res, sessionId);
@@ -2138,9 +2351,7 @@ router.delete('/:sessionId', (req, res) => {
 
   // Clean up session-scoped state only — do NOT call reset() which clears
   // global caches (architectureCache) shared across all active sessions.
-  if (typeof session.orchestrator.cleanupSession === 'function') {
-    session.orchestrator.cleanupSession(sessionId);
-  }
+  await abortAndCleanupSession(sessionId, session, 'AgentRoutes');
   // Also clean up the EnhancedSessionContext (EntityStore, turns, working memory)
   sessionContextManager.remove(sessionId);
   assistantAppService.deleteSession(sessionId);
@@ -2212,7 +2423,7 @@ router.post('/:sessionId/feedback', async (req, res) => {
  * Note: AgentRuntime currently does not pause for user input in v2;
  * this endpoint mainly exists for API compatibility and future multi-turn UX.
  */
-function handleSessionRespond(req: express.Request, res: express.Response, sessionId: string): void {
+async function handleSessionRespond(req: express.Request, res: express.Response, sessionId: string): Promise<void> {
   const session = getAuthorizedSession(req, res, sessionId);
   if (!session) return;
 
@@ -2228,8 +2439,7 @@ function handleSessionRespond(req: express.Request, res: express.Response, sessi
   }
 
   if (action === 'abort') {
-    session.status = 'failed';
-    session.error = 'Aborted by user';
+    await cancelSessionRun(sessionId, 'Aborted by user');
     res.json({ success: true, sessionId, status: session.status });
     return;
   }
@@ -2247,12 +2457,12 @@ function handleSessionRespond(req: express.Request, res: express.Response, sessi
   res.json({ success: true, sessionId, status: session.status });
 }
 
-router.post('/:sessionId/respond', (req, res) => {
-  handleSessionRespond(req, res, req.params.sessionId);
+router.post('/:sessionId/respond', (req, res, next) => {
+  void handleSessionRespond(req, res, req.params.sessionId).catch(next);
 });
 
-router.post('/sessions/:sessionId/respond', (req, res) => {
-  handleSessionRespond(req, res, req.params.sessionId);
+router.post('/sessions/:sessionId/respond', (req, res, next) => {
+  void handleSessionRespond(req, res, req.params.sessionId).catch(next);
 });
 
 // =============================================================================
@@ -2334,8 +2544,7 @@ router.post('/:sessionId/intervene', async (req, res) => {
 
     // Update session status if needed
     if (directive.action === 'abort') {
-      session.status = 'failed';
-      session.error = 'Aborted by user intervention';
+      await cancelSessionRun(sessionId, 'Aborted by user intervention');
     } else if (session.status === 'awaiting_user') {
       session.status = 'running';
     }
@@ -2381,43 +2590,12 @@ router.post('/:sessionId/intervene', async (req, res) => {
  * }
  */
 // P1-4: Cancel endpoint — allows frontend to signal the backend to stop analysis
-router.post('/:sessionId/cancel', (req, res) => {
+router.post('/:sessionId/cancel', async (req, res) => {
   const { sessionId } = req.params;
   const session = getAuthorizedSession(req, res, sessionId);
   if (!session) return;
 
-  // Mark session as failed/cancelled
-  if (session.status === 'running' || session.status === 'pending') {
-    const smartCancelled = smartCancelBridge.cancel(sessionId);
-    if (smartCancelled) smartCancelBridge.tryClaimTerminal(sessionId);
-    const sceneCancelled = sceneStoryService.cancel(sessionId);
-    session.status = 'failed';
-    session.error = 'Cancelled by user';
-    markSessionRunStatus(session, 'failed', 'Cancelled by user');
-    // Close SSE connections to signal the frontend
-    for (const client of session.sseClients) {
-      try {
-        sendReplayableSessionEvent(
-          session,
-          client,
-          'error',
-          {
-            error: 'Analysis cancelled by user',
-            message: 'Analysis cancelled by user',
-            timestamp: Date.now(),
-            ...buildStreamObservability(session),
-          }
-        );
-        client.end();
-      } catch { /* client may already be closed */ }
-    }
-    session.sseClients = [];
-    session.logger.info('AgentRoutes', 'Session cancelled by user', {
-      sessionId,
-      smartCancelled,
-      sceneCancelled,
-    });
-  }
+  await cancelSessionRun(sessionId, 'Analysis cancelled by user');
 
   return res.json({ success: true, sessionId, status: session.status });
 });
@@ -2650,6 +2828,7 @@ async function runSmartAnalysis(
     status: 'running',
     startedAt: options.runContext.startedAt || startedAt,
   };
+  initializeCancelStateForRun(session, session.activeRun);
   session.lastRun = { ...session.activeRun };
   session.status = 'running';
   session.lastActivityAt = Date.now();
@@ -2721,6 +2900,7 @@ async function runSmartAnalysis(
         traceId,
         session,
         result,
+        runId: options.runContext.runId,
         logComponent: 'SmartAnalysis',
       });
       return;
@@ -2763,6 +2943,14 @@ async function runSmartAnalysis(
       generateTracks: false,
     });
   } catch (error: any) {
+    if (isSessionRunCancelled(session, options.runContext.runId)) {
+      session.logger.info('SmartAnalysis', 'Ignoring smart analysis error after cancellation', {
+        sessionId,
+        runId: options.runContext.runId,
+        error: error?.message || String(error),
+      });
+      return;
+    }
     session.status = 'failed';
     session.error = error.message || String(error);
     markSessionRunStatus(session, 'failed', session.error);
@@ -2824,8 +3012,16 @@ function completeAgentDrivenSessionWithResult(input: {
   traceId: string;
   session: AnalysisSession;
   result: AgentRuntimeAnalysisResult;
+  runId?: string;
   logComponent: string;
 }): void {
+  if (isSessionRunCancelled(input.session, input.runId)) {
+    input.session.logger.warn(input.logComponent, 'Skipping late result after cancellation', {
+      sessionId: input.sessionId,
+      runId: input.runId,
+    });
+    return;
+  }
   finalizeAgentDrivenSession(input, {
     applyFinalResultQualityGate,
     broadcast: broadcastToAgentDrivenClients,
@@ -3317,6 +3513,7 @@ async function runAgentDrivenAnalysis(
       status: 'running',
       startedAt: inputRun.startedAt || Date.now(),
     };
+    initializeCancelStateForRun(session, session.activeRun);
     session.lastRun = { ...session.activeRun };
     session.runSequence = Math.max(
       normalizeRunSequence(session.runSequence),
@@ -3328,6 +3525,7 @@ async function runAgentDrivenAnalysis(
       ...fallback,
       status: 'running',
     };
+    initializeCancelStateForRun(session, session.activeRun);
     session.lastRun = { ...session.activeRun };
   } else {
     session.activeRun.query = query;
@@ -3335,6 +3533,7 @@ async function runAgentDrivenAnalysis(
     if (!session.activeRun.startedAt) {
       session.activeRun.startedAt = Date.now();
     }
+    initializeCancelStateForRun(session, session.activeRun);
     session.lastRun = { ...session.activeRun };
   }
 
@@ -3350,6 +3549,7 @@ async function runAgentDrivenAnalysis(
     requestId: session.activeRun?.requestId,
     runSequence: session.activeRun?.sequence,
   });
+  const runIdForAnalysis = session.activeRun?.runId;
 
   // Track generation is a lightweight derivation step from DataEnvelopes.
   // Enable by default (unless explicitly disabled) so `/api/agent/v1/analyze` can
@@ -3586,9 +3786,18 @@ async function runAgentDrivenAnalysis(
       traceId,
       session,
       result,
+      runId: runIdForAnalysis,
       logComponent: 'AgentDrivenAnalysis',
     });
   } catch (error: any) {
+    if (isSessionRunCancelled(session, runIdForAnalysis)) {
+      logger.info('AgentDrivenAnalysis', 'Ignoring analysis error after cancellation', {
+        sessionId,
+        runId: runIdForAnalysis,
+        error: error?.message || String(error),
+      });
+      return;
+    }
     session.status = 'failed';
     session.error = error.message;
     markSessionRunStatus(session, 'failed', error.message);
@@ -5751,9 +5960,7 @@ const sessionCleanupInterval = setInterval(() => {
       });
       // Clean up session-scoped state only — do NOT call reset() which clears
       // global caches (architectureCache) shared across all active sessions.
-      if (typeof session.orchestrator.cleanupSession === 'function') {
-        session.orchestrator.cleanupSession(sessionId);
-      }
+      void abortAndCleanupSession(sessionId, session, 'AgentRoutes');
       // Also clean up the EnhancedSessionContext (EntityStore, turns, working memory)
       sessionContextManager.remove(sessionId);
     },

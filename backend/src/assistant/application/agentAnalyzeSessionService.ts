@@ -65,7 +65,7 @@ export interface AnalyzeSessionRunContext {
   query: string;
   startedAt: number;
   completedAt?: number;
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'quota_exceeded';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'quota_exceeded';
   error?: string;
 }
 
@@ -289,8 +289,28 @@ export class AgentAnalyzeSessionService<TSession extends AnalyzeManagedSession> 
             existingSession.orchestrator.off('update', existingSession.orchestratorUpdateHandler);
             existingSession.orchestratorUpdateHandler = undefined;
           }
+          if (typeof existingSession.orchestrator.abortSession === 'function') {
+            void Promise.resolve(
+              existingSession.orchestrator.abortSession(
+                existingSession.sessionId,
+                existingSession.referenceTraceId,
+              ),
+            ).catch((error) => {
+              existingSession.logger.warn('AgentRoutes', 'Failed to abort stale provider SDK session', {
+                sessionId: existingSession.sessionId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            });
+          }
           if (typeof existingSession.orchestrator.cleanupSession === 'function') {
-            existingSession.orchestrator.cleanupSession(existingSession.sessionId);
+            void Promise.resolve(
+              existingSession.orchestrator.cleanupSession(existingSession.sessionId),
+            ).catch((error) => {
+              existingSession.logger.warn('AgentRoutes', 'Failed to clean up stale provider SDK session', {
+                sessionId: existingSession.sessionId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            });
           }
           existingSession.orchestrator = createAgentOrchestrator({
             traceProcessorService: getTraceProcessorService(),

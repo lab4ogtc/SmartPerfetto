@@ -112,6 +112,10 @@ interface OpenAISessionEntry {
   updatedAt: number;
 }
 
+interface RuntimeAbortHandle {
+  abort(): void;
+}
+
 const OPENAI_SESSION_FRESHNESS_MS = SDK_SESSION_FRESHNESS_MS;
 const OPENAI_MAX_PLAN_CONTINUATIONS = 3;
 const OPENAI_MAX_FINAL_REPORT_CONTINUATIONS = 4;
@@ -556,6 +560,7 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
   private readonly sessionUncertaintyFlags = new Map<string, UncertaintyFlag[]>();
   private readonly sessionMap = new Map<string, OpenAISessionEntry>();
   private readonly activeAnalyses = new Set<string>();
+  private readonly activeAbortHandles = new Map<string, Set<RuntimeAbortHandle>>();
 
   private readonly runtimeSelection: RuntimeSelection;
 
@@ -815,6 +820,9 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
           }
           const controller = new AbortController();
           activeController = controller;
+          const unregisterAbortHandle = this.registerAbortHandle(sessionId, {
+            abort: () => controller.abort(),
+          });
           let runAnswer = '';
           let runTurns = 0;
           let completedByPlanIdle = false;
@@ -887,6 +895,7 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
             if (activeController === controller) {
               activeController = undefined;
             }
+            unregisterAbortHandle();
           }
 
           rounds += runTurns || stream.currentTurn || 0;
@@ -1162,6 +1171,7 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
   }
 
   reset(): void {
+    this.abortAllSessions();
     this.architectureCache.clear();
     this.vendorCache.clear();
     this.completenessCache.clear();
@@ -1176,6 +1186,7 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
   }
 
   cleanupSession(sessionId: string): void {
+    this.abortSession(sessionId);
     this.sessionMap.delete(sessionId);
     for (const key of Array.from(this.sessionMap.keys())) {
       if (key.startsWith(`${sessionId}:ref:`)) this.sessionMap.delete(key);
@@ -1187,6 +1198,40 @@ export class OpenAIRuntime extends EventEmitter implements IOrchestrator {
     this.sessionHypotheses.delete(sessionId);
     this.sessionUncertaintyFlags.delete(sessionId);
     this.activeAnalyses.delete(sessionId);
+  }
+
+  abortSession(sessionId: string): void {
+    const handles = this.activeAbortHandles.get(sessionId);
+    if (!handles) return;
+    for (const handle of Array.from(handles)) {
+      try {
+        handle.abort();
+      } catch (error) {
+        console.warn('[OpenAIRuntime] Failed to abort SDK handle:', (error as Error).message);
+      }
+    }
+  }
+
+  private registerAbortHandle(sessionId: string, handle: RuntimeAbortHandle): () => void {
+    let handles = this.activeAbortHandles.get(sessionId);
+    if (!handles) {
+      handles = new Set();
+      this.activeAbortHandles.set(sessionId, handles);
+    }
+    handles.add(handle);
+    return () => {
+      const current = this.activeAbortHandles.get(sessionId);
+      if (!current) return;
+      current.delete(handle);
+      if (current.size === 0) this.activeAbortHandles.delete(sessionId);
+    };
+  }
+
+  private abortAllSessions(): void {
+    for (const sessionId of Array.from(this.activeAbortHandles.keys())) {
+      this.abortSession(sessionId);
+    }
+    this.activeAbortHandles.clear();
   }
 
   takeSnapshot(

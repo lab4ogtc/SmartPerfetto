@@ -644,6 +644,10 @@ interface SdkQueryHandle {
   close: () => void;
 }
 
+interface RuntimeAbortHandle {
+  abort(): void;
+}
+
 /**
  * Wrap sdkQuery with exponential backoff retry for transient API errors
  * and expose a `close()` handle so timeout/abort paths can terminate the
@@ -761,6 +765,8 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
   private sessionUncertaintyFlags: Map<string, UncertaintyFlag[]> = new Map();
   /** Guard against concurrent analyze() calls for the same session. */
   private activeAnalyses: Set<string> = new Set();
+  /** In-flight SDK subprocess handles keyed by SmartPerfetto session. */
+  private readonly activeAbortHandles: Map<string, Set<RuntimeAbortHandle>> = new Map();
   private readonly runtimeSelection: RuntimeSelection;
 
   constructor(
@@ -1118,6 +1124,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
         emitUpdate: (update) => this.emitUpdate(update),
         outputLanguage: this.config.outputLanguage,
       });
+      const unregisterSdkAbortHandle = this.registerAbortHandle(sessionId, { abort: closeSdk });
 
       let finalResult: string | undefined;
       let terminationReason: AnalysisResult['terminationReason'];
@@ -1617,6 +1624,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       } finally {
         if (safetyTimer) clearTimeout(safetyTimer);
         closeSdk();
+        unregisterSdkAbortHandle();
       }
 
       if (missingSdkConversationError && existingSdkSessionId) {
@@ -1830,6 +1838,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
                 emitUpdate: (update) => this.emitUpdate(update),
                 outputLanguage: this.config.outputLanguage,
               });
+              const unregisterCorrectionAbortHandle = this.registerAbortHandle(sessionId, { abort: closeCorrection });
 
               // P1-G8: Independent timeout for correction retries — prevents indefinite hangs.
               // Even "normal" verification fixes may stream a full report after a few tool
@@ -1870,6 +1879,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
                 // Safety net: guarantee the correction SDK subprocess is
                 // closed on every exit (success, break, throw). Idempotent.
                 closeCorrection();
+                unregisterCorrectionAbortHandle();
               }
               if (!correctionTimedOut) {
                 correctionAnswerBridge.flushPendingAnswer();
@@ -2383,6 +2393,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
         emitUpdate: (update) => this.emitUpdate(update),
         outputLanguage: this.config.outputLanguage,
       });
+      const unregisterSdkAbortHandle = this.registerAbortHandle(sessionId, { abort: closeSdk });
 
       let finalResult: string | undefined;
       let quickRounds = 0;
@@ -2442,6 +2453,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       } finally {
         if (safetyTimer) clearTimeout(safetyTimer);
         closeSdk();
+        unregisterSdkAbortHandle();
       }
 
       let conclusionText = finalResult || getAccumulatedAnswer() || '';
@@ -2638,7 +2650,42 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
 
   /** Clean up all session-scoped state for a given session. */
   cleanupSession(sessionId: string): void {
+    this.abortSession(sessionId);
     this.removeSession(sessionId);
+  }
+
+  abortSession(sessionId: string): void {
+    const handles = this.activeAbortHandles.get(sessionId);
+    if (!handles) return;
+    for (const handle of Array.from(handles)) {
+      try {
+        handle.abort();
+      } catch (error) {
+        console.warn('[ClaudeRuntime] Failed to abort SDK handle:', (error as Error).message);
+      }
+    }
+  }
+
+  private registerAbortHandle(sessionId: string, handle: RuntimeAbortHandle): () => void {
+    let handles = this.activeAbortHandles.get(sessionId);
+    if (!handles) {
+      handles = new Set();
+      this.activeAbortHandles.set(sessionId, handles);
+    }
+    handles.add(handle);
+    return () => {
+      const current = this.activeAbortHandles.get(sessionId);
+      if (!current) return;
+      current.delete(handle);
+      if (current.size === 0) this.activeAbortHandles.delete(sessionId);
+    };
+  }
+
+  private abortAllSessions(): void {
+    for (const sessionId of Array.from(this.activeAbortHandles.keys())) {
+      this.abortSession(sessionId);
+    }
+    this.activeAbortHandles.clear();
   }
 
   /** P1-R3: Public getter for session notes — used by report generation. */
@@ -2782,6 +2829,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
   }
 
   reset(): void {
+    this.abortAllSessions();
     this.architectureCache.clear();
     this.vendorCache.clear();
     this.completenessCache.clear();

@@ -8,7 +8,7 @@ import type {
   StreamingUpdate,
 } from '../../agent';
 
-type SessionStatus = 'pending' | 'running' | 'awaiting_user' | 'completed' | 'failed' | 'quota_exceeded';
+type SessionStatus = 'pending' | 'running' | 'awaiting_user' | 'completed' | 'failed' | 'cancelled' | 'quota_exceeded';
 
 interface FinalizeSessionLike {
   result?: AgentRuntimeAnalysisResult;

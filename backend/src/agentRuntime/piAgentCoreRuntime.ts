@@ -769,7 +769,7 @@ function resolvePiAgentCoreModel(env: EnvLike, fakeStream: boolean): PiAgentCore
 export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
   private readonly env: EnvLike;
   private readonly moduleLoader: PiAgentCoreModuleLoader;
-  private activeAgent?: PiAgentCoreAgent;
+  private readonly activeAgents = new Map<string, PiAgentCoreAgent>();
   private readonly artifactStores = new Map<string, ArtifactStore>();
   private readonly sessionNotes = new Map<string, AnalysisNote[]>();
   private readonly sessionPlans = new Map<string, { current: AnalysisPlanV3 | null; history: AnalysisPlanV3[] }>();
@@ -828,7 +828,7 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
         reason: `Tool calls are blocked until SmartPerfetto explicitly maps shared tools: ${JSON.stringify(context)}`,
       }),
     });
-    this.activeAgent = agent;
+    this.activeAgents.set(sessionId, agent);
 
     const unsubscribe = agent.subscribe((event) => {
       const update = projectPiAgentCoreEventToStreamingUpdate(event);
@@ -850,6 +850,9 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
       await agent.prompt(query);
     } finally {
       unsubscribe();
+      if (this.activeAgents.get(sessionId) === agent) {
+        this.activeAgents.delete(sessionId);
+      }
     }
 
     const conclusion = sanitizePiAgentCoreConclusionText(latestAssistantText(agent.state.messages) ||
@@ -915,7 +918,7 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
         return undefined;
       },
     });
-    this.activeAgent = agent;
+    this.activeAgents.set(sessionId, agent);
 
     let rounds = 0;
     const unsubscribe = agent.subscribe((event) => {
@@ -942,6 +945,9 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
       await agent.prompt(prep.prompt);
     } finally {
       unsubscribe();
+      if (this.activeAgents.get(sessionId) === agent) {
+        this.activeAgents.delete(sessionId);
+      }
     }
 
     const latestAssistant = latestAssistantMessage(agent.state.messages);
@@ -1342,6 +1348,7 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
   ): SessionStateSnapshot {
     const planState = this.sessionPlans.get(sessionId);
     const artifactStore = this.artifactStores.get(sessionId);
+    const activeAgent = this.activeAgents.get(sessionId);
     return {
       version: 1,
       snapshotTimestamp: Date.now(),
@@ -1358,8 +1365,8 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
         providerId: sessionFields.agentRuntimeProviderId,
         providerSnapshotHash: sessionFields.agentRuntimeProviderSnapshotHash,
         opaque: {
-          messageCount: this.activeAgent?.state.messages?.length ?? 0,
-          toolCount: this.activeAgent?.state.tools?.length ?? 0,
+          messageCount: activeAgent?.state.messages?.length ?? 0,
+          toolCount: activeAgent?.state.tools?.length ?? 0,
         },
       }),
       agentRuntimeKind: PI_AGENT_CORE_RUNTIME_KIND,
@@ -1394,12 +1401,31 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
   }
 
   reset(): void {
-    this.activeAgent?.reset();
+    for (const agent of this.activeAgents.values()) {
+      agent.reset();
+    }
+    this.activeAgents.clear();
     this.removeAllListeners();
   }
 
   abortActiveRun(): void {
-    this.activeAgent?.abort();
+    for (const agent of this.activeAgents.values()) {
+      agent.abort();
+    }
+  }
+
+  abortSession(sessionId: string): void {
+    this.activeAgents.get(sessionId)?.abort();
+  }
+
+  cleanupSession(sessionId: string): void {
+    this.abortSession(sessionId);
+    this.activeAgents.delete(sessionId);
+    this.artifactStores.delete(sessionId);
+    this.sessionNotes.delete(sessionId);
+    this.sessionPlans.delete(sessionId);
+    this.sessionHypotheses.delete(sessionId);
+    this.sessionUncertaintyFlags.delete(sessionId);
   }
 }
 

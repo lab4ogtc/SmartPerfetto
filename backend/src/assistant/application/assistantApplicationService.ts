@@ -10,6 +10,7 @@ export type AssistantSessionStatus =
   | 'awaiting_user'
   | 'completed'
   | 'failed'
+  | 'cancelled'
   | 'quota_exceeded';
 
 export interface ManagedAssistantSession {
@@ -104,6 +105,7 @@ export class AssistantApplicationService<T extends ManagedAssistantSession> {
       const isTerminal =
         session.status === 'completed' ||
         session.status === 'failed' ||
+        session.status === 'cancelled' ||
         session.status === 'quota_exceeded';
       const isAbandonedNonTerminal =
         (session.status === 'pending' || session.status === 'running') &&

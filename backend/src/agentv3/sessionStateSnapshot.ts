@@ -95,7 +95,7 @@ export interface SnapshotRunContext {
   query: string;
   startedAt: number;
   completedAt?: number;
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'quota_exceeded';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'quota_exceeded';
   error?: string;
 }
 

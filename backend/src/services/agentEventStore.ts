@@ -127,7 +127,7 @@ function ensureAgentEventGraph(
   );
 }
 
-function terminalStatusForEvent(eventType: string, eventData?: string): 'completed' | 'failed' | 'quota_exceeded' | null {
+function terminalStatusForEvent(eventType: string, eventData?: string): 'completed' | 'failed' | 'cancelled' | 'quota_exceeded' | null {
   if (eventType === 'analysis_completed') {
     try {
       const parsed = JSON.parse(eventData || '{}');
@@ -138,6 +138,7 @@ function terminalStatusForEvent(eventType: string, eventData?: string): 'complet
     }
     return 'completed';
   }
+  if (eventType === 'analysis_cancelled') return 'cancelled';
   if (eventType === 'error') return 'failed';
   return null;
 }

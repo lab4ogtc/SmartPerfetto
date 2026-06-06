@@ -86,7 +86,7 @@ function restoreEnvValue(key: string, value: string | undefined): void {
 function minimalSessionSnapshot(
   sessionId: string,
   traceId: string,
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'quota_exceeded',
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'quota_exceeded',
 ): any {
   const now = Date.now();
   return {
@@ -585,8 +585,64 @@ describe('agent route RBAC', () => {
       expect(cancelA.status).toBe(200);
       expect(cancelA.body).toEqual(expect.objectContaining({
         sessionId: analyzeA.body.sessionId,
-        status: 'failed',
+        status: 'cancelled',
       }));
+      expect(getAnalysisRunLifecycle({
+        tenantId: 'tenant-a',
+        workspaceId: 'workspace-a',
+        userId: 'analyst-a',
+      }, analyzeA.body.runId)).toEqual(expect.objectContaining({
+        id: analyzeA.body.runId,
+        status: 'cancelled',
+      }));
+      const readTerminalEventCounts = () => {
+        const db = openEnterpriseDb();
+        try {
+          return db.prepare(`
+            SELECT event_type AS eventType, COUNT(*) AS count
+            FROM agent_events
+            WHERE run_id = ?
+              AND event_type IN ('analysis_cancelled', 'end')
+            GROUP BY event_type
+            ORDER BY event_type
+          `).all(analyzeA.body.runId);
+        } finally {
+          db.close();
+        }
+      };
+      const enterpriseDb = openEnterpriseDb();
+      try {
+        expect(enterpriseDb.prepare('SELECT status FROM analysis_sessions WHERE id = ?')
+          .get(analyzeA.body.sessionId)).toEqual({ status: 'cancelled' });
+      } finally {
+        enterpriseDb.close();
+      }
+      expect(readTerminalEventCounts()).toEqual([
+        { eventType: 'analysis_cancelled', count: 1 },
+        { eventType: 'end', count: 1 },
+      ]);
+      const cancelledStream = await scopedAnalystHeaders(
+        request(app)
+          .get(`/api/agent/v1/${analyzeA.body.sessionId}/stream`)
+          .set('Accept', 'text/event-stream'),
+        { userId: 'analyst-a', workspaceId: 'workspace-a' },
+      );
+      expect(cancelledStream.status).toBe(200);
+      expect(cancelledStream.text).toContain('event: analysis_cancelled');
+      expect(cancelledStream.text).toContain('event: end');
+      const repeatedCancelledStream = await scopedAnalystHeaders(
+        request(app)
+          .get(`/api/agent/v1/${analyzeA.body.sessionId}/stream`)
+          .set('Accept', 'text/event-stream'),
+        { userId: 'analyst-a', workspaceId: 'workspace-a' },
+      );
+      expect(repeatedCancelledStream.status).toBe(200);
+      expect(repeatedCancelledStream.text).toContain('event: analysis_cancelled');
+      expect(repeatedCancelledStream.text).toContain('event: end');
+      expect(readTerminalEventCounts()).toEqual([
+        { eventType: 'analysis_cancelled', count: 1 },
+        { eventType: 'end', count: 1 },
+      ]);
       expect(statusB.status).toBe(200);
       expect(statusB.body).toEqual(expect.objectContaining({
         sessionId: analyzeB.body.sessionId,
@@ -712,7 +768,7 @@ describe('agent route RBAC', () => {
       expect(respondRes.body).toEqual({
         success: true,
         sessionId,
-        status: 'failed',
+        status: 'completed',
       });
     } finally {
       sessionContextManager.remove('session-resume-integration');

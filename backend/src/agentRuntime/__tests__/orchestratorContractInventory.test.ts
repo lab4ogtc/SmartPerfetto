@@ -17,6 +17,7 @@ const ORCHESTRATOR_REQUIRED_HOOKS = [
 ] as const satisfies readonly (keyof IOrchestrator)[];
 
 const ORCHESTRATOR_OPTIONAL_HOOKS = [
+  'abortSession',
   'cleanupSession',
   'getFocusStore',
   'recordUserInteraction',
@@ -33,6 +34,7 @@ const ORCHESTRATOR_OPTIONAL_HOOKS = [
 ] as const satisfies readonly (keyof IOrchestrator)[];
 
 const CONSUMED_OPTIONAL_HOOKS = [
+  'abortSession',
   'cleanupSession',
   'getFocusStore',
   'recordUserInteraction',
@@ -76,6 +78,7 @@ describe('IOrchestrator contract inventory', () => {
       'reset',
     ]);
     expect(ORCHESTRATOR_OPTIONAL_HOOKS).toEqual([
+      'abortSession',
       'cleanupSession',
       'getFocusStore',
       'recordUserInteraction',
@@ -94,6 +97,7 @@ describe('IOrchestrator contract inventory', () => {
 
   it('keeps every currently consumed optional hook declared on IOrchestrator', () => {
     expect(CONSUMED_OPTIONAL_HOOKS).toEqual([
+      'abortSession',
       'cleanupSession',
       'getFocusStore',
       'recordUserInteraction',

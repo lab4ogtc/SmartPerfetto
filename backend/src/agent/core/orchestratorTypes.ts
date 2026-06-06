@@ -171,6 +171,8 @@ export interface IOrchestrator {
   removeAllListeners(event?: string): this;
   analyze(query: string, sessionId: string, traceId: string, options?: AnalysisOptions): Promise<AnalysisResult>;
   reset(): void;
+  /** Best-effort, idempotent cancellation for a specific in-flight session. */
+  abortSession?(sessionId: string, referenceTraceId?: string): void | Promise<void>;
   /** Clean up all session-scoped state for a specific session (agentv3: artifacts, notes, session map). */
   cleanupSession?(sessionId: string): void;
   /** Historical focus-store hook. Guard with: typeof orchestrator.getFocusStore === 'function'. */

@@ -16,6 +16,7 @@ export interface AnalysisHarnessInput {
 export class AnalysisHarness extends EventEmitter implements IOrchestrator {
   readonly engine: IOrchestrator;
 
+  abortSession?: IOrchestrator['abortSession'];
   cleanupSession?: IOrchestrator['cleanupSession'];
   getFocusStore?: IOrchestrator['getFocusStore'];
   recordUserInteraction?: IOrchestrator['recordUserInteraction'];
@@ -61,6 +62,11 @@ export class AnalysisHarness extends EventEmitter implements IOrchestrator {
 
   private bindOptionalHooks(): void {
     const engine = this.engine;
+    if (typeof engine.abortSession === 'function') {
+      this.abortSession = (sessionId, referenceTraceId) => (
+        engine.abortSession!(sessionId, referenceTraceId)
+      );
+    }
     if (typeof engine.cleanupSession === 'function') {
       this.cleanupSession = (sessionId) => engine.cleanupSession!(sessionId);
     }

@@ -147,6 +147,19 @@ describe('runtime registry', () => {
     });
   });
 
+  it('requires every production runtime to expose session-scoped cancellation', () => {
+    const traceProcessorService = { kind: 'trace-processor' } as any;
+
+    for (const kind of productionRuntimeRegistry.listRuntimeKinds()) {
+      const orchestrator = productionRuntimeRegistry.createOrchestrator(kind, {
+        traceProcessorService,
+        selection: { kind, source: 'default' },
+      });
+
+      expect(typeof orchestrator.abortSession).toBe('function');
+    }
+  });
+
   it('creates runtimes through registered definitions', () => {
     const orchestrator = { analyze: jest.fn(), reset: jest.fn() } as unknown as IOrchestrator;
     const createOrchestrator = jest.fn((_input: any) => orchestrator);

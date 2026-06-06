@@ -79,6 +79,7 @@ describe('AnalysisHarness hidden strangler', () => {
     const harness = createAnalysisHarness({ engine: createEngine() });
 
     expect(typeof harness.cleanupSession).toBe('undefined');
+    expect(typeof harness.abortSession).toBe('undefined');
     expect(typeof harness.getFocusStore).toBe('undefined');
     expect(typeof harness.recordUserInteraction).toBe('undefined');
     expect(typeof harness.getInterventionController).toBe('undefined');
@@ -103,6 +104,7 @@ describe('AnalysisHarness hidden strangler', () => {
     const flags = [{ id: 'flag-1' }];
     const snapshot = { version: 1 };
     const hooks = {
+      abortSession: jest.fn((_sessionId: string, _referenceTraceId?: string) => undefined),
       cleanupSession: jest.fn(),
       getFocusStore: jest.fn(() => focusStore),
       recordUserInteraction: jest.fn(),
@@ -119,6 +121,7 @@ describe('AnalysisHarness hidden strangler', () => {
     };
     const harness = createAnalysisHarness({ engine: createEngine(hooks) });
 
+    harness.abortSession!('session-1', 'trace-ref');
     harness.cleanupSession!('session-1');
     harness.recordUserInteraction!({ kind: 'click' });
     harness.restoreSessionMapping!('session-1', 'sdk-session-1');
@@ -134,6 +137,7 @@ describe('AnalysisHarness hidden strangler', () => {
     expect(harness.getSessionUncertaintyFlags!('session-1')).toBe(flags);
     expect(harness.takeSnapshot!('session-1', 'trace-1', { field: true })).toBe(snapshot);
 
+    expect(hooks.abortSession).toHaveBeenCalledWith('session-1', 'trace-ref');
     expect(hooks.cleanupSession).toHaveBeenCalledWith('session-1');
     expect(hooks.recordUserInteraction).toHaveBeenCalledWith({ kind: 'click' });
     expect(hooks.restoreSessionMapping).toHaveBeenCalledWith('session-1', 'sdk-session-1');
