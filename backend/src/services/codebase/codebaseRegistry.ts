@@ -174,6 +174,21 @@ export class CodebaseRegistry {
     return this.codebases.get(codebaseId);
   }
 
+  findByRootRealpath(
+    kind: CodebaseKind,
+    rootRealpath: string,
+    owner?: {tenantId?: string; workspaceId?: string; userId?: string},
+  ): CodebaseRef | undefined {
+    this.load();
+    return Array.from(this.codebases.values()).find(ref =>
+      ref.kind === kind &&
+      ref.rootRealpath === rootRealpath &&
+      (!owner?.tenantId || ref.tenantId === owner.tenantId) &&
+      (!owner?.workspaceId || ref.workspaceId === owner.workspaceId) &&
+      (!owner?.userId || ref.userId === owner.userId),
+    );
+  }
+
   list(): CodebaseRefSummary[] {
     this.load();
     return Array.from(this.codebases.values()).map(toSummary);

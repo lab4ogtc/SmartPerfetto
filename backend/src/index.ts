@@ -66,6 +66,7 @@ import enterpriseRuntimeDashboardRoutes from './routes/enterpriseRuntimeDashboar
 import analysisResultRoutes from './routes/analysisResultRoutes';
 import workspaceWindowRoutes from './routes/workspaceWindowRoutes';
 import comparisonRoutes from './routes/comparisonRoutes';
+import mcpRoutes from './routes/mcpRoutes';
 import traceProcessorProxyRoutes, { handleTraceProcessorProxyUpgrade } from './routes/traceProcessorProxyRoutes';
 import {authenticate} from './middleware/auth';
 import { collectEnvCredentialSources } from './agentRuntime/envCredentialSources';
@@ -180,6 +181,7 @@ app.use(
   ...workspaceRouteContextMiddleware,
   comparisonRoutes,
 );
+app.use('/api/mcp', mcpRoutes);
 app.use(
   '/api/traces',
   markLegacyApi(

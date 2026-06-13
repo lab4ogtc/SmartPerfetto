@@ -120,6 +120,48 @@ describe('dispatch — tools/list', () => {
     expect(callResp!.error?.message).toMatch(/not exposed/);
   });
 
+  it('can expose requires_codebase_permission tools for an authorized session', async () => {
+    const registry = new McpToolRegistry();
+    registry.registerSdk(
+      stubSdkTool({description: 'public alpha'}),
+      'alpha',
+      'public',
+    );
+    registry.registerSdk(
+      stubSdkTool({description: 'source lookup'}),
+      'lookup_app_source',
+      'requires_codebase_permission',
+    );
+
+    const listResp = await dispatch(
+      registry,
+      {
+        jsonrpc: '2.0',
+        id: 22,
+        method: 'tools/list',
+      },
+      {allowedExposures: ['public', 'requires_codebase_permission']},
+    );
+    const tools = (listResp!.result as {tools: Array<{name: string}>}).tools;
+    expect(tools.map(t => t.name)).toEqual(['alpha', 'lookup_app_source']);
+  });
+
+  it('declares listChanged capability when requested by a streaming host', async () => {
+    const registry = new McpToolRegistry();
+    const resp = await dispatch(
+      registry,
+      {
+        jsonrpc: '2.0',
+        id: 23,
+        method: 'initialize',
+      },
+      {listChanged: true},
+    );
+    expect(resp?.result).toMatchObject({
+      capabilities: {tools: {listChanged: true}},
+    });
+  });
+
   it('descriptor carries name + description + JSON Schema from shared input schema', async () => {
     const registry = new McpToolRegistry();
     registry.registerSdk(

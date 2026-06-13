@@ -36,6 +36,7 @@ import {
   type McpToolDefinition,
 } from './mcpToolRegistry';
 import { createJsonSchemaFromZodRawShape } from '../agentRuntime/runtimeToolSpec';
+import type { McpToolExposure } from '../types/sparkContracts';
 
 const PROTOCOL_VERSION = '2024-11-05';
 const SERVER_NAME = 'smartperfetto';
@@ -57,6 +58,11 @@ export interface JsonRpcResponse {
   error?: {code: number; message: string; data?: unknown};
 }
 
+export interface DispatchOptions {
+  allowedExposures?: readonly McpToolExposure[];
+  listChanged?: boolean;
+}
+
 /** Standard JSON-RPC error codes plus MCP-specific tool errors. */
 export const RPC_ERROR_CODES = {
   PARSE_ERROR: -32700,
@@ -73,7 +79,9 @@ export const RPC_ERROR_CODES = {
 export async function dispatch(
   registry: McpToolRegistry,
   req: JsonRpcRequest,
+  options: DispatchOptions = {},
 ): Promise<JsonRpcResponse | null> {
+  const allowedExposures = options.allowedExposures ?? ['public'];
   // Notifications (no id) — execute side effects but never reply.
   // Our protocol surface has none, but per JSON-RPC we silently drop.
   if (req.id === undefined) return null;
@@ -92,7 +100,7 @@ export async function dispatch(
       result: {
         protocolVersion: PROTOCOL_VERSION,
         serverInfo: {name: SERVER_NAME, version: SERVER_VERSION},
-        capabilities: {tools: {}},
+        capabilities: {tools: options.listChanged ? {listChanged: true} : {}},
       },
     };
   }
@@ -101,7 +109,7 @@ export async function dispatch(
     // External hosts only see public tools. Internal session-protocol
     // tools (submit_plan, write_analysis_note, etc.) stay hidden so a
     // remote Claude Code instance cannot corrupt our session state.
-    const publicDefs = filterByExposure(registry.list(), ['public']);
+    const publicDefs = filterByExposure(registry.list(), allowedExposures);
     return {
       jsonrpc: '2.0',
       id,
@@ -124,13 +132,13 @@ export async function dispatch(
         `Unknown tool '${params.name}'`,
       );
     }
-    if (def.exposure !== 'public') {
+    if (!allowedExposures.includes(def.exposure)) {
       // Internal / deprecated tools stay invisible to external hosts
       // both in the listing and at call time.
       return rpcError(
         id,
         RPC_ERROR_CODES.METHOD_NOT_FOUND,
-        `Tool '${params.name}' is not exposed to external hosts`,
+        `Tool '${params.name}' is not exposed to this caller`,
       );
     }
     try {

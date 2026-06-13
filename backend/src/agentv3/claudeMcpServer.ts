@@ -94,7 +94,7 @@ import {
  */
 const RAG_STORE_PATH = backendLogPath('rag_store.json');
 let cachedRagStore: RagStore | null = null;
-function getRagStore(): RagStore {
+export function getRagStore(): RagStore {
   if (!cachedRagStore) cachedRagStore = new RagStore(RAG_STORE_PATH);
   return cachedRagStore;
 }
@@ -4749,6 +4749,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
     server: registry.buildSdkServer({scope: toolRequestScope}),
     allowedTools: registry.buildAllowedTools(toolRequestScope),
     toolDefinitions: registry.listForRequest(toolRequestScope),
+    registry,
   };
 }
 
