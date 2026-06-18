@@ -207,6 +207,8 @@ function createTestServer(options: {
   lightweight?: boolean;
   userQuery?: string;
   cachedArchitecture?: any;
+  codeAwareMode?: any;
+  codebaseIds?: string[];
 } = {}) {
   const analysisNotes: AnalysisNote[] = [];
   const hypotheses: Hypothesis[] = [];
@@ -245,7 +247,7 @@ function createTestServer(options: {
     registerSkill: jest.fn(),
   };
 
-  const { server, allowedTools } = createClaudeMcpServer({
+  const { server, allowedTools, toolDefinitions } = createClaudeMcpServer({
     traceId: 'test-trace-123',
     userQuery: options.userQuery,
     traceProcessorService: mockTpService as any,
@@ -258,6 +260,8 @@ function createTestServer(options: {
     emitUpdate: (u: any) => emittedUpdates.push(u),
     sceneType: options.sceneType,
     cachedArchitecture: options.cachedArchitecture,
+    codeAwareMode: options.codeAwareMode,
+    codebaseIds: options.codebaseIds,
     ...(options.lightweight ? { lightweight: true } : { analysisPlan }),
     ...(options.referenceTraceId ? {
       referenceTraceId: options.referenceTraceId,
@@ -280,6 +284,7 @@ function createTestServer(options: {
   return {
     tools,
     allowedTools,
+    toolDefinitions,
     analysisNotes,
     hypotheses,
     uncertaintyFlags,
@@ -404,6 +409,122 @@ describe('createClaudeMcpServer', () => {
       ]);
       expect(allowedTools).toContain(MCP_NAME_PREFIX + 'fetch_artifact');
       expect(tools.has('submit_plan')).toBe(false);
+    });
+
+    it('compacts registered tool descriptions before exposing runtime definitions', () => {
+      const { tools, toolDefinitions } = createTestServer({
+        referenceTraceId: 'reference-trace-456',
+        codeAwareMode: 'metadata_only',
+        codebaseIds: ['app-codebase'],
+      });
+
+      const runtimeDescriptions = toolDefinitions.map(def => def.shared.description);
+      const sdkDescriptions = [...tools.values()].map(tool => String((tool as any).description ?? ''));
+      const totalChars = runtimeDescriptions.reduce((sum, description) => sum + description.length, 0);
+      const descriptionByName = new Map(toolDefinitions.map(def => [def.name, def.shared.description]));
+
+      expect(runtimeDescriptions.length).toBeGreaterThanOrEqual(25);
+      expect(sdkDescriptions).toEqual(runtimeDescriptions);
+      expect(totalChars).toBeLessThanOrEqual(13_000);
+      for (const description of runtimeDescriptions) {
+        expect(description.length).toBeLessThanOrEqual(1100);
+        expect(description).not.toMatch(/\n\nExamples:/);
+      }
+      expect(runtimeDescriptions.join('\n')).toContain('SQL safety rules');
+      expect(runtimeDescriptions.join('\n')).toContain('expectedCalls');
+
+      for (const name of ['execute_sql', 'execute_sql_on']) {
+        const description = descriptionByName.get(name) ?? '';
+        expect(description).toContain('s.name AS slice_name');
+        expect(description).not.toContain('s. name');
+        expect(description).toContain('FrameTimeline rows expose upid');
+        expect(description).toContain('is_main_thread');
+      }
+      expect(descriptionByName.get('execute_sql')).toContain('batch_frame_root_cause');
+      expect(descriptionByName.get('execute_sql')).toContain('use fetch_artifact');
+    });
+
+    it('keeps critical tool families available under the broadest scoped request', () => {
+      const { tools, allowedTools, toolDefinitions } = createTestServer({
+        referenceTraceId: 'reference-trace-456',
+        codeAwareMode: 'metadata_only',
+        codebaseIds: ['app-codebase'],
+      });
+
+      const runtimeNames = new Set(toolDefinitions.map(def => def.name));
+      const requiredTools = [
+        'fetch_artifact',
+        'submit_plan',
+        'update_plan_phase',
+        'revise_plan',
+        'lookup_strategy_detail',
+        'compare_skill',
+        'execute_sql_on',
+        'get_comparison_context',
+        'list_codebases',
+        'lookup_app_source',
+        'lookup_kernel_source',
+        'resolve_symbol',
+        'propose_patch',
+      ];
+
+      for (const name of requiredTools) {
+        expect(tools.has(name)).toBe(true);
+        expect(runtimeNames.has(name)).toBe(true);
+        expect(allowedTools).toContain(MCP_NAME_PREFIX + name);
+      }
+    });
+
+    it.each([
+      {
+        label: 'full default',
+        options: {},
+        present: ['fetch_artifact', 'submit_plan', 'update_plan_phase', 'revise_plan'],
+        absent: ['compare_skill', 'execute_sql_on', 'get_comparison_context', 'list_codebases', 'lookup_app_source'],
+      },
+      {
+        label: 'full with code-aware disabled',
+        options: { codeAwareMode: 'off', codebaseIds: ['app-codebase'] },
+        present: ['fetch_artifact', 'submit_plan', 'update_plan_phase', 'revise_plan'],
+        absent: ['list_codebases', 'lookup_app_source', 'lookup_kernel_source', 'resolve_symbol', 'propose_patch'],
+      },
+      {
+        label: 'full with code-aware metadata',
+        options: { codeAwareMode: 'metadata_only', codebaseIds: ['app-codebase'] },
+        present: ['fetch_artifact', 'submit_plan', 'list_codebases', 'lookup_app_source', 'lookup_kernel_source', 'resolve_symbol', 'propose_patch'],
+        absent: ['compare_skill', 'execute_sql_on', 'get_comparison_context'],
+      },
+      {
+        label: 'full comparison',
+        options: { referenceTraceId: 'reference-trace-456' },
+        present: ['fetch_artifact', 'submit_plan', 'compare_skill', 'execute_sql_on', 'get_comparison_context'],
+        absent: ['list_codebases', 'lookup_app_source', 'lookup_kernel_source'],
+      },
+      {
+        label: 'lightweight broad request',
+        options: {
+          lightweight: true,
+          referenceTraceId: 'reference-trace-456',
+          codeAwareMode: 'metadata_only',
+          codebaseIds: ['app-codebase'],
+        },
+        present: ['execute_sql', 'invoke_skill', 'lookup_sql_schema', 'fetch_artifact'],
+        absent: ['submit_plan', 'update_plan_phase', 'compare_skill', 'execute_sql_on', 'list_codebases', 'lookup_app_source'],
+      },
+    ])('keeps scoped registry expectations stable for $label', ({ options, present, absent }) => {
+      const { tools, allowedTools, toolDefinitions } = createTestServer(options as any);
+      const runtimeNames = new Set(toolDefinitions.map(def => def.name));
+
+      for (const name of present) {
+        expect(tools.has(name)).toBe(true);
+        expect(runtimeNames.has(name)).toBe(true);
+        expect(allowedTools).toContain(MCP_NAME_PREFIX + name);
+      }
+      for (const name of absent) {
+        expect(tools.has(name)).toBe(false);
+        expect(runtimeNames.has(name)).toBe(false);
+        expect(allowedTools).not.toContain(MCP_NAME_PREFIX + name);
+      }
     });
   });
 

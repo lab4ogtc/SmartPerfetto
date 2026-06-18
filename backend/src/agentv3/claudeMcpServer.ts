@@ -2257,11 +2257,10 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
 
   const executeSql = tool(
     'execute_sql',
-    'Execute a raw SQL query against the Perfetto trace_processor for the currently loaded trace. ' +
-    'Returns columnar results. Set summary=true for large result sets to get column statistics + sample rows.\n\n' +
-    'Use when: ad-hoc queries not covered by existing skills, verifying hypotheses with specific SQL, checking raw data.\n' +
-    'Don\'t use when: a matching skill exists (use invoke_skill instead — richer layered output), you need schema info (use lookup_sql_schema first), or you need to inspect rows already returned as an artifact (use fetch_artifact; do not copy artifact rows into FROM (VALUES ...)).\n\n' +
-    'SQL safety rules: qualify duplicate column names after JOINs. Do not write bare SELECT name/ts/dur when joining slice/thread/process; use s.name AS slice_name, s.ts, s.dur, t.name AS thread_name, p.name AS process_name, or prefer the thread_slice stdlib view. FrameTimeline rows expose upid, not utid/process_name; use JOIN process USING(upid) for actual_frame_timeline_slice. thread_slice does not expose self_dur directly; JOIN slice_self_dur USING(id) when self time is needed. When using thread_slice, read thread_name and process_name directly; do not write t.name or p.name unless JOIN thread t or JOIN process p is present. The thread table main-thread column is is_main_thread, not main_thread. Do not query __intrinsic_* names or skill step names such as batch_frame_root_cause as SQL tables; they are skill artifacts, use fetch_artifact for those rows.\n\n' +
+    'Run raw SQL against the current Perfetto trace_processor trace. Use summary=true for large results (column stats + sample rows).\n\n' +
+    'Use when: custom SQL is needed to verify a hypothesis or inspect raw trace data.\n' +
+    'Don\'t use when: a skill covers the task (use invoke_skill), schema info is needed (lookup_sql_schema), or rows are already in an artifact (fetch_artifact; do not copy artifact rows into FROM (VALUES ...)).\n\n' +
+    'SQL safety rules: qualify duplicate column names after JOINs; use s.name AS slice_name, s.ts, s.dur, t.name AS thread_name, p.name AS process_name, or prefer thread_slice. FrameTimeline rows expose upid, not utid/process_name; JOIN process USING(upid) for actual_frame_timeline_slice. For thread_slice self time, JOIN slice_self_dur USING(id); read thread_name/process_name directly unless you explicitly JOIN thread/process. The main-thread column is is_main_thread. Do not query __intrinsic_* names or skill step names such as batch_frame_root_cause as SQL tables; use fetch_artifact for skill artifact rows.\n\n' +
     'Examples:\n' +
     '1. Count jank frames: sql="SELECT COUNT(*) as jank_count FROM actual_frame_timeline_slice WHERE jank_type != \'None\'", summary=false\n' +
     '2. CPU frequency overview: sql="SELECT cpu, MIN(value) as min_freq, MAX(value) as max_freq, AVG(value) as avg_freq FROM counter JOIN counter_track ON counter.track_id=counter_track.id WHERE counter_track.name GLOB \'cpu*freq\' GROUP BY cpu", summary=true\n' +
@@ -5226,11 +5225,9 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
 
   const executeSqlOn = referenceTraceId ? tool(
     'execute_sql_on',
-    'Execute a SQL query against a specific trace in comparison mode. ' +
-    'Use "current" for the primary trace, "reference" for the comparison trace.\n\n' +
-    'Use when: you need to drill into a specific trace during comparison analysis, ' +
-    'or verify a finding from compare_skill with more targeted SQL. Do not copy rows from compare_skill/fetch_artifact into FROM (VALUES ...); use fetch_artifact rows directly.\n\n' +
-    'SQL safety rules: qualify duplicate column names after JOINs. Do not write bare SELECT name/ts/dur when joining slice/thread/process; use s.name AS slice_name, s.ts, s.dur, t.name AS thread_name, p.name AS process_name, or prefer the thread_slice stdlib view. FrameTimeline rows expose upid, not utid/process_name; use JOIN process USING(upid) for actual_frame_timeline_slice. thread_slice does not expose self_dur directly; JOIN slice_self_dur USING(id) when self time is needed. When using thread_slice, read thread_name and process_name directly; do not write t.name or p.name unless JOIN thread t or JOIN process p is present. The thread table main-thread column is is_main_thread, not main_thread.\n\n' +
+    'Run SQL against the current or reference trace in comparison mode.\n\n' +
+    'Use when: drilling into one side of a comparison or verifying compare_skill findings with targeted SQL. Use fetch_artifact rows directly instead of copying compare_skill/fetch_artifact rows into FROM (VALUES ...).\n\n' +
+    'SQL safety rules: qualify duplicate column names after JOINs; use s.name AS slice_name, s.ts, s.dur, t.name AS thread_name, p.name AS process_name, or prefer thread_slice. FrameTimeline rows expose upid, not utid/process_name; JOIN process USING(upid) for actual_frame_timeline_slice. For thread_slice self time, JOIN slice_self_dur USING(id); read thread_name/process_name directly unless you explicitly JOIN thread/process. The main-thread column is is_main_thread.\n\n' +
     'Examples:\n' +
     '1. Check reference trace jank: trace="reference", sql="SELECT COUNT(*) FROM actual_frame_timeline_slice WHERE jank_type != \'None\'"\n' +
     '2. Compare CPU freq: trace="current", sql="SELECT cpu, AVG(value) as avg_freq FROM counter JOIN counter_track ON counter.track_id=counter_track.id WHERE counter_track.name GLOB \'cpu*freq\' GROUP BY cpu"',
