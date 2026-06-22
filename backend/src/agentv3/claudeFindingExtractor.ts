@@ -30,6 +30,27 @@ function maskCodeBlocksForFindingScan(text: string): string {
   return text.replace(/```[\s\S]*?```/g, block => block.replace(/[^\n]/g, ' '));
 }
 
+function maskMarkdownTableRowsForFindingScan(text: string): string {
+  return text
+    .split('\n')
+    .map(line => isMarkdownTableRow(line) ? line.replace(/[^\n]/g, ' ') : line)
+    .join('\n');
+}
+
+function isMarkdownTableRow(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed.includes('|')) return false;
+  if (/^(?:#{1,6}\s+|[-*+]\s+|\d+\.\s+)/.test(trimmed)) return false;
+
+  const cells = trimmed
+    .split('|')
+    .map(cell => cell.trim())
+    .filter(Boolean);
+  if (cells.length >= 3) return true;
+
+  return /^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(trimmed);
+}
+
 function findNextSeverityMarkerIndex(scanText: string, startIndex: number): number | undefined {
   NEXT_SEVERITY_REGEX.lastIndex = startIndex;
   const next = NEXT_SEVERITY_REGEX.exec(scanText);
@@ -46,7 +67,7 @@ export function extractFindingsFromText(text: string): Finding[] {
 
   // Mask code blocks to avoid extracting findings from Mermaid/SQL/code content
   // while preserving indices so evidence can still be read from the original text.
-  const scanText = maskCodeBlocksForFindingScan(text);
+  const scanText = maskMarkdownTableRowsForFindingScan(maskCodeBlocksForFindingScan(text));
 
   SEVERITY_REGEX.lastIndex = 0;
 

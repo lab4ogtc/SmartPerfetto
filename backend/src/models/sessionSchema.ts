@@ -110,6 +110,13 @@ export interface SessionMetadata {
   sessionStateSnapshot?: import('../agentv3/sessionStateSnapshot').SessionStateSnapshot;
 
   /**
+   * Backend-session ancestry when a user-visible session had to bridge to a
+   * fresh backend session. Duplicated from sessionStateSnapshot for catalog
+   * visibility.
+   */
+  lineage?: import('../agentv3/sessionStateSnapshot').SessionLineage;
+
+  /**
    * @deprecated Use sessionStateSnapshot instead. Kept for backward-compatible reads of old sessions.
    * New writes always populate both (dual-write).
    *

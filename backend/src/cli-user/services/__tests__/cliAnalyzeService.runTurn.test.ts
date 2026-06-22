@@ -262,6 +262,27 @@ describe('CliAnalyzeService runTurn final quality gate', () => {
     }));
   });
 
+  it('attaches CLI degraded lineage to the backend session before persistence', async () => {
+    const lineage = {
+      previousBackendSessionId: 'backend-before-level3',
+      reason: 'cli-level3-degraded' as const,
+      at: 1_780_000_000_000,
+    };
+
+    const service = new CliAnalyzeService();
+    await service.runTurn({
+      traceId: 'trace-cli',
+      query: '继续分析',
+      lineage,
+      onEvent: jest.fn(),
+    });
+
+    expect(mockPreparedSession.lineage).toEqual(lineage);
+    expect(mockPersistAgentTurn).toHaveBeenCalledWith(expect.objectContaining({
+      session: expect.objectContaining({ lineage }),
+    }));
+  });
+
   it('derives verifier-ready contracts from CLI-collected DataEnvelopes before verification', async () => {
     const envelope = createDataEnvelope({
       columns: ['package', 'startup_type', 'ttid_ms'],

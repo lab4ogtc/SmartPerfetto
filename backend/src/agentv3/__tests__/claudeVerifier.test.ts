@@ -50,6 +50,7 @@ import {
   isConclusionIncomplete,
   parseVerifierJsonIssues,
 } from '../claudeVerifier';
+import { extractFindingsFromText } from '../claudeFindingExtractor';
 
 const mockFs = require('fs') as jest.Mocked<typeof import('fs')>;
 const actualFs = jest.requireActual<typeof import('fs')>('fs');
@@ -117,6 +118,21 @@ describe('verifyHeuristic', () => {
       const findings = [makeFinding({ severity: 'critical', evidence: [{ type: 'data', value: '50ms' }] })];
       const issues = verifyHeuristic(findings, 'Some conclusion text that is long enough');
       expect(issues.filter(i => i.type === 'missing_evidence')).toHaveLength(0);
+    });
+
+    it('should not flag markdown severity table cells as CRITICAL findings without evidence', () => {
+      const conclusion = `
+| 类型 | 帧数 | 占比 | 根因 | 严重度 |
+|------|------|------|------|--------|
+| \`CustomScroll_longFrameLoad\` | 6 | 85.7% | ANIMATION 回调同步重载 | [CRITICAL] |
+
+这是一段足够长的结论，用于描述滑动性能问题和后续排查方向。
+`;
+      const findings = extractFindingsFromText(conclusion);
+      const issues = verifyHeuristic(findings, conclusion);
+
+      expect(findings.map(finding => finding.title)).not.toContain('|');
+      expect(issues.filter(issue => issue.type === 'missing_evidence')).toHaveLength(0);
     });
   });
 

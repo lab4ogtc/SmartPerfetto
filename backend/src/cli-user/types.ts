@@ -10,6 +10,7 @@
  */
 
 import type { BackendAgentRuntimeKind } from '../agentRuntime/runtimeSelection';
+import type { SessionLineage } from '../agentv3/sessionStateSnapshot';
 import type { CodeAwareMode } from '../services/codebase/codeAwareFeature';
 
 export type CapturePresetId =
@@ -80,10 +81,8 @@ export interface TraceCaptureResult {
   };
 }
 
-export interface CliSessionLineage {
-  previousBackendSessionId: string;
+export interface CliSessionLineage extends SessionLineage {
   reason: 'cli-level3-degraded';
-  at: number;
 }
 
 /** Written to `<sessionDir>/config.json`. Source of truth for resume. */

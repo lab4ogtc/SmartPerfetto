@@ -59,7 +59,7 @@ import type { AnalysisResult } from '../../agent/core/orchestratorTypes';
 import type { QueryResult } from '../../services/traceProcessorService';
 import type { CodeAwareMode } from '../../services/codebase/codeAwareFeature';
 import { validateDataEnvelope, type DataEnvelope } from '../../types/dataContract';
-import type { CliAnalysisMode } from '../types';
+import type { CliAnalysisMode, CliSessionLineage } from '../types';
 
 export interface RunTurnInput {
   tracePath?: string;
@@ -70,6 +70,8 @@ export interface RunTurnInput {
   analysisMode?: CliAnalysisMode;
   codeAwareMode?: CodeAwareMode;
   codebaseIds?: string[];
+  /** Backend-session ancestry for CLI Level-3 degraded resume bridges. */
+  lineage?: CliSessionLineage;
   /** Receives every StreamingUpdate from the orchestrator in real time. */
   onEvent: (update: StreamingUpdate) => void;
   /**
@@ -185,6 +187,9 @@ export class CliAnalyzeService {
       requestedSessionId: input.sessionId,
       referenceTraceId: input.referenceTraceId,
     });
+    if (input.lineage) {
+      session.lineage = input.lineage;
+    }
     const effectiveReferenceTraceId = input.referenceTraceId ?? session.referenceTraceId;
 
     // Bump runSequence for this turn. HTTP route gets the incremented value

@@ -231,7 +231,12 @@ describe('continueSession Level-3 lineage', () => {
       reason: 'cli-level3-degraded',
     });
     expect(typeof saved.lineage?.at).toBe('number');
-    expect((service.runTurn as any).mock.calls[0][0].sessionId).toBeUndefined();
+    const runInput = (service.runTurn as any).mock.calls[0][0];
+    expect(runInput.sessionId).toBeUndefined();
+    expect(runInput.lineage).toMatchObject({
+      previousBackendSessionId: 'backend-old',
+      reason: 'cli-level3-degraded',
+    });
     expect(turnMarkdown).toContain('此会话因 trace 重载已从原会话降级续接');
     expect(turnMarkdown).toContain('backend-old');
   });

@@ -125,8 +125,17 @@ function compactSqlDataForPreview(data: unknown): unknown {
   return {preview: truncateString(JSON.stringify(data), MAX_TRUNCATED_CELL_CHARS)};
 }
 
+function hasSqlTablePayload(data: unknown): boolean {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+  const candidate = data as {columns?: unknown; rows?: unknown};
+  return Array.isArray(candidate.columns) && Array.isArray(candidate.rows);
+}
+
 function isSqlResultEnvelope(value: unknown): value is PersistableSqlEnvelope {
-  return Boolean(value && typeof value === 'object' && (value as any).meta?.type === 'sql_result');
+  if (!value || typeof value !== 'object') return false;
+  const envelope = value as {meta?: {type?: unknown}; data?: unknown};
+  if (envelope.meta?.type === 'sql_result') return true;
+  return envelope.meta?.type === 'skill_result' && hasSqlTablePayload(envelope.data);
 }
 
 function buildSqlResultEntry(envelope: PersistableSqlEnvelope): SqlResultMessageEntry {
@@ -203,6 +212,7 @@ export function persistAgentTurn(input: PersistAgentTurnInput): void {
             agentRuntimeProviderId: session.providerId,
             agentRuntimeProviderSnapshotHash: session.providerSnapshotHash,
             continuityBreaks: session.continuityBreaks,
+            lineage: session.lineage,
             codeAwareMode: (session as {codeAwareMode?: unknown}).codeAwareMode as any,
             codebaseIds: (session as {codebaseIds?: string[]}).codebaseIds,
             codebaseSnapshot: buildCodebaseSnapshot((session as {codebaseIds?: string[]}).codebaseIds),

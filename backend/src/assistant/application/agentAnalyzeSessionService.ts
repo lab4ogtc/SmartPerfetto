@@ -18,6 +18,7 @@ import {
   getSnapshotRuntimeProviderId,
   getSnapshotRuntimeProviderSnapshotHash,
   type ProviderContinuityBreak,
+  type SessionLineage,
   type ComparisonReportSection,
   type ComparisonSourceKind,
 } from '../../agentv3/sessionStateSnapshot';
@@ -89,6 +90,8 @@ export interface AnalyzeManagedSession extends ManagedAssistantSession {
   agentQuery?: string;
   /** Append-only provider/runtime continuity breaks that forced fresh SDK context. */
   continuityBreaks?: ProviderContinuityBreak[];
+  /** Backend-session ancestry when a user-visible session bridged to a fresh backend session. */
+  lineage?: SessionLineage;
   /** Reference trace ID for raw dual-trace comparison sessions. */
   referenceTraceId?: string;
   /** Comparison source model used by this session. */
@@ -558,6 +561,7 @@ export class AgentAnalyzeSessionService<TSession extends AnalyzeManagedSession> 
               ? appendProviderContinuityBreak(stateSnapshot?.continuityBreaks, snapshotProviderHash)
               : normalizeContinuityBreaks(stateSnapshot?.continuityBreaks);
             const restoredAgentQuery = buildAgentQueryWithContinuityNotice(query, restoredContinuityBreaks);
+            const restoredLineage = stateSnapshot?.lineage ?? persistedSession.metadata?.lineage;
 
             const restoredLogger = this.createSessionLogger(requestedSessionId);
             restoredLogger.setMetadata({
@@ -624,6 +628,7 @@ export class AgentAnalyzeSessionService<TSession extends AnalyzeManagedSession> 
                 : undefined,
               agentQuery: restoredAgentQuery,
               continuityBreaks: restoredContinuityBreaks.length > 0 ? restoredContinuityBreaks : undefined,
+              lineage: restoredLineage,
               referenceTraceId: effectiveReferenceTraceId,
               comparisonSource:
                 stateSnapshot?.comparisonSource

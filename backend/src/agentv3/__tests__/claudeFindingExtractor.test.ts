@@ -127,6 +127,33 @@ Binder: 0ms / GC: 0ms / IO: 0ms
     expect(findings[0].evidence?.[0]?.text).toContain('CPU频率');
   });
 
+  it('should ignore severity markers that only appear inside markdown table cells', () => {
+    const text = `
+| 类型 | 帧数 | 占比 | 根因 | 严重度 |
+|------|------|------|------|--------|
+| \`CustomScroll_longFrameLoad\` | 6 | 85.7% | ANIMATION 回调同步重载 | [CRITICAL] |
+
+### [HIGH] 真实发现：RenderThread 合成负载
+证据：Frame 59665234 RenderThread Q4b=98.3%
+`;
+
+    const findings = extractFindingsFromText(text);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].title).toContain('RenderThread 合成负载');
+    expect(findings.map(finding => finding.title)).not.toContain('|');
+  });
+
+  it('should still extract severity headings whose title contains pipe characters', () => {
+    const text = `
+### [HIGH] UI | Render | CPU stall
+证据：Frame 42 RenderThread 18ms
+`;
+
+    const findings = extractFindingsFromText(text);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].title).toBe('UI | Render | CPU stall');
+  });
+
   it('should handle empty text', () => {
     expect(extractFindingsFromText('')).toHaveLength(0);
     expect(extractFindingsFromText(undefined as any)).toHaveLength(0);
