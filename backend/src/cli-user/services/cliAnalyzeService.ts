@@ -25,6 +25,7 @@ import * as fs from 'fs';
 import { AssistantApplicationService } from '../../assistant/application/assistantApplicationService';
 import {
   AgentAnalyzeSessionService,
+  buildAgentQueryWithContinuityNotice,
   type AnalyzeManagedSession,
 } from '../../assistant/application/agentAnalyzeSessionService';
 import { getTraceProcessorService } from '../../services/traceProcessorService';
@@ -217,8 +218,11 @@ export class CliAnalyzeService {
     orchestrator.on('update', handler);
 
     let result: AnalysisResult;
+    const agentQuery = session.agentQuery && session.query === input.query
+      ? session.agentQuery
+      : buildAgentQueryWithContinuityNotice(input.query, session.continuityBreaks);
     try {
-      result = await orchestrator.analyze(input.query, sessionId, traceId, {
+      result = await orchestrator.analyze(agentQuery, sessionId, traceId, {
         providerId: session.providerId,
         referenceTraceId: effectiveReferenceTraceId,
         analysisMode: input.analysisMode,

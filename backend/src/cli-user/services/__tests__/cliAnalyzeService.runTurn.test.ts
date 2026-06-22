@@ -39,6 +39,7 @@ jest.mock('../../../assistant/application/agentAnalyzeSessionService', () => ({
       isNewSession: true,
     })),
   })),
+  buildAgentQueryWithContinuityNotice: (query: string) => query,
 }));
 
 jest.mock('../../../services/sessionPersistenceService', () => ({
@@ -233,6 +234,32 @@ describe('CliAnalyzeService runTurn final quality gate', () => {
     expect(output.providerId).toBe('provider-from-engine');
     expect(output.agentRuntimeKind).toBe('openai-agents-sdk');
     expect(output.providerSnapshotHash).toBe('hash-from-engine');
+  });
+
+  it('passes prepared continuity agentQuery to the runtime while preserving the user query for persistence', async () => {
+    mockPreparedSession.agentQuery = [
+      'System context continuity notice:',
+      'The provider SDK conversation context was reset before this turn.',
+      '',
+      'User query:',
+      '分析启动慢',
+    ].join('\n');
+
+    const service = new CliAnalyzeService();
+    await service.runTurn({
+      traceId: 'trace-cli',
+      query: '分析启动慢',
+      onEvent: jest.fn(),
+    });
+
+    const analyzeCall = mockAnalyze.mock.calls[0] as unknown[];
+    expect(analyzeCall[0]).toBe(mockPreparedSession.agentQuery);
+    expect(analyzeCall[1]).toBe('cli-session-quality');
+    expect(analyzeCall[2]).toBe('trace-cli');
+    expect(analyzeCall[3]).toEqual(expect.any(Object));
+    expect(mockPersistAgentTurn).toHaveBeenCalledWith(expect.objectContaining({
+      query: '分析启动慢',
+    }));
   });
 
   it('derives verifier-ready contracts from CLI-collected DataEnvelopes before verification', async () => {

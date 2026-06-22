@@ -14,6 +14,7 @@ describe('persistAgentTurn', () => {
     sessionContextManager.remove('session-partial-message');
     sessionContextManager.remove('session-sql-result-message');
     sessionContextManager.remove('session-sql-result-truncated');
+    sessionContextManager.remove('session-continuity-breaks');
   });
 
   it('persists partial assistant messages with a visible integrity warning', () => {
@@ -175,5 +176,59 @@ describe('persistAgentTurn', () => {
     expect(persisted.originalBytes).toBeGreaterThan(100 * 1024);
     expect(JSON.stringify(persisted).length).toBeLessThan(105 * 1024);
     expect(JSON.stringify(persisted)).not.toContain(largeValue);
+  });
+
+  it('passes provider continuity breaks into the atomic session snapshot', () => {
+    const appendMessages = jest.fn();
+    const saveSessionStateSnapshot = jest.fn(() => true);
+    jest.spyOn(SessionPersistenceService, 'getInstance').mockReturnValue({
+      saveSessionStateSnapshot,
+      appendMessages,
+    } as any);
+
+    const sessionId = 'session-continuity-breaks';
+    const traceId = 'trace-continuity-breaks';
+    const continuityBreaks = [{
+      at: 1710000000000,
+      previousProviderHash: 'hash-before-reset',
+      reason: 'provider_snapshot_hash_mismatch' as const,
+    }];
+    sessionContextManager.set(sessionId, traceId, new EnhancedSessionContext(sessionId, traceId));
+    const takeSnapshot = jest.fn((_sessionId: string, _traceId: string, fields: any) => ({
+      version: 1,
+      snapshotTimestamp: Date.now(),
+      sessionId,
+      traceId,
+      ...fields,
+      analysisNotes: [],
+      analysisPlan: null,
+      planHistory: [],
+      uncertaintyFlags: [],
+    }));
+
+    persistAgentTurn({
+      sessionId,
+      traceId,
+      query: '继续分析',
+      result: {
+        conclusion: '综合结论：继续分析完成。',
+        totalDurationMs: 123,
+      },
+      session: {
+        createdAt: Date.now(),
+        continuityBreaks,
+        orchestrator: { takeSnapshot },
+      } as any,
+    });
+
+    expect(takeSnapshot).toHaveBeenCalledWith(
+      sessionId,
+      traceId,
+      expect.objectContaining({ continuityBreaks }),
+    );
+    const savedCall = saveSessionStateSnapshot.mock.calls[0] as unknown[];
+    expect(savedCall[0]).toBe(sessionId);
+    expect(savedCall[1]).toEqual(expect.objectContaining({ continuityBreaks }));
+    expect(savedCall[2]).toEqual(expect.any(Object));
   });
 });

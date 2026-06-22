@@ -106,6 +106,14 @@ export interface SnapshotEngineProviderState {
   providerSnapshotHash?: string | null;
 }
 
+export type ProviderContinuityBreakReason = 'provider_snapshot_hash_mismatch';
+
+export interface ProviderContinuityBreak {
+  at: number;
+  previousProviderHash: string;
+  reason: ProviderContinuityBreakReason;
+}
+
 export interface ClaudeSnapshotEngineState {
   sdkSessionId?: string;
   sdkSessionMode?: 'full';
@@ -504,6 +512,8 @@ export interface SessionStateSnapshot {
    * current resolved provider snapshot.
    */
   agentRuntimeProviderSnapshotHash?: string | null;
+  /** Append-only provider/runtime continuity breaks that forced fresh SDK context. */
+  continuityBreaks?: ProviderContinuityBreak[];
   /** OpenAI Agents SDK history for cross-restart multi-turn continuation. */
   openAIHistory?: unknown[];
   /** Last provider response ID from the OpenAI Agents SDK run. */
@@ -566,6 +576,8 @@ export interface SessionFieldsForSnapshot {
   agentRuntimeProviderId?: string | null;
   /** Non-secret hash of the resolved provider/runtime configuration. */
   agentRuntimeProviderSnapshotHash?: string | null;
+  /** Append-only provider/runtime continuity breaks that forced fresh SDK context. */
+  continuityBreaks?: ProviderContinuityBreak[];
   codeAwareMode?: CodeAwareMode;
   codebaseIds?: string[];
   codebaseSnapshot?: SessionStateSnapshot['codebaseSnapshot'];

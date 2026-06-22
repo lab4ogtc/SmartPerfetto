@@ -126,6 +126,7 @@ import {
 import {
   AgentAnalyzeSessionService,
   AnalyzeSessionPreparationError,
+  buildAgentQueryWithContinuityNotice,
   type AnalyzeSessionRunContext,
 } from '../assistant/application/agentAnalyzeSessionService';
 import { buildAssistantResultContract } from '../assistant/contracts/assistantResultContract';
@@ -731,6 +732,8 @@ interface AnalysisSession {
   providerSnapshotHash?: string | null;
   providerSnapshotChanged?: boolean;
   providerSnapshotChangeReason?: string;
+  agentQuery?: string;
+  continuityBreaks?: import('../agentv3/sessionStateSnapshot').ProviderContinuityBreak[];
   codeAwareMode?: import('../services/codebase/codeAwareFeature').CodeAwareMode;
   codebaseIds?: string[];
   /** Reference trace ID for comparison mode (dual-trace analysis) */
@@ -3930,6 +3933,9 @@ async function runAgentDrivenAnalysis(
   if (!runIdForAnalysis) {
     throw new Error(`Missing run id for session ${sessionId}`);
   }
+  const agentQuery = session.agentQuery && session.query === query
+    ? session.agentQuery
+    : buildAgentQueryWithContinuityNotice(query, session.continuityBreaks);
 
   // Track generation is a lightweight derivation step from DataEnvelopes.
   // Enable by default (unless explicitly disabled) so `/api/agent/v1/analyze` can
@@ -4089,7 +4095,7 @@ async function runAgentDrivenAnalysis(
   try {
     console.log('[AgentRoutes.AgentDriven] Starting orchestrator.analyze...');
     const result = await logger.timed('AgentDrivenAnalysis', 'analyze', async () => {
-      const analyze = () => session.orchestrator.analyze(query, sessionId, traceId, {
+      const analyze = () => session.orchestrator.analyze(agentQuery, sessionId, traceId, {
         traceProcessorService: options.traceProcessorService,
         packageName: options.packageName,
         timeRange: options.timeRange,

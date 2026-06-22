@@ -202,6 +202,7 @@ export function persistAgentTurn(input: PersistAgentTurnInput): void {
           hypotheses: session.hypotheses || [],
             agentRuntimeProviderId: session.providerId,
             agentRuntimeProviderSnapshotHash: session.providerSnapshotHash,
+            continuityBreaks: session.continuityBreaks,
             codeAwareMode: (session as {codeAwareMode?: unknown}).codeAwareMode as any,
             codebaseIds: (session as {codebaseIds?: string[]}).codebaseIds,
             codebaseSnapshot: buildCodebaseSnapshot((session as {codebaseIds?: string[]}).codebaseIds),
