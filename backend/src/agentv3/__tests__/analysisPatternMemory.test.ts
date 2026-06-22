@@ -931,3 +931,40 @@ describe('sweepAutoConfirm', () => {
     expect(mockPatterns.find(p => p.id === 'rej').status).toBe('rejected');
   });
 });
+
+describe('startPatternMemoryAutoConfirmSweep', () => {
+  it('registers an hourly background sweep and logs tick failures without throwing', async () => {
+    const patternMemoryModule = require('../analysisPatternMemory');
+    expect(typeof patternMemoryModule.startPatternMemoryAutoConfirmSweep).toBe('function');
+
+    let tick: (() => Promise<void> | void) | undefined;
+    const timer = {unref: jest.fn()};
+    const setIntervalFn = jest.fn((fn: () => Promise<void> | void, _ms: number) => {
+      tick = fn;
+      return timer;
+    });
+    const clearIntervalFn = jest.fn();
+    const sweep = jest
+      .fn<() => Promise<unknown>>()
+      .mockRejectedValueOnce(new Error('sweep failed'))
+      .mockResolvedValueOnce({positivePromoted: 0, negativePromoted: 0, totalPromoted: 0});
+    const logger = {error: jest.fn()};
+
+    const handle = patternMemoryModule.startPatternMemoryAutoConfirmSweep({
+      sweep,
+      logger,
+      setIntervalFn,
+      clearIntervalFn,
+    });
+
+    expect(setIntervalFn).toHaveBeenCalledWith(expect.any(Function), 60 * 60 * 1000);
+    expect(timer.unref).toHaveBeenCalled();
+    await tick?.();
+    expect(logger.error).toHaveBeenCalled();
+    await tick?.();
+    expect(sweep).toHaveBeenCalledTimes(2);
+
+    handle.stop();
+    expect(clearIntervalFn).toHaveBeenCalledWith(timer);
+  });
+});

@@ -100,6 +100,25 @@ interface PatternStoreCache<T> {
   lastGood: T[];
 }
 
+export interface AutoConfirmSweepResult {
+  positivePromoted: number;
+  negativePromoted: number;
+  totalPromoted: number;
+}
+
+export interface PatternMemoryAutoConfirmSweepHandle {
+  stop(): void;
+  trigger(): Promise<AutoConfirmSweepResult>;
+}
+
+interface PatternMemoryAutoConfirmSweepOptions {
+  intervalMs?: number;
+  sweep?: () => Promise<AutoConfirmSweepResult>;
+  logger?: Pick<typeof console, 'error'>;
+  setIntervalFn?: typeof setInterval;
+  clearIntervalFn?: typeof clearInterval;
+}
+
 const patternStoreMutex = new Mutex();
 const patternStoreLogger = {
   error: (...args: unknown[]) => console.error(...args),
@@ -108,6 +127,7 @@ const patternStoreLogger = {
 const positivePatternCache: PatternStoreCache<AnalysisPatternEntry> = { lastGood: [] };
 const negativePatternCache: PatternStoreCache<NegativePatternEntry> = { lastGood: [] };
 const quickPatternCache: PatternStoreCache<AnalysisPatternEntry> = { lastGood: [] };
+const AUTO_CONFIRM_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 
 function cloneStoreEntries<T>(entries: T[]): T[] {
   return JSON.parse(JSON.stringify(entries)) as T[];
@@ -972,22 +992,54 @@ function transitionStatus(
  * auto-confirm window. Run lazily from the system prompt builder so the
  * cost is amortized across normal traffic.
  */
-export async function sweepAutoConfirm(now: number = Date.now()): Promise<void> {
-  await patternStoreMutex.runExclusive(async () => {
+export async function sweepAutoConfirm(now: number = Date.now()): Promise<AutoConfirmSweepResult> {
+  return patternStoreMutex.runExclusive(async () => {
     const positives = loadPatterns();
-    let positiveDirty = false;
+    let positivePromoted = 0;
     for (const p of positives) {
-      if (autoConfirmIfRipe(p, now)) positiveDirty = true;
+      if (autoConfirmIfRipe(p, now)) positivePromoted += 1;
     }
-    if (positiveDirty) await savePatterns(positives);
+    if (positivePromoted > 0) await savePatterns(positives);
 
     const negatives = loadNegativePatterns();
-    let negativeDirty = false;
+    let negativePromoted = 0;
     for (const p of negatives) {
-      if (autoConfirmIfRipe(p, now)) negativeDirty = true;
+      if (autoConfirmIfRipe(p, now)) negativePromoted += 1;
     }
-    if (negativeDirty) await saveNegativePatterns(negatives);
+    if (negativePromoted > 0) await saveNegativePatterns(negatives);
+
+    return {
+      positivePromoted,
+      negativePromoted,
+      totalPromoted: positivePromoted + negativePromoted,
+    };
   });
+}
+
+export function startPatternMemoryAutoConfirmSweep(
+  opts: PatternMemoryAutoConfirmSweepOptions = {},
+): PatternMemoryAutoConfirmSweepHandle {
+  const intervalMs = opts.intervalMs ?? AUTO_CONFIRM_SWEEP_INTERVAL_MS;
+  const sweep = opts.sweep ?? (() => sweepAutoConfirm());
+  const logger = opts.logger ?? patternStoreLogger;
+  const setIntervalFn = opts.setIntervalFn ?? setInterval;
+  const clearIntervalFn = opts.clearIntervalFn ?? clearInterval;
+
+  const tick = (): void => {
+    void sweep().catch(err => {
+      logger.error('[PatternMemory] auto-confirm sweep failed:', errorMessage(err));
+    });
+  };
+
+  const timer = setIntervalFn(tick, intervalMs);
+  timer.unref?.();
+
+  return {
+    stop(): void {
+      clearIntervalFn(timer);
+    },
+    trigger: sweep,
+  };
 }
 
 /**

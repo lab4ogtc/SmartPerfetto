@@ -6,13 +6,14 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import {describe, it, expect, beforeEach, afterEach} from '@jest/globals';
+import {jest, describe, it, expect, beforeEach, afterEach} from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
 
 import {ENTERPRISE_FEATURE_FLAG_ENV} from '../../config';
 import {createMemoryRoutes} from '../memoryRoutes';
 import {ProjectMemory} from '../../agentv3/projectMemory';
+import * as patternMemory from '../../agentv3/analysisPatternMemory';
 import {listEnterpriseAuditEvents} from '../../services/enterpriseAuditService';
 import {
   ENTERPRISE_DB_PATH_ENV,
@@ -43,6 +44,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  jest.restoreAllMocks();
   restoreEnvValue(ENTERPRISE_FEATURE_FLAG_ENV, originalEnv.enterprise);
   restoreEnvValue('SMARTPERFETTO_SSO_TRUSTED_HEADERS', originalEnv.trustedHeaders);
   restoreEnvValue(ENTERPRISE_DB_PATH_ENV, originalEnv.enterpriseDbPath);
@@ -102,6 +104,31 @@ function makeEntry(
     ...overrides,
   };
 }
+
+describe('POST /api/memory/sweep-confirm', () => {
+  it('runs the auto-confirm sweep and returns the promoted count', async () => {
+    const sweepSpy = jest.spyOn(patternMemory, 'sweepAutoConfirm') as any;
+    sweepSpy.mockResolvedValue({
+      positivePromoted: 2,
+      negativePromoted: 1,
+      totalPromoted: 3,
+    });
+
+    const res = await request(app).post('/api/memory/sweep-confirm').send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      success: true,
+      promoted: 3,
+      result: {
+        positivePromoted: 2,
+        negativePromoted: 1,
+        totalPromoted: 3,
+      },
+    });
+    expect(patternMemory.sweepAutoConfirm).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('GET /api/memory', () => {
   it('requires audit read permission for memory admin access in enterprise SSO', async () => {
