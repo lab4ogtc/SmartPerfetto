@@ -23,14 +23,37 @@ export interface StoredMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: number;
-  sqlResult?: SqlQueryResult;
+  sqlResult?: StoredSqlResult;
 }
+
+export type StoredSqlResult = SqlQueryResult | SqlResultMessageBundle;
 
 export interface SqlQueryResult {
   columns: string[];
   rows: any[][];
   rowCount: number;
   query?: string;
+}
+
+export interface SqlResultMessageBundle {
+  schemaVersion: 'sql_result_message_v1';
+  resultCount: number;
+  results: SqlResultMessageEntry[];
+}
+
+export interface SqlResultMessageEntry {
+  title?: string;
+  evidenceRefId?: string;
+  sourceToolCallId?: string;
+  queryHash?: string;
+  traceId?: string;
+  traceSide?: string;
+  sql?: string;
+  data: unknown;
+  display?: unknown;
+  truncated?: boolean;
+  originalBytes?: number;
+  maxBytes?: number;
 }
 
 export interface SessionMetadata {

@@ -451,4 +451,37 @@ describe('SessionPersistenceService - Phase 3 Features', () => {
       expect(loaded!.getFrame('2')?.jank_type).toBe('Type B');
     });
   });
+
+  describe('SQL result message persistence', () => {
+    const testSessionId = `test_sql_result_message_${Date.now()}`;
+
+    afterEach(() => {
+      service.deleteSession(testSessionId);
+    });
+
+    test('appendMessages stores and getSession restores sqlResult payloads', () => {
+      service.saveSession(createTestSession(testSessionId));
+      const sqlResult = {
+        schemaVersion: 'sql_result_message_v1',
+        resultCount: 1,
+        results: [{
+          title: 'SQL Query (1 rows)',
+          data: {columns: ['dur_ms'], rows: [[42]]},
+          sql: 'SELECT 42 AS dur_ms',
+        }],
+      };
+
+      service.appendMessages(testSessionId, [{
+        id: `${testSessionId}-assistant-sql`,
+        role: 'assistant',
+        content: 'SQL done',
+        timestamp: Date.now(),
+        sqlResult,
+      }]);
+
+      const restored = service.getSession(testSessionId);
+      const assistant = restored?.messages.find(message => message.id === `${testSessionId}-assistant-sql`);
+      expect(assistant?.sqlResult).toEqual(sqlResult);
+    });
+  });
 });
