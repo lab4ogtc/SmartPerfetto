@@ -280,6 +280,168 @@ describe('final result quality gate', () => {
     })?.code).toBe('missing_final_report_heading');
   });
 
+  it('does not require a deliverable final-report heading for quick-run answers', () => {
+    const quickRun: NonNullable<AnalysisResult['quickRun']> = {
+      requestedMode: 'fast',
+      resolvedMode: 'quick',
+      profile: 'normal',
+      targetTurns: 5,
+      hardCapTurns: 50,
+      actualTurns: 0,
+      elapsedMs: 1200,
+      enforcement: 'turn_cap',
+      stopReason: 'answered',
+      evidence: {
+        frontendPrequeryInjected: 1,
+        frontendPrequeryCited: 1,
+        currentRunDataEnvelopes: 1,
+        citedEvidenceRefs: 1,
+      },
+      contextInjected: {
+        conversationTurns: 1,
+        recentSqlResults: 0,
+        sqlPitfallPairs: 0,
+        patternHints: 0,
+        negativePatternHints: 0,
+        caseBackgroundCases: 0,
+      },
+      verifierStatus: 'passed',
+    };
+    const quickAnswer = [
+      '## 快速回答',
+      '',
+      '- 总体 janky frame 数：21',
+      '- drop rate：0.00%',
+      '',
+      '证据：data:frontend_prequery:current:abc123',
+    ].join('\n');
+
+    expect(assessFinalResultQuality({
+      result: result({
+        conclusion: quickAnswer,
+        quickRun,
+      }),
+      query: '基于上一轮结果，只说总体 janky frame 数和 drop rate',
+    })).toBeUndefined();
+  });
+
+  it('marks quick answers with failed claim verification as partial', () => {
+    const quickRun: NonNullable<AnalysisResult['quickRun']> = {
+      requestedMode: 'fast',
+      resolvedMode: 'quick',
+      profile: 'normal',
+      targetTurns: 5,
+      hardCapTurns: 50,
+      actualTurns: 4,
+      elapsedMs: 9000,
+      enforcement: 'turn_cap',
+      stopReason: 'answered',
+      evidence: {
+        frontendPrequeryInjected: 0,
+        frontendPrequeryCited: 0,
+        currentRunDataEnvelopes: 1,
+        citedEvidenceRefs: 1,
+      },
+      contextInjected: {
+        conversationTurns: 0,
+        recentSqlResults: 0,
+        sqlPitfallPairs: 0,
+        patternHints: 0,
+        negativePatternHints: 0,
+        caseBackgroundCases: 0,
+      },
+      verifierStatus: 'failed',
+    };
+    const target = result({
+      quickRun,
+      conclusion: '滑动总帧数 **347**，janky frame 数 **0**。证据：data:sql_summary:current:abc',
+      claimVerificationResult: {
+        schemaVersion: 'claim_verifier@1',
+        status: 'failed',
+        policy: 'record_only',
+        passed: false,
+        checkedClaimCount: 1,
+        unsupportedClaimCount: 1,
+        claimResults: [{ claimId: 'claim-frames', status: 'unsupported' }],
+        issues: [{
+          claimId: 'claim-frames',
+          severity: 'error',
+          code: 'unsupported_claim',
+          message: 'No evidence matched this claim',
+        }],
+      },
+    });
+
+    const issue = applyFinalResultQualityGate({
+      result: target,
+      query: '这条 trace 的滑动总帧数和 janky frame 数是多少？',
+    });
+
+    expect(issue?.code).toBe('quick_verifier_failed');
+    expect(target.partial).toBe(true);
+    expect(target.terminationMessage).toContain('未通过证据核对');
+  });
+
+  it('marks over-expanded quick triage reports as partial', () => {
+    const quickRun: NonNullable<AnalysisResult['quickRun']> = {
+      requestedMode: 'fast',
+      resolvedMode: 'quick',
+      profile: 'triage',
+      targetTurns: 5,
+      hardCapTurns: 50,
+      actualTurns: 7,
+      elapsedMs: 28_000,
+      enforcement: 'turn_cap',
+      stopReason: 'extended_answered',
+      evidence: {
+        frontendPrequeryInjected: 0,
+        frontendPrequeryCited: 0,
+        currentRunDataEnvelopes: 13,
+        citedEvidenceRefs: 5,
+      },
+      contextInjected: {
+        conversationTurns: 0,
+        recentSqlResults: 0,
+        sqlPitfallPairs: 0,
+        patternHints: 0,
+        negativePatternHints: 0,
+        caseBackgroundCases: 0,
+      },
+      verifierStatus: 'passed',
+    };
+    const target = result({
+      quickRun,
+      conclusion: [
+        '# 滑动卡顿完整诊断报告',
+        '',
+        '## 一、全景概览',
+        '',
+        '总帧数 347，掉帧 7。',
+        '',
+        '## 二、根因分析',
+        '',
+        '主因 A。',
+        '',
+        '## 三、代码责任链',
+        '',
+        '责任链 B。',
+        '',
+        '## 四、优化建议',
+        '',
+        '建议 C。',
+      ].join('\n'),
+    });
+
+    const issue = applyFinalResultQualityGate({
+      result: target,
+      query: '请完整诊断这次滑动卡顿的根因、优化方案和代码责任链',
+    });
+
+    expect(issue?.code).toBe('quick_full_report_shape');
+    expect(target.partial).toBe(true);
+    expect(target.terminationMessage).toContain('快速模式');
+  });
+
   it('flags sparse unverified analysis conclusions and keeps concise factual answers alone', () => {
     expect(assessFinalResultQuality({
       result: result({
@@ -522,6 +684,43 @@ describe('final result quality gate', () => {
 
     expect(assessFinalResultQuality({
       result: result({ conclusion: richJankReport }),
+      query: '分析滑动性能',
+    })).toBeUndefined();
+  });
+
+  it('accepts localized representative-frame wording from OpenAI-compatible runtimes', () => {
+    const localizedJankReport = [
+      '## 综合结论',
+      '',
+      'com.example.demo 滑动性能一般：347 帧中 7 帧真实掉帧，最长帧 62.73ms。',
+      '',
+      '## 峰值与口径指标',
+      '',
+      '| 指标 | 数值 |',
+      '| --- | --- |',
+      '| 真实掉帧 / Buffer Stuffing 假阳性 | 7 / 14 |',
+      '| 最长帧 | 62.73ms（frame_id=59665234，7.5× 预算） |',
+      '',
+      '## 全帧根因分布',
+      '',
+      '| 纠正后根因 | 帧数 | 占比 |',
+      '| --- | ---: | ---: |',
+      '| ANIMATION 回调同步重计算 | 6 | 85.7% |',
+      '| Shader Pipeline 编译 | 1 | 14.3% |',
+      '',
+      '## 代表帧分析',
+      '',
+      '### 帧 59665234（最严重）',
+      '',
+      '| 维度 | 详情 |',
+      '| --- | --- |',
+      '| 耗时 / 预算 | 62.73ms / 8.33ms（7.5×） |',
+      '| VSync 丢失 | 7 |',
+      '| 主线程 | animation 59.31ms -> CustomScroll_longFrameLoad 59.01ms |',
+    ].join('\n');
+
+    expect(assessFinalResultQuality({
+      result: result({ conclusion: localizedJankReport }),
       query: '分析滑动性能',
     })).toBeUndefined();
   });
@@ -1760,5 +1959,38 @@ describe('final result quality gate', () => {
       }),
       query: '分析这个 trace',
     })).toBeUndefined();
+  });
+
+  it('still enforces kernel blocking claim boundaries for partial runtime results', () => {
+    const issue = assessFinalResultQuality({
+      result: result({
+        partial: true,
+        conclusion: [
+          '# I/O 分析报告',
+          '',
+          '## 综合结论',
+          'blocked_function 是完整内核调用栈，filemap_read -> io_schedule 证明这是完整 off-CPU 调用路径。',
+          '',
+          '## I/O 证据类型',
+          '- blocked_function=filemap_read+0x508。',
+          '',
+          '## 文件/数据库/Provider 边界',
+          '- 文件读候选，业务路径未确认。',
+          '',
+          '## 置信度与补证',
+          '- 需要补采样。',
+        ].join('\n'),
+        findings: [{
+          severity: 'warning',
+          title: 'filemap_read wait',
+          description: 'main thread blocked_function=filemap_read',
+          evidence: ['blocked_function=filemap_read+0x508 dur=120ms'],
+        } as any],
+      }),
+      query: '分析 blocked_function filemap_read 为什么导致卡顿',
+      sceneType: 'io',
+    });
+
+    expect(issue?.code).toBe('kernel_blocking_claim_boundary');
   });
 });

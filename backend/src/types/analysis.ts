@@ -333,6 +333,7 @@ export interface AnalysisCompletedEvent extends SSEEvent {
       sqlQueriesCount: number;
     };
     reportUrl?: string;  // URL to detailed HTML report
+    quickRun?: import('../agent/core/orchestratorTypes').QuickRunReceipt;
   };
 }
 

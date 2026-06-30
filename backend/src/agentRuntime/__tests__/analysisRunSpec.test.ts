@@ -161,6 +161,7 @@ describe('AnalysisRunSpec shadow mode', () => {
         lightModel: 'gpt-5.4-mini',
         maxTurns: 60,
         quickMaxTurns: 50,
+        quickTargetTurns: 5,
         maxOutputTokens: 2048,
         fullPathPerTurnMs: 60_000,
         quickPathPerTurnMs: 40_000,
@@ -181,6 +182,7 @@ describe('AnalysisRunSpec shadow mode', () => {
       displayName: 'OpenAI Agents SDK',
       production: true,
       publicRuntime: true,
+      promptCache: { systemPromptDynamicBoundary: false },
     });
   });
 });

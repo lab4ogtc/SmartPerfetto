@@ -26,6 +26,7 @@ export interface RuntimeBudgetInputs {
   lightModel?: string;
   maxTurns?: number;
   quickMaxTurns?: number;
+  quickTargetTurns?: number;
   maxBudgetUsd?: number;
   maxOutputTokens?: number;
   fullPathPerTurnMs?: number;

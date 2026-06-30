@@ -51,11 +51,21 @@ import type {
   UncertaintyFlag,
 } from '../../../agentv3/types';
 import {
+  getAnalysisPlanCompletionStatus,
+  type AnalysisPlanCompletionStatus,
+} from '../../../agentv3/planCompletionStatus';
+import { isConclusionLikePlanPhase } from '../../../agentv3/planPhaseSemantics';
+import {
+  formatPlanEvidenceGap,
+  recordPlanToolCall,
+} from '../../../agentv3/planToolCallRecorder';
+import {
   assessFinalResultQuality,
   applyFinalResultQualityGate,
   hasDeliverableFinalReportHeading,
   looksLikeProcessNarrationConclusion,
 } from '../../../services/finalResultQualityGate';
+import { verifyConclusion } from '../claude/claudeVerifier';
 import type { ClaimVerificationResult } from '../../../types/claimVerification';
 import type { RuntimeToolResult, SharedToolSpec } from '../../runtimeToolSpec';
 import {
@@ -72,12 +82,19 @@ import {
   PI_AGENT_CORE_RUNTIME_KIND,
 } from '../../runtimeKinds';
 import {
+  buildQuickRunReceipt,
   buildEntityContext,
+  buildQuickMemoryContextPayload,
   captureSkillDisplayEntities,
   createRuntimeSkillNotesBudget,
-  knowledgeScopeFromAnalysisOptions,
+  isTruncationVerificationIssue,
+  quickStopReasonFromTermination,
+  repairTruncatedFinalReport,
+  resolveQuickTurnBudget,
+  shouldMarkQuickRunTriage,
   toProtocolHypothesis as toRuntimeProtocolHypothesis,
 } from '../../runtimeCommon';
+import { buildCaseBackgroundContext } from '../../../services/caseEvolution/caseBackgroundContext';
 
 export type ExperimentalPiAgentCoreRuntimeKind = typeof EXPERIMENTAL_PI_AGENT_CORE_RUNTIME_KIND;
 export type PublicPiAgentCoreRuntimeKind = typeof PI_AGENT_CORE_RUNTIME_KIND;
@@ -271,6 +288,7 @@ interface PiAnalysisPreparation {
   hypotheses: Hypothesis[];
   uncertaintyFlags: UncertaintyFlag[];
   analysisRunSpec: AnalysisRunSpec;
+  quickMemoryContextCounts?: ReturnType<typeof buildQuickMemoryContextPayload>['counts'];
 }
 
 function truthyEnv(value: string | undefined): boolean {
@@ -287,6 +305,7 @@ export function getPiAgentCoreEngineCapabilities(
     displayName: publicRuntime ? 'Pi Agent Core' : 'Experimental Pi Agent Core',
     production: publicRuntime,
     publicRuntime,
+    promptCache: { systemPromptDynamicBoundary: false },
   };
 }
 
@@ -397,30 +416,15 @@ function latestAssistantMessage(messages: unknown[] | undefined): Record<string,
     | undefined;
 }
 
-function hasAdequateClosedPhaseSummary(phase: PlanPhase): boolean {
-  if (phase.status !== 'completed' && phase.status !== 'skipped') return false;
-  return typeof phase.summary === 'string' && phase.summary.trim().length >= MIN_PHASE_SUMMARY_CHARS;
-}
-
 export function getPiAgentCorePlanCompletionStatus(plan: AnalysisPlanV3 | null | undefined): {
   complete: boolean;
   hasPlan: boolean;
   pendingPhases: PlanPhase[];
+  evidenceGaps?: AnalysisPlanCompletionStatus['evidenceGaps'];
 } {
-  if (!plan || !Array.isArray(plan.phases) || plan.phases.length === 0) {
-    return { complete: false, hasPlan: false, pendingPhases: [] };
-  }
-  const pendingPhases = plan.phases.filter(phase => !hasAdequateClosedPhaseSummary(phase));
-  return {
-    complete: pendingPhases.length === 0,
-    hasPlan: true,
-    pendingPhases,
-  };
-}
-
-function isFinalReportPhase(phase: PlanPhase): boolean {
-  return /(?:综合结论|最终结论|结论|报告|final report|final conclusion|summary|recommendation)/i
-    .test(`${phase.name} ${phase.goal}`);
+  return getAnalysisPlanCompletionStatus(plan, {
+    minSummaryChars: MIN_PHASE_SUMMARY_CHARS,
+  });
 }
 
 export function completePiAgentCoreFinalReportPhaseIfDelivered(
@@ -442,7 +446,7 @@ export function completePiAgentCoreFinalReportPhaseIfDelivered(
   if (status.complete || status.pendingPhases.length !== 1) return undefined;
 
   const [phase] = status.pendingPhases;
-  if (!phase || !isFinalReportPhase(phase)) return undefined;
+  if (!phase || !isConclusionLikePlanPhase(phase)) return undefined;
 
   phase.status = 'completed';
   phase.completedAt = now();
@@ -469,10 +473,17 @@ function formatIncompletePlanMessage(
     .map(phase => phase.name || phase.id)
     .filter(Boolean)
     .join(', ');
+  const evidenceGapText = planStatus.evidenceGaps?.length
+    ? localize(
+        outputLanguage,
+        `；缺失关键工具证据：${planStatus.evidenceGaps.map(gap => formatPlanEvidenceGap(gap, outputLanguage)).join('；')}`,
+        `; missing required tool evidence: ${planStatus.evidenceGaps.map(gap => formatPlanEvidenceGap(gap, outputLanguage)).join('; ')}`,
+      )
+    : '';
   return localize(
     outputLanguage,
-    `Pi Agent Core 分析 plan 尚未完成。未完成阶段：${pending || 'unknown'}`,
-    `Pi Agent Core analysis plan is incomplete. Pending phases: ${pending || 'unknown'}`,
+    `Pi Agent Core 分析 plan 尚未完成。未完成阶段：${pending || 'unknown'}${evidenceGapText}`,
+    `Pi Agent Core analysis plan is incomplete. Pending phases: ${pending || 'unknown'}${evidenceGapText}`,
   );
 }
 
@@ -694,6 +705,7 @@ export function createPiAgentCoreToolFromSharedSpec(
   options: {
     allowedToolNames: ReadonlySet<string>;
     runtimeKind?: PiAgentCoreRuntimeKind;
+    analysisPlan?: { current: AnalysisPlanV3 | null };
     extra?: unknown;
   },
 ): PiAgentCoreTool {
@@ -724,6 +736,11 @@ export function createPiAgentCoreToolFromSharedSpec(
         toolCallId,
         signal,
         ...(options.extra && typeof options.extra === 'object' ? options.extra : {}),
+      });
+      recordPlanToolCall(options.analysisPlan?.current, {
+        toolName: spec.name,
+        input: toolArgs,
+        resultText: summarizePiToolResult(result),
       });
       onUpdate?.({ type: 'smartperfetto_tool_finished', toolCallId, toolName: spec.name });
       return {
@@ -1195,7 +1212,118 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
       partial: partial || undefined,
       terminationReason,
       terminationMessage,
+      quickRun: prep.quickMode
+        ? (() => {
+            const quickBudget = resolveQuickTurnBudget({
+              env: this.env,
+              targetEnvKeys: ['AGENT_QUICK_TARGET_TURNS'],
+              hardCapEnvKeys: ['AGENT_QUICK_MAX_TURNS'],
+              enforcement: 'timeout_only',
+            });
+            return buildQuickRunReceipt({
+              requestedMode: 'fast',
+              profile: shouldMarkQuickRunTriage(query) ? 'triage' : undefined,
+              budget: quickBudget,
+              actualTurns: Math.max(rounds, 1),
+              elapsedMs: Date.now() - startedAt,
+              stopReason: quickStopReasonFromTermination({
+                partial,
+                terminationReason,
+                actualTurns: Math.max(rounds, 1),
+                targetTurns: quickBudget.targetTurns,
+                hardCapTurns: quickBudget.hardCapTurns,
+              }),
+              evidence: {
+                frontendPrequeryInjected: prep.analysisRunSpec.traceContext.datasetCount,
+              },
+              contextInjected: {
+                conversationTurns: prep.previousTurns.filter((turn: any) => turn?.completed).slice(-3).length,
+                ...(prep.quickMemoryContextCounts ?? {
+                  recentSqlResults: 0,
+                  sqlPitfallPairs: 0,
+                  patternHints: 0,
+                  negativePatternHints: 0,
+                  caseBackgroundCases: 0,
+                }),
+              },
+            });
+          })()
+        : undefined,
     };
+
+    if (!prep.quickMode) {
+      const verifyCurrentConclusion = async () => verifyConclusion(result.findings, result.conclusion, {
+        emitUpdate: (update) => this.emit('update', update),
+        enableLLM: false,
+        plan: prep.analysisPlan.current,
+        hypotheses: prep.hypotheses,
+        sceneType: prep.sceneType,
+        outputLanguage: prep.analysisRunSpec.outputLanguage,
+        query,
+        emitIssueProgress: false,
+      });
+      let verification = await verifyCurrentConclusion();
+      let verificationIssue = [
+        ...verification.heuristicIssues,
+        ...(verification.llmIssues || []),
+      ].find(issue => issue.severity === 'error');
+      if (
+        verificationIssue &&
+        isTruncationVerificationIssue(verificationIssue) &&
+        planStatus.complete
+      ) {
+        const repairedConclusion = repairTruncatedFinalReport({
+          conclusion: result.conclusion,
+          plan: prep.analysisPlan.current,
+          hypotheses: prep.hypotheses,
+          outputLanguage: prep.analysisRunSpec.outputLanguage,
+        });
+        if (repairedConclusion) {
+          result.conclusion = repairedConclusion;
+          result.findings = extractFindingsFromText(repairedConclusion);
+          result.confidence = estimateConfidence(result.findings, false);
+          if (result.terminationReason === 'max_turns') {
+            result.partial = undefined;
+            result.terminationReason = undefined;
+            result.terminationMessage = undefined;
+          }
+          this.emit('update', {
+            type: 'progress',
+            content: {
+              phase: 'concluding',
+              message: localize(
+                prep.analysisRunSpec.outputLanguage,
+                '最终报告输出被截断，已基于结构化证据补齐收尾并重新验证。',
+                'The final report output was truncated; it was closed from structured evidence and re-verified.',
+              ),
+            },
+            timestamp: Date.now(),
+          });
+          verification = await verifyCurrentConclusion();
+          verificationIssue = [
+            ...verification.heuristicIssues,
+            ...(verification.llmIssues || []),
+          ].find(issue => issue.severity === 'error');
+        }
+      }
+      if (verificationIssue) {
+        result.partial = true;
+        result.terminationReason = result.terminationReason ?? 'plan_incomplete';
+        result.terminationMessage = result.terminationMessage ?? verificationIssue.message;
+        result.confidence = Math.min(0.55, result.confidence);
+        this.emit('update', {
+          type: 'degraded',
+          content: {
+            module: 'piAgentCoreRuntime',
+            fallback: 'verification_failed',
+            partial: true,
+            terminationReason: result.terminationReason,
+            message: verificationIssue.message,
+          },
+          timestamp: Date.now(),
+        });
+      }
+    }
 
     const wasPartialBeforeQualityGate = result.partial === true;
     const gateIssue = applyFinalResultQualityGate({ result, query, sceneType: prep.sceneType });
@@ -1343,11 +1471,13 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
     uncertaintyFlags.splice(0);
 
     const watchdogWarning: { current: string | null } = { current: null };
-    const recentSqlErrors = loadLearnedSqlFixPairs(5, analysisRunSpec.scopes.knowledge);
+    const knowledgeScope = analysisRunSpec.scopes.knowledge;
+    const recentSqlErrors = loadLearnedSqlFixPairs(5, knowledgeScope);
     const skillNotesBudget = createRuntimeSkillNotesBudget(quickMode);
     const { toolDefinitions } = createClaudeMcpServer({
       sessionId,
       traceId,
+      userQuery: query,
       traceProcessorService: this.traceProcessorService,
       skillExecutor,
       packageName: effectivePackageName,
@@ -1367,7 +1497,7 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
       lightweight: quickMode,
       skillNotesBudget,
       outputLanguage,
-      knowledgeScope: analysisRunSpec.scopes.knowledge,
+      knowledgeScope,
       codeAwareMode: options.codeAwareMode,
       codebaseIds: options.codebaseIds,
       referenceTraceId: options.referenceTraceId,
@@ -1377,6 +1507,7 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
       createPiAgentCoreToolFromSharedSpec(definition.shared, {
         allowedToolNames,
         runtimeKind: this.selection.kind,
+        analysisPlan: quickMode ? undefined : analysisPlan,
       })
     ));
 
@@ -1384,8 +1515,22 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
     if (analysisRunSpec.traceContext.promptSection) {
       prompt = `${analysisRunSpec.traceContext.promptSection}\n\n${prompt}`;
     }
+    const traceFeatures = extractTraceFeatures({
+      architectureType: architecture?.type,
+      sceneType,
+      packageName: effectivePackageName,
+    });
 
     if (quickMode) {
+      const quickMemoryPayload = buildQuickMemoryContextPayload({
+        patternContext: buildPatternContextSection(traceFeatures, knowledgeScope),
+        negativePatternContext: buildNegativePatternSection(traceFeatures, knowledgeScope),
+        caseBackgroundContext: buildCaseBackgroundContext(sceneType, architecture?.type, knowledgeScope),
+        sqlErrorFixPairs: recentSqlErrors,
+        recentSqlResultsContext: sessionContext.generateRecentSqlResultPromptContext(3),
+        outputLanguage,
+      });
+      const quickMemoryContext = quickMemoryPayload.text;
       return {
         systemPrompt: buildQuickSystemPrompt({
           architecture,
@@ -1393,6 +1538,7 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
           focusApps: focusResult.apps.length > 0 ? focusResult.apps : undefined,
           focusMethod: focusResult.method,
           selectionContext: options.selectionContext,
+          quickMemoryContext,
           outputLanguage,
         }),
         prompt,
@@ -1409,6 +1555,7 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
         hypotheses,
         uncertaintyFlags,
         analysisRunSpec,
+        quickMemoryContextCounts: quickMemoryPayload.counts,
       };
     }
 
@@ -1420,18 +1567,13 @@ export class PiAgentCoreRuntime extends EventEmitter implements IOrchestrator {
       // Non-fatal. Pi can still use lookup_sql_schema/knowledge tools.
     }
 
-    const traceFeatures = extractTraceFeatures({
-      architectureType: architecture?.type,
-      sceneType,
-      packageName: effectivePackageName,
-    });
     const patternContext = buildPatternContextSection(
       traceFeatures,
-      knowledgeScopeFromAnalysisOptions(options),
+      knowledgeScope,
     );
     const negativePatternContext = buildNegativePatternSection(
       traceFeatures,
-      knowledgeScopeFromAnalysisOptions(options),
+      knowledgeScope,
     );
     const traceInfo = this.traceProcessorService.getTrace(traceId);
     const systemPromptEnv = normalizeOptionalString(this.env[PI_AGENT_CORE_SYSTEM_PROMPT_ENV]);

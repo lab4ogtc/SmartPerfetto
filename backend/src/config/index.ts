@@ -224,6 +224,7 @@ export const traceProcessorConfig = {
 
 export const DEFAULT_AGENT_MAX_TURNS = 100;
 export const DEFAULT_AGENT_QUICK_MAX_TURNS = 50;
+export const DEFAULT_AGENT_QUICK_TARGET_TURNS = 5;
 export const DEFAULT_AGENT_SESSION_MAX_IDLE_MS = 12 * 60 * 60 * 1000;
 export const DEFAULT_AGENT_SESSION_CLEANUP_INTERVAL_MS = 30 * 60 * 1000;
 
@@ -232,14 +233,19 @@ export interface AgentRuntimeBudgetConfig {
   maxTurns: number;
   /** Shared quick-analysis turn budget fallback for all agent runtimes. */
   quickMaxTurns: number;
+  /** Shared quick-analysis product target. This is a soft target, not a stop condition. */
+  quickTargetTurns: number;
 }
 
 export function resolveAgentRuntimeBudgetConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): AgentRuntimeBudgetConfig {
+  const quickMaxTurns = parsePositiveIntEnv('AGENT_QUICK_MAX_TURNS', DEFAULT_AGENT_QUICK_MAX_TURNS, env);
+  const rawQuickTargetTurns = parsePositiveIntEnv('AGENT_QUICK_TARGET_TURNS', DEFAULT_AGENT_QUICK_TARGET_TURNS, env);
   return {
     maxTurns: parsePositiveIntEnv('AGENT_MAX_TURNS', DEFAULT_AGENT_MAX_TURNS, env),
-    quickMaxTurns: parsePositiveIntEnv('AGENT_QUICK_MAX_TURNS', DEFAULT_AGENT_QUICK_MAX_TURNS, env),
+    quickMaxTurns,
+    quickTargetTurns: Math.min(rawQuickTargetTurns, quickMaxTurns),
   };
 }
 

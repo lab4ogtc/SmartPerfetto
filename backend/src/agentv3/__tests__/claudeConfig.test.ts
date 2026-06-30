@@ -156,6 +156,7 @@ describe('createQuickConfig', () => {
     const config = createQuickConfig(loadClaudeConfig({ maxTurns: 60 }));
 
     expect(config.maxTurns).toBe(50);
+    expect(config.quickTargetTurns).toBe(5);
     expect(config.enableVerification).toBe(false);
     expect(config.enableSubAgents).toBe(false);
   });
@@ -166,6 +167,16 @@ describe('createQuickConfig', () => {
     const config = createQuickConfig(loadClaudeConfig({ maxTurns: 60 }));
 
     expect(config.maxTurns).toBe(8);
+    expect(config.quickTargetTurns).toBe(5);
+  });
+
+  it('allows quick target override and clamps it to quick max turns', () => {
+    process.env.CLAUDE_QUICK_MAX_TURNS = '8';
+    process.env.CLAUDE_QUICK_TARGET_TURNS = '12';
+    const config = createQuickConfig(loadClaudeConfig({ maxTurns: 60 }));
+
+    expect(config.maxTurns).toBe(8);
+    expect(config.quickTargetTurns).toBe(8);
   });
 
   it('uses shared quick max-turn config as fallback', () => {
@@ -198,7 +209,12 @@ describe('createQuickConfig', () => {
     expect(createQuickConfig(loadClaudeConfig({ maxTurns: 60 }), {}).maxTurns).toBe(50);
     expect(createQuickConfig(loadClaudeConfig({ maxTurns: 60 }), {
       CLAUDE_QUICK_MAX_TURNS: '6',
+      CLAUDE_QUICK_TARGET_TURNS: '4',
     }).maxTurns).toBe(6);
+    expect(createQuickConfig(loadClaudeConfig({ maxTurns: 60 }), {
+      CLAUDE_QUICK_MAX_TURNS: '6',
+      CLAUDE_QUICK_TARGET_TURNS: '4',
+    }).quickTargetTurns).toBe(4);
   });
 });
 

@@ -468,6 +468,98 @@ describe('agent route RBAC', () => {
     }
   });
 
+  it('replays buffered frontend traceContext data on first session stream connect', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'smartperfetto-agent-trace-context-replay-'));
+    let leaseStore: ReturnType<typeof getTraceProcessorLeaseStore> | null = null;
+    try {
+      const traceId = 'trace-context-replay';
+      const tracePath = path.join(tmpDir, `${traceId}.trace`);
+      await fs.writeFile(tracePath, 'trace bytes');
+      delete process.env.SMARTPERFETTO_API_KEY;
+      process.env.SMARTPERFETTO_SSO_TRUSTED_HEADERS = 'true';
+      process.env[ENTERPRISE_FEATURE_FLAG_ENV] = 'true';
+      process.env[ENTERPRISE_DB_PATH_ENV] = path.join(tmpDir, 'enterprise.sqlite');
+      process.env[ENTERPRISE_DATA_DIR_ENV] = path.join(tmpDir, 'data');
+      process.env.UPLOAD_DIR = path.join(tmpDir, 'uploads');
+
+      await writeTraceMetadata({
+        id: traceId,
+        filename: `${traceId}.trace`,
+        size: 11,
+        uploadedAt: new Date().toISOString(),
+        status: 'ready',
+        path: tracePath,
+        tenantId: 'tenant-a',
+        workspaceId: 'workspace-a',
+        userId: 'analyst-user',
+      });
+      setTraceProcessorServiceForTests({
+        getOrLoadTrace: jest.fn(async () => ({
+          id: traceId,
+          filename: `${traceId}.trace`,
+          size: 11,
+          filePath: tracePath,
+          uploadTime: new Date(),
+          status: 'ready',
+        })),
+        getTrace: jest.fn(() => ({
+          id: traceId,
+          filename: `${traceId}.trace`,
+          size: 11,
+          filePath: tracePath,
+          uploadTime: new Date(),
+          status: 'ready',
+        })),
+        ensureProcessorForLease: jest.fn(async () => undefined),
+        runWithLease: jest.fn(() => new Promise<unknown>(() => undefined)),
+        query: jest.fn(async () => ({ columns: [], rows: [], durationMs: 1 })),
+      } as any);
+
+      const app = makeApp();
+      const analyzeRes = await analystHeaders(request(app).post('/api/agent/v1/analyze'))
+        .send({
+          traceId,
+          query: 'selection fact',
+          traceContext: [{
+            label: 'Selected FPS summary',
+            columns: ['metric', 'value'],
+            rows: [['janky_frames', 21]],
+          }],
+          options: { analysisMode: 'fast' },
+        });
+
+      expect(analyzeRes.status).toBe(200);
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      const cancelRes = await analystHeaders(
+        request(app).post(`/api/agent/v1/${analyzeRes.body.sessionId}/cancel`),
+      );
+      expect(cancelRes.status).toBe(200);
+
+      const streamRes = await analystHeaders(
+        request(app)
+          .get(`/api/agent/v1/${analyzeRes.body.sessionId}/stream`)
+          .set('Accept', 'text/event-stream'),
+      );
+
+      expect(streamRes.status).toBe(200);
+      expect(streamRes.text).toContain('event: data');
+      expect(streamRes.text).toContain('data:frontend_prequery:current:');
+      expect(streamRes.text).toContain('"sourceToolCallId":"frontend-prequery:');
+      expect(streamRes.text).toContain('event: analysis_cancelled');
+      leaseStore = getTraceProcessorLeaseStore();
+      expect(leaseStore.listLeases({
+        tenantId: 'tenant-a',
+        workspaceId: 'workspace-a',
+        userId: 'analyst-user',
+      }, { traceId })).toHaveLength(1);
+    } finally {
+      leaseStore?.close();
+      setTraceProcessorLeaseStoreForTests(null);
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it('keeps concurrent analyzes isolated when one user cancels their own run', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'smartperfetto-agent-concurrency-'));
     let leaseStore: ReturnType<typeof getTraceProcessorLeaseStore> | null = null;

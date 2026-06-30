@@ -14,6 +14,7 @@ export interface OpenAIAgentConfig {
   maxOutputTokens: number;
   maxTurns: number;
   quickMaxTurns: number;
+  quickTargetTurns: number;
   baseURL?: string;
   apiKey?: string;
   protocol: OpenAIProtocol;
@@ -77,6 +78,12 @@ export function loadOpenAIConfig(providerId?: string | null, providerScope?: Pro
       parsePositiveIntEnv(env, 'CLAUDE_MAX_TURNS', budgetConfig.maxTurns)),
     quickMaxTurns: parsePositiveIntEnv(env, 'OPENAI_QUICK_MAX_TURNS',
       parsePositiveIntEnv(env, 'CLAUDE_QUICK_MAX_TURNS', budgetConfig.quickMaxTurns)),
+    quickTargetTurns: Math.min(
+      parsePositiveIntEnv(env, 'OPENAI_QUICK_TARGET_TURNS',
+        parsePositiveIntEnv(env, 'CLAUDE_QUICK_TARGET_TURNS', budgetConfig.quickTargetTurns)),
+      parsePositiveIntEnv(env, 'OPENAI_QUICK_MAX_TURNS',
+        parsePositiveIntEnv(env, 'CLAUDE_QUICK_MAX_TURNS', budgetConfig.quickMaxTurns)),
+    ),
     baseURL: env.OPENAI_BASE_URL || DEFAULT_BASE_URL,
     apiKey: env.OPENAI_API_KEY,
     protocol: parseProtocol(env.OPENAI_AGENTS_PROTOCOL),

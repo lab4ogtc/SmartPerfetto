@@ -75,7 +75,9 @@ function extractConstArrayValues(content: string, constName: string): string[] {
 // Read backend contract
 console.log('Reading backend data contract...');
 const backendContent = fs.readFileSync(backendContractPath, 'utf-8');
-const conclusionContractContent = fs.readFileSync(conclusionContractPath, 'utf-8').trim();
+const conclusionContractContent = fs.readFileSync(conclusionContractPath, 'utf-8')
+  .trim()
+  .replace(/import type \{CaseKnowledgeReportRecommendation\} from '..\/..\/types\/caseKnowledge';\n\n?/, '');
 const evidenceContractContent = fs.readFileSync(evidenceContractPath, 'utf-8').trim();
 const claimVerificationContent = fs.readFileSync(claimVerificationPath, 'utf-8').trim();
 const identityContractContent = fs.readFileSync(identityContractPath, 'utf-8')
@@ -98,6 +100,39 @@ const displayFormats = extractConstArrayValues(backendContent, 'VALID_DISPLAY_FO
 // Build the frontend content
 const parts: string[] = [];
 
+const caseKnowledgeFrontendContent = `export type CaseKnowledgeMatchStrength = 'strong' | 'partial' | 'background';
+export type CaseKnowledgeRecommendationPriority = 'P0' | 'P1' | 'P2' | 'P3';
+
+export interface CaseKnowledgeRecommendation {
+  id: string;
+  priority: CaseKnowledgeRecommendationPriority;
+  action: string;
+  applies_when: string;
+  risks: string;
+}
+
+export interface CaseKnowledgeReportRecommendation {
+  caseId: string;
+  title: string;
+  scene?: string;
+  primaryRootCause?: string;
+  matchStrength: CaseKnowledgeMatchStrength;
+  evidenceGap?: string;
+  evidenceRefs?: string[];
+  matchedSignatures?: string[];
+  missingRequiredSignatures?: string[];
+  recommendations: {
+    app: CaseKnowledgeRecommendation[];
+    oem: CaseKnowledgeRecommendation[];
+  };
+  learnedProvenance?: {
+    candidateId: string;
+    supportingEvidence: number;
+    contradictingEvidence: number;
+    supported: boolean;
+  };
+}`;
+
 // Header
 parts.push(`/**
  * SmartPerfetto Data Contract Types (Frontend)
@@ -116,6 +151,8 @@ parts.push(`/**
 parts.push(`// =============================================================================
 // Conclusion Contract Types
 // =============================================================================
+
+${caseKnowledgeFrontendContent}
 
 ${conclusionContractContent}
 `);
@@ -626,6 +663,33 @@ export interface ConversationStepEvent {
 /**
  * Analysis Completed Event - SSE payload for final result
  */
+export interface QuickRunReceipt {
+  requestedMode: 'fast' | 'auto' | 'full';
+  resolvedMode: 'quick' | 'full';
+  profile: 'normal' | 'extended' | 'triage';
+  targetTurns: number;
+  hardCapTurns: number;
+  actualTurns: number;
+  elapsedMs: number;
+  enforcement: 'turn_cap' | 'timeout_only' | 'not_available';
+  stopReason: 'answered' | 'needs_full' | 'extended_answered' | 'hard_cap' | 'timeout' | 'partial';
+  evidence: {
+    frontendPrequeryInjected: number;
+    frontendPrequeryCited: number;
+    currentRunDataEnvelopes: number;
+    citedEvidenceRefs: number;
+  };
+  contextInjected: {
+    conversationTurns: number;
+    recentSqlResults: number;
+    sqlPitfallPairs: number;
+    patternHints: number;
+    negativePatternHints: number;
+    caseBackgroundCases: number;
+  };
+  verifierStatus: 'passed' | 'issues' | 'not_checked' | 'failed';
+}
+
 export interface AnalysisCompletedEvent {
   type: 'analysis_completed';
   data: {
@@ -643,6 +707,8 @@ export interface AnalysisCompletedEvent {
     partial?: boolean;
     terminationReason?: string;
     terminationMessage?: string;
+    quickRun?: QuickRunReceipt;
+    terminalRunStatus?: 'completed' | 'quota_exceeded';
     findings: DiagnosticFinding[];
     suggestions: string[];
   };

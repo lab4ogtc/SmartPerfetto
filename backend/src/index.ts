@@ -89,6 +89,8 @@ import {
 import { TraceProcessorFactory, killOrphanProcessors } from './services/workingTraceProcessor';
 import { getPortPool, resetPortPool } from './services/portPool';
 import { failInterruptedAnalysisRunsOnStartup } from './services/analysisRunStore';
+import { startCaseEvolutionWorker } from './services/caseEvolution/caseEvolutionWorkerBootstrap';
+import { startPatternMemoryAutoConfirmSweep } from './agentv3/analysisPatternMemory';
 
 const app = express();
 const PORT = serverConfig.port;
@@ -286,6 +288,9 @@ function recoverInterruptedEnterpriseRuns(): void {
 
 recoverInterruptedEnterpriseRuns();
 
+const caseEvolutionWorkerHandle = startCaseEvolutionWorker();
+const patternMemorySweepHandle = startPatternMemoryAutoConfirmSweep();
+
 // Kill orphan trace_processor processes from previous runs
 killOrphanProcessors();
 
@@ -300,6 +305,12 @@ function gracefulShutdown(signal: string) {
   // Reset port pool
   console.log('🔌 Resetting port pool...');
   resetPortPool();
+
+  console.log('🧠 Stopping case evolution worker...');
+  caseEvolutionWorkerHandle.stop();
+
+  console.log('🧠 Stopping pattern memory sweep...');
+  patternMemorySweepHandle.stop();
 
   console.log('✅ Cleanup complete, exiting...');
   process.exit(0);

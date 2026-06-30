@@ -954,6 +954,8 @@ export interface AnalysisCompletedEvent {
     partial?: boolean;
     terminationReason?: string;
     terminationMessage?: string;
+    quickRun?: import('../agent/core/orchestratorTypes').QuickRunReceipt;
+    terminalRunStatus?: 'completed' | 'quota_exceeded';
     findings: DiagnosticFinding[];
     suggestions: string[];
   };

@@ -11,6 +11,8 @@ export type FinalResultQualityIssueCode =
   | 'process_narration_conclusion'
   | 'missing_final_report_heading'
   | 'sparse_unverified_conclusion'
+  | 'quick_full_report_shape'
+  | 'quick_verifier_failed'
   | 'scene_contract_incomplete'
   | 'kernel_blocking_claim_boundary';
 
@@ -279,6 +281,23 @@ function hasEvidenceBackedArtifacts(result: AgentRuntimeAnalysisResult): boolean
   );
 }
 
+function isQuickRunResult(result: AgentRuntimeAnalysisResult): boolean {
+  return result.quickRun?.resolvedMode === 'quick';
+}
+
+function looksLikeOverExpandedQuickReport(
+  result: AgentRuntimeAnalysisResult,
+  conclusion: string,
+): boolean {
+  if (!isQuickRunResult(result)) return false;
+  const headingCount = countMatches(conclusion, /(^|\n)\s{0,3}#{1,3}\s+\S/g);
+  const hasFullReportLanguage =
+    /(?:完整|全面|全景).{0,16}(?:诊断|分析|报告)|(?:full|complete|comprehensive).{0,20}(?:diagnosis|analysis|report)/i.test(conclusion) ||
+    /(^|\n)\s{0,3}#{1,3}\s*[^\n]{0,40}(?:完整诊断报告|完整分析报告|综合诊断报告|Full Report|Comprehensive Report)/i.test(conclusion);
+  const triageOverBudget = result.quickRun?.profile === 'triage' && conclusion.length > 1800;
+  return hasFullReportLanguage || triageOverBudget || headingCount >= 6 || conclusion.length > 3600;
+}
+
 function assessKernelBlockingClaimBoundary(conclusion: string): FinalResultQualityIssue | undefined {
   const text = normalizeTextForQualityCheck(conclusion);
   const lower = text.toLowerCase();
@@ -340,9 +359,16 @@ export function assessFinalResultQuality(input: {
   sceneType?: string;
 }): FinalResultQualityIssue | undefined {
   const { result, query, sceneType } = input;
-  if (!result.success || result.partial === true) return undefined;
+  if (!result.success) return undefined;
 
   const conclusion = result.conclusion.trim();
+  if (result.partial === true) {
+    if (looksLikeAnalysisQuery(query)) {
+      return assessKernelBlockingClaimBoundary(conclusion);
+    }
+    return undefined;
+  }
+
   if (!conclusion) {
     return {
       code: 'empty_conclusion',
@@ -364,7 +390,22 @@ export function assessFinalResultQuality(input: {
     };
   }
 
+  if (isQuickRunResult(result) && result.claimVerificationResult?.status === 'failed') {
+    return {
+      code: 'quick_verifier_failed',
+      message: `${FINAL_RESULT_QUALITY_GATE_MESSAGE} 快速模式当前断言未通过证据核对；不能作为已核验快速答案交付。`,
+    };
+  }
+
+  if (looksLikeOverExpandedQuickReport(result, conclusion)) {
+    return {
+      code: 'quick_full_report_shape',
+      message: `${FINAL_RESULT_QUALITY_GATE_MESSAGE} 快速模式只能交付局部事实或快速 triage；当前输出呈现完整报告形态，应切换完整模式重新分析。`,
+    };
+  }
+
   if (
+    !isQuickRunResult(result) &&
     looksLikeAnalysisQuery(query) &&
     hasReportStructureMarker(conclusion) &&
     !hasDeliverableFinalReportHeading(conclusion)
@@ -394,12 +435,13 @@ export function assessFinalResultQuality(input: {
     if (kernelBlockingIssue) return kernelBlockingIssue;
   }
 
-  if (looksLikeAnalysisQuery(query)) {
+  if (!isQuickRunResult(result) && looksLikeAnalysisQuery(query)) {
     const contractIssue = assessFinalReportContractCompleteness({
       conclusion,
       query,
       sceneType,
       contractSceneId: result.conclusionContract?.metadata?.sceneId,
+      caseRecommendations: result.conclusionContract?.caseRecommendations as Array<Record<string, unknown>> | undefined,
     });
     if (contractIssue) {
       const missingText = contractIssue.missingLabels.join('、');

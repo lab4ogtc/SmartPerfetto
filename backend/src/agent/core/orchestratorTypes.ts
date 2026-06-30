@@ -185,7 +185,7 @@ export interface IOrchestrator {
    * @deprecated P1-7: Dead code — sessionMap is loaded from `claude_session_map.json` at construction.
    * Kept for backward compatibility but never called from route layer.
    */
-  restoreSessionMapping?(sessionId: string, sdkSessionId: string): void;
+  restoreSessionMapping?(sessionId: string, sdkSessionId: string, referenceTraceId?: string): void;
   /** Restore a cached architecture result from persistence (agentv3). */
   restoreArchitectureCache?(traceId: string, architecture: any): void;
   /** Get cached architecture for persistence (agentv3). */
@@ -233,6 +233,8 @@ export interface AnalysisResult {
   terminationMessage?: string;
   /** Structured Smart Stage1 preview for the frontend main chat surface. */
   smartScenePreview?: SmartScenePreviewPayload;
+  /** User-visible quick-mode run receipt. Metadata only; never claim support evidence. */
+  quickRun?: QuickRunReceipt;
 }
 
 export type AgentRuntimeAnalysisResult = AnalysisResult;
@@ -307,8 +309,8 @@ export interface AnalysisOptions {
 
   /**
    * Analysis mode override from UI/CLI.
-   * - 'fast': force quick path (10 turns, lightweight MCP, skip verifier/sub-agents)
-   * - 'full': force full pipeline (60 turns, verifier, optional sub-agents)
+   * - 'fast': force quick path (target 5 turns, hard-cap protected)
+   * - 'full': force full pipeline (verifier, optional sub-agents)
    * - 'auto' or undefined: defer to queryComplexityClassifier
    */
   analysisMode?: 'fast' | 'full' | 'auto';
@@ -352,6 +354,62 @@ export interface TraceDataset {
   label: string;
   columns: string[];
   rows: unknown[][];
+  evidenceRefId?: string;
+  sourceToolCallId?: string;
+  queryHash?: string;
+  traceSide?: 'current' | 'reference';
+  traceId?: string;
+}
+
+export type QuickRunRequestedMode = 'fast' | 'auto' | 'full';
+export type QuickRunResolvedMode = 'quick' | 'full';
+export type QuickRunProfile = 'normal' | 'extended' | 'triage';
+export type QuickRunBudgetEnforcement = 'turn_cap' | 'timeout_only' | 'not_available';
+export type QuickRunStopReason =
+  | 'answered'
+  | 'needs_full'
+  | 'extended_answered'
+  | 'hard_cap'
+  | 'timeout'
+  | 'partial';
+export type QuickRunVerifierStatus = 'passed' | 'issues' | 'not_checked' | 'failed';
+
+export interface QuickRunTurnBudget {
+  targetTurns: number;
+  hardCapTurns: number;
+  extended: boolean;
+  enforcement: QuickRunBudgetEnforcement;
+}
+
+export interface QuickRunEvidenceCounts {
+  frontendPrequeryInjected: number;
+  frontendPrequeryCited: number;
+  currentRunDataEnvelopes: number;
+  citedEvidenceRefs: number;
+}
+
+export interface QuickRunContextInjectedCounts {
+  conversationTurns: number;
+  recentSqlResults: number;
+  sqlPitfallPairs: number;
+  patternHints: number;
+  negativePatternHints: number;
+  caseBackgroundCases: number;
+}
+
+export interface QuickRunReceipt {
+  requestedMode: QuickRunRequestedMode;
+  resolvedMode: QuickRunResolvedMode;
+  profile: QuickRunProfile;
+  targetTurns: number;
+  hardCapTurns: number;
+  actualTurns: number;
+  elapsedMs: number;
+  enforcement: QuickRunBudgetEnforcement;
+  stopReason: QuickRunStopReason;
+  evidence: QuickRunEvidenceCounts;
+  contextInjected: QuickRunContextInjectedCounts;
+  verifierStatus: QuickRunVerifierStatus;
 }
 
 // =============================================================================

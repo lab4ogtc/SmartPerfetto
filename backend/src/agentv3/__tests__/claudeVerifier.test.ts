@@ -50,6 +50,7 @@ import {
   isConclusionIncomplete,
   parseVerifierJsonIssues,
 } from '../claudeVerifier';
+import { extractFindingsFromText } from '../claudeFindingExtractor';
 
 const mockFs = require('fs') as jest.Mocked<typeof import('fs')>;
 const actualFs = jest.requireActual<typeof import('fs')>('fs');
@@ -117,6 +118,64 @@ describe('verifyHeuristic', () => {
       const findings = [makeFinding({ severity: 'critical', evidence: [{ type: 'data', value: '50ms' }] })];
       const issues = verifyHeuristic(findings, 'Some conclusion text that is long enough');
       expect(issues.filter(i => i.type === 'missing_evidence')).toHaveLength(0);
+    });
+
+    it('should not flag markdown severity table cells as CRITICAL findings without evidence', () => {
+      const conclusion = `
+| 类型 | 帧数 | 占比 | 根因 | 严重度 |
+|------|------|------|------|--------|
+| \`CustomScroll_longFrameLoad\` | 6 | 85.7% | ANIMATION 回调同步重载 | [CRITICAL] |
+
+这是一段足够长的结论，用于描述滑动性能问题和后续排查方向。
+`;
+      const findings = extractFindingsFromText(conclusion);
+      const issues = verifyHeuristic(findings, conclusion);
+
+      expect(findings.map(finding => finding.title)).not.toContain('|');
+      expect(issues.filter(issue => issue.type === 'missing_evidence')).toHaveLength(0);
+    });
+
+    it('should not flag a critical finding when its evidence is a markdown metrics table', () => {
+      const conclusion = `
+### 代表帧分析
+
+**[CRITICAL] Frame 2 — 主线程 ANIMATION 同步重载**
+
+| 属性 | 数值 |
+|---|---|
+| 帧耗时 | **62.73ms（7.5x 预算）** |
+| vsync_missed | 7 帧 |
+| \`Choreographer#doFrame\` | 60.85ms |
+| \`animation\` → \`CustomScroll_longFrameLoad_1\` | **59.02ms** |
+| 主线程 Running 占比 | **95.9%**（无锁/IO/GC） |
+| RenderThread | 仅 1.88ms，98.3% 等待主线程 |
+
+**因果链**：\`Choreographer#doFrame\` → ANIMATION 回调 → \`CustomScroll_longFrameLoad_1\`
+
+这段结论说明 Frame 2 的超时由主线程同步执行 ANIMATION 负载造成，RenderThread 主要在等待主线程，不是渲染线程自身瓶颈。
+`;
+      const findings = extractFindingsFromText(conclusion);
+      const issues = verifyHeuristic(findings, conclusion);
+
+      expect(findings).toHaveLength(1);
+      expect(findings[0].evidence?.[0]?.text).toContain('62.73ms');
+      expect(issues.filter(issue => issue.type === 'missing_evidence')).toHaveLength(0);
+    });
+
+    it('should not flag a critical recommendation when its evidence is inline metric text', () => {
+      const conclusion = `
+### 优化建议
+
+1. **[CRITICAL] \`CustomScroll_longFrameLoad\` 移出 ANIMATION 回调** — 当前 6/7 帧在 \`Choreographer#doFrame\` 的 ANIMATION 阶段同步执行 47-59ms。建议异步执行或预计算，预估消除 86% 掉帧，FPS 升至约 120。
+
+这段结论明确将优化建议绑定到已观测的帧数量、主线程阶段、耗时范围和预估收益。
+`;
+      const findings = extractFindingsFromText(conclusion);
+      const issues = verifyHeuristic(findings, conclusion);
+
+      expect(findings).toHaveLength(1);
+      expect(findings[0].evidence?.[0]?.text).toContain('47-59ms');
+      expect(issues.filter(issue => issue.type === 'missing_evidence')).toHaveLength(0);
     });
   });
 
@@ -354,6 +413,149 @@ describe('verifyPlanAdherence', () => {
     )).toBe(true);
   });
 
+  it('allows a final conclusion phase to synthesize prior evidence without its own matched tool call', () => {
+    const plan = makePlan({
+      phases: [
+        {
+          id: 'p1',
+          name: '证据采集',
+          goal: '收集 frame timeline 和关键证据',
+          expectedTools: ['invoke_skill'],
+          status: 'completed',
+          summary: '已收集掉帧分布和关键 frame 证据，确认存在 62.73ms 长帧。',
+        },
+        {
+          id: 'p2',
+          name: '综合结论与优化建议',
+          goal: '整合前序证据输出最终报告',
+          expectedTools: ['fetch_artifact', 'lookup_knowledge'],
+          status: 'completed',
+          summary: '最终报告已输出，包含根因、证据链、代表帧和优化建议。',
+        },
+      ],
+      toolCallLog: [
+        {
+          toolName: 'invoke_skill',
+          skillId: 'scrolling_analysis',
+          timestamp: Date.now(),
+          matchedPhaseId: 'p1',
+        },
+        { toolName: 'fetch_artifact', timestamp: Date.now(), matchedPhaseId: 'p1' },
+        { toolName: 'lookup_knowledge', timestamp: Date.now(), matchedPhaseId: 'p1' },
+      ],
+    });
+
+    const issues = verifyPlanAdherence(plan);
+    expect(issues.some(i =>
+      i.type === 'plan_deviation' &&
+      i.severity === 'error' &&
+      i.message.includes('综合结论与优化建议'),
+    )).toBe(false);
+  });
+
+  it('allows a final conclusion expectedCall when the required call ran in an evidence phase', () => {
+    const plan = makePlan({
+      phases: [
+        {
+          id: 'p1',
+          name: '根因分析',
+          goal: '执行阻塞链分析',
+          expectedTools: ['invoke_skill'],
+          status: 'completed',
+          summary: '已通过 blocking_chain_analysis 确认主线程同步等待路径。',
+        },
+        {
+          id: 'p2',
+          name: '综合结论',
+          goal: '输出最终报告',
+          expectedTools: ['invoke_skill'],
+          expectedCalls: [{ tool: 'invoke_skill', skillId: 'blocking_chain_analysis' }],
+          status: 'completed',
+          summary: '最终报告复用了前序阻塞链证据并给出修复建议。',
+        },
+      ],
+      toolCallLog: [
+        {
+          toolName: 'invoke_skill',
+          skillId: 'blocking_chain_analysis',
+          timestamp: Date.now(),
+          matchedPhaseId: 'p1',
+        },
+      ],
+    });
+
+    const issues = verifyPlanAdherence(plan);
+    expect(issues.some(i =>
+      i.type === 'plan_deviation' &&
+      i.severity === 'error' &&
+      i.message.includes('blocking_chain_analysis'),
+    )).toBe(false);
+  });
+
+  it('does not let dangling tool attribution satisfy final conclusion expectations', () => {
+    const plan = makePlan({
+      phases: [
+        {
+          id: 'p1',
+          name: 'Conclusion',
+          goal: 'write final report',
+          expectedTools: ['fetch_artifact'],
+          status: 'completed',
+          summary: 'Final report was written from supposed prior evidence.',
+        },
+      ],
+      toolCallLog: [
+        { toolName: 'fetch_artifact', timestamp: Date.now(), matchedPhaseId: 'old-phase' },
+      ],
+    });
+
+    const issues = verifyPlanAdherence(plan);
+    expect(issues.some(i =>
+      i.type === 'plan_deviation' &&
+      i.severity === 'error' &&
+      i.message.includes('无匹配的工具调用'),
+    )).toBe(true);
+  });
+
+  it('still errors when a final conclusion expectedCall never ran anywhere', () => {
+    const plan = makePlan({
+      phases: [
+        {
+          id: 'p1',
+          name: '根因分析',
+          goal: '执行代表帧分析',
+          expectedTools: ['invoke_skill'],
+          status: 'completed',
+          summary: '已完成代表帧分析，但尚未执行阻塞链分析。',
+        },
+        {
+          id: 'p2',
+          name: '综合结论',
+          goal: '输出最终报告',
+          expectedTools: ['invoke_skill'],
+          expectedCalls: [{ tool: 'invoke_skill', skillId: 'blocking_chain_analysis' }],
+          status: 'completed',
+          summary: '最终报告声称包含阻塞链证据。',
+        },
+      ],
+      toolCallLog: [
+        {
+          toolName: 'invoke_skill',
+          skillId: 'jank_frame_detail',
+          timestamp: Date.now(),
+          matchedPhaseId: 'p1',
+        },
+      ],
+    });
+
+    const issues = verifyPlanAdherence(plan);
+    expect(issues.some(i =>
+      i.type === 'plan_deviation' &&
+      i.severity === 'error' &&
+      i.message.includes('缺失: invoke_skill(blocking_chain_analysis)'),
+    )).toBe(true);
+  });
+
   it('does not let support tools satisfy a structured expectedCalls phase', () => {
     const plan = makePlan({
       phases: [{
@@ -551,6 +753,22 @@ describe('verifySceneCompleteness', () => {
     const conclusion = '滑动分析：136 帧掉帧，freq_ramp_slow 占 47%，workload_heavy 占 9%。';
     const issues = verifySceneCompleteness('scrolling', findings, conclusion);
     expect(issues.some(i => i.message.includes('Phase 1.9') || i.message.includes('深钻'))).toBe(true);
+  });
+
+  it('should require deep drill for small but real app jank counts', () => {
+    const findings = [makeFinding({ title: 'Jank', description: '真实掉帧 7 帧，App Deadline Missed' })];
+    const conclusion = '滑动分析：347帧中真实掉帧 7 帧，主要为 workload_heavy 和 lock_binder_wait。';
+    const issues = verifySceneCompleteness('scrolling', findings, conclusion);
+    expect(issues.some(i => i.severity === 'error' && i.message.includes('深钻'))).toBe(true);
+  });
+
+  it('does not count lookup_knowledge alone as scrolling deep drill evidence', () => {
+    const findings = [makeFinding({ title: 'Jank', description: '真实掉帧 7 帧，App Deadline Missed' })];
+    const conclusion = '滑动分析：真实掉帧 7 帧。lookup_knowledge rendering-pipeline 解释了 Android 渲染背景。';
+    const issues = verifySceneCompleteness('scrolling', findings, conclusion, [
+      { toolName: 'lookup_knowledge', timestamp: Date.now(), inputSummary: 'rendering-pipeline', matchedPhaseId: 'p5' },
+    ]);
+    expect(issues.some(i => i.severity === 'error' && i.message.includes('深钻'))).toBe(true);
   });
 
   it('should pass scrolling with deep drill evidence present', () => {

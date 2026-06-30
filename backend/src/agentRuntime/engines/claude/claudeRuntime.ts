@@ -5,7 +5,10 @@
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
-import { query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
+import {
+  SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+  query as sdkQuery,
+} from '@anthropic-ai/claude-agent-sdk';
 import type { TraceProcessorService } from '../../../services/traceProcessorService';
 import { createSkillExecutor } from '../../../services/skillEngine/skillExecutor';
 import { ensureSkillRegistryInitialized, skillRegistry } from '../../../services/skillEngine/skillLoader';
@@ -18,7 +21,11 @@ import type { AnalysisResult, AnalysisOptions, IOrchestrator } from '../../../ag
 import type { ArchitectureInfo } from '../../../agent/detectors/types';
 
 import { createClaudeMcpServer, loadLearnedSqlFixPairs, MCP_NAME_PREFIX } from '../../../agentv3/claudeMcpServer';
-import { buildSystemPrompt, buildQuickSystemPrompt, buildSelectionContextSection } from '../../../agentv3/claudeSystemPrompt';
+import {
+  buildSystemPromptParts,
+  buildQuickSystemPrompt,
+  buildSelectionContextSection,
+} from '../../../agentv3/claudeSystemPrompt';
 import {
   createSseBridge,
   extractSdkToolResultBlocks,
@@ -53,10 +60,9 @@ import { classifyQueryComplexity } from '../../../agentv3/queryComplexityClassif
 import { buildComplexityClassifierInput } from '../../../agentv3/queryComplexityContext';
 import { buildAgentDefinitions } from './claudeAgentDefinitions';
 import { getExtendedKnowledgeBase } from '../../../services/sqlKnowledgeBase';
-import type { AnalysisNote, AnalysisPlanV3, ClaudeAnalysisContext, ComplexityClassifierInput, FailedApproach, Hypothesis, QueryComplexity, TraceCompleteness, ToolCallRecord, UncertaintyFlag, VerificationIssue } from '../../../agentv3/types';
-import { phaseMatchesCall } from '../../../agentv3/types';
+import type { AnalysisNote, AnalysisPlanV3, ClaudeAnalysisContext, ComplexityClassifierInput, FailedApproach, Hypothesis, QueryComplexity, TraceCompleteness, UncertaintyFlag, VerificationIssue } from '../../../agentv3/types';
 import { ArtifactStore } from '../../../agentv3/artifactStore';
-import { summarizeToolCallInput } from '../../../agentv3/toolCallSummary';
+import { recordPlanToolCall } from '../../../agentv3/planToolCallRecorder';
 import { buildRecoveryNote } from '../../../agentv3/recoveryNoteBuilder';
 import { evaluateThreshold as evaluateContextThreshold } from '../../../agentv3/contextTokenMeter';
 import {
@@ -86,66 +92,9 @@ import {
   looksLikeProcessNarrationConclusion,
   looksLikePhaseSummaryFallback,
 } from '../../../services/finalResultQualityGate';
-
-function parseLeadingJsonObject(text: string): Record<string, unknown> | null {
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === '\\') {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-    } else if (char === '{') {
-      depth++;
-    } else if (char === '}') {
-      depth--;
-      if (depth === 0) {
-        try {
-          const parsed = JSON.parse(text.slice(0, i + 1));
-          return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-            ? parsed as Record<string, unknown>
-            : null;
-        } catch {
-          return null;
-        }
-      }
-    }
-  }
-  return null;
-}
-
-function extractPlanPhaseIdFromToolResult(resultStr: string): string | undefined {
-  const candidates: string[] = [resultStr];
-  try {
-    const parsed = JSON.parse(resultStr);
-    const entries = Array.isArray(parsed) ? parsed : [parsed];
-    for (const entry of entries) {
-      if (entry && typeof entry === 'object' && typeof (entry as any).text === 'string') {
-        candidates.push((entry as any).text);
-      }
-    }
-  } catch {
-    // Fall through to leading-object parsing below.
-  }
-
-  for (const candidate of candidates) {
-    const trimmed = candidate.trim();
-    const parsed = parseLeadingJsonObject(trimmed);
-    const planPhaseId = parsed?.planPhaseId;
-    if (typeof planPhaseId === 'string' && planPhaseId.trim()) return planPhaseId.trim();
-  }
-  return undefined;
-}
+import { buildCaseBackgroundContext } from '../../../services/caseEvolution/caseBackgroundContext';
+import { getProductionEngineCapabilities } from '../../runtimeDescriptors';
+import type { EngineCapabilities } from '../../runtimeDescriptorTypes';
 
 function looksLikeProcessNarration(text: string): boolean {
   return /(?:我来|我需要|我将|接下来|先重新|重新读取|继续调用|首先.*提交|计划已提交|工具|tool|let me|i need to|i will|next i)/i
@@ -431,8 +380,10 @@ import {
 } from '../../../services/enterpriseMigration';
 import {
   SDK_SESSION_FRESHNESS_MS,
+  buildQuickRunReceipt,
   buildEntityContext,
   buildQuickConversationContext,
+  buildQuickMemoryContextPayload,
   buildRuntimeSessionMapKey,
   captureSkillDisplayEntities,
   collectRecentFindings,
@@ -441,6 +392,9 @@ import {
   isFreshRuntimeEntry,
   knowledgeScopeFromAnalysisOptions,
   providerScopeFromAnalysisOptions,
+  quickStopReasonFromTermination,
+  resolveQuickTurnBudget,
+  shouldMarkQuickRunTriage,
   setLruCacheEntry,
   toProtocolHypothesis as toRuntimeProtocolHypothesis,
 } from '../../runtimeCommon';
@@ -598,10 +552,41 @@ function isFreshFullSdkSessionEntry(entry: SessionMapEntry | undefined, now = Da
     && isFreshRuntimeEntry(entry, SDK_SESSION_FRESHNESS_MS, now);
 }
 
+type ClaudeSdkSystemPrompt = string | string[];
+
+function supportsSystemPromptDynamicBoundary(capabilities: EngineCapabilities): boolean {
+  return capabilities.promptCache.systemPromptDynamicBoundary;
+}
+
+function buildClaudeSdkSystemPrompt(
+  parts: Pick<ReturnType<typeof buildSystemPromptParts>, 'fullPrompt' | 'stablePrefix' | 'volatileSuffix'>,
+  capabilities: EngineCapabilities,
+): ClaudeSdkSystemPrompt {
+  if (!supportsSystemPromptDynamicBoundary(capabilities)) {
+    return parts.fullPrompt;
+  }
+
+  const stablePrefix = parts.stablePrefix.trim();
+  if (!stablePrefix) {
+    return parts.fullPrompt;
+  }
+
+  const blocks = [
+    stablePrefix,
+    SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+  ];
+  const volatileSuffix = parts.volatileSuffix.trim();
+  if (volatileSuffix) {
+    blocks.push(volatileSuffix);
+  }
+  return blocks;
+}
+
 export const __testing = {
   getSdkResultErrorMessage,
   isMissingSdkConversationError,
   isFreshFullSdkSessionEntry,
+  buildClaudeSdkSystemPrompt,
   getCorrectionRetryTimeoutMs,
   buildQuickConversationContext,
   correctionResultLooksUsable,
@@ -768,6 +753,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
   /** In-flight SDK subprocess handles keyed by SmartPerfetto session. */
   private readonly activeAbortHandles: Map<string, Set<RuntimeAbortHandle>> = new Map();
   private readonly runtimeSelection: RuntimeSelection;
+  private readonly runtimeCapabilities: EngineCapabilities;
 
   constructor(
     traceProcessorService: TraceProcessorService,
@@ -778,12 +764,16 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
     this.traceProcessorService = traceProcessorService;
     this.config = loadClaudeConfig(config);
     this.runtimeSelection = runtimeSelection;
+    this.runtimeCapabilities = getProductionEngineCapabilities(runtimeSelection.kind);
     this.sessionMap = loadSessionMapForCurrentMode();
   }
 
   /** Restore a previously persisted SDK session mapping (e.g., after server restart). */
-  restoreSessionMapping(smartPerfettoSessionId: string, sdkSessionId: string): void {
-    this.sessionMap.set(smartPerfettoSessionId, { sdkSessionId, updatedAt: Date.now(), mode: 'full' });
+  restoreSessionMapping(smartPerfettoSessionId: string, sdkSessionId: string, referenceTraceId?: string): void {
+    this.sessionMap.set(
+      this.buildSessionMapKey(smartPerfettoSessionId, referenceTraceId),
+      { sdkSessionId, updatedAt: Date.now(), mode: 'full' },
+    );
   }
 
   /** Restore a cached architecture detection result (e.g., from session persistence). */
@@ -1102,7 +1092,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
         options: {
           model: runtimeConfig.model,
           maxTurns: runtimeConfig.maxTurns,
-          systemPrompt: ctx.systemPrompt,
+          systemPrompt: ctx.sdkSystemPrompt,
           mcpServers: { smartperfetto: ctx.mcpServer },
           includePartialMessages: true,
           settingSources: [],
@@ -1442,38 +1432,11 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
               // Track tool call for plan adherence with phase matching (P0-1 + P1-1)
               // P1-G5: Best-fit phase-tool matching — search all eligible phases, not just first
               if (ctx.analysisPlan.current && matchedTool) {
-                const plan = ctx.analysisPlan.current;
-                const shortToolName = matchedTool.name.replace(MCP_NAME_PREFIX, '');
-                const callSummary = summarizeToolCallInput(shortToolName, matchedTool.input);
-                const candidate: ToolCallRecord = {
+                recordPlanToolCall(ctx.analysisPlan.current, {
                   toolName: matchedTool.name,
-                  timestamp: Date.now(),
-                  ...callSummary,
-                };
-                const toolReturnedPhaseId = extractPlanPhaseIdFromToolResult(resultStr);
-                let matchedPhaseId = toolReturnedPhaseId &&
-                  plan.phases.some(p => p.id === toolReturnedPhaseId)
-                  ? toolReturnedPhaseId
-                  : undefined;
-                // Priority: MCP-side semantic attribution first, then in_progress phase,
-                // then any pending phase whose expectations match.
-                if (!matchedPhaseId) {
-                  const activePhase = plan.phases.find(p => p.status === 'in_progress');
-                  if (activePhase && phaseMatchesCall(activePhase, candidate)) {
-                    matchedPhaseId = activePhase.id;
-                  }
-                }
-                if (!matchedPhaseId) {
-                  const pendingMatch = plan.phases.find(p =>
-                    p.status === 'pending' && phaseMatchesCall(p, candidate),
-                  );
-                  matchedPhaseId = pendingMatch?.id;
-                }
-                plan.toolCallLog.push({ ...candidate, matchedPhaseId });
-                // P2-8: Cap toolCallLog to prevent unbounded growth within a turn
-                if (plan.toolCallLog.length > 100) {
-                  plan.toolCallLog.splice(0, plan.toolCallLog.length - 100);
-                }
+                  input: matchedTool.input,
+                  resultText: resultStr,
+                });
               }
 
               // P0-G16: Circuit breaker — overall failure rate monitoring
@@ -2300,6 +2263,27 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       skillExecutor.registerSkills(skillRegistry.getAllSkills());
       skillExecutor.setFragmentRegistry(skillRegistry.getFragmentCache());
 
+      const knowledgeScope = analysisRunSpec.scopes.knowledge;
+      let sqlErrors = this.sessionSqlErrors.get(sessionId);
+      if (!sqlErrors) {
+        sqlErrors = loadLearnedSqlFixPairs(5, knowledgeScope);
+        this.sessionSqlErrors.set(sessionId, sqlErrors);
+      }
+      const traceFeatures = extractTraceFeatures({
+        architectureType: architecture?.type,
+        sceneType,
+        packageName: effectivePackageName,
+      });
+      const quickMemoryPayload = buildQuickMemoryContextPayload({
+        patternContext: buildPatternContextSection(traceFeatures, knowledgeScope),
+        negativePatternContext: buildNegativePatternSection(traceFeatures, knowledgeScope),
+        caseBackgroundContext: buildCaseBackgroundContext(sceneType, architecture?.type, knowledgeScope),
+        sqlErrorFixPairs: sqlErrors,
+        recentSqlResultsContext: sessionContext.generateRecentSqlResultPromptContext(3),
+        outputLanguage: this.config.outputLanguage,
+      });
+      const quickMemoryContext = quickMemoryPayload.text;
+
       const watchdogWarning: { current: string | null } = { current: null };
       // Quick path defaults to no skill-notes injection per §8 of the
       // self-improving design. Operators can opt-in via the env override.
@@ -2307,6 +2291,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       const { server: mcpServer, allowedTools } = createClaudeMcpServer({
         sessionId,
         traceId,
+        userQuery: query,
         traceProcessorService: this.traceProcessorService,
         skillExecutor,
         packageName: effectivePackageName,
@@ -2314,9 +2299,10 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
         watchdogWarning,
         sceneType,
         lightweight: true,
+        recentSqlErrors: sqlErrors,
         skillNotesBudget: quickNotesBudget,
         outputLanguage: this.config.outputLanguage,
-        knowledgeScope: analysisRunSpec.scopes.knowledge,
+        knowledgeScope,
         codeAwareMode: options.codeAwareMode,
         codebaseIds: options.codebaseIds,
       });
@@ -2327,6 +2313,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
         focusApps: focusResult.apps.length > 0 ? focusResult.apps : undefined,
         focusMethod: focusResult.method,
         selectionContext: options.selectionContext,
+        quickMemoryContext,
         outputLanguage: this.config.outputLanguage,
       });
 
@@ -2336,6 +2323,13 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
         resolveRuntimeConfig(this.config, options.providerId, providerScope),
         sdkEnv,
       );
+      const quickBudget = resolveQuickTurnBudget({
+        env: sdkEnv,
+        hardCapTurns: quickConfig.maxTurns,
+        targetEnvKeys: ['AGENT_QUICK_TARGET_TURNS', 'CLAUDE_QUICK_TARGET_TURNS'],
+        hardCapEnvKeys: ['AGENT_QUICK_MAX_TURNS', 'CLAUDE_QUICK_MAX_TURNS'],
+        enforcement: 'turn_cap',
+      });
 
       const { handleMessage: bridge, getAccumulatedAnswer } = createSseBridge((update: StreamingUpdate) => {
         this.emitUpdate(update);
@@ -2361,6 +2355,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       // the full-mode SDK conversation.
       let quickPrompt = query;
       const quickConversationContext = buildQuickConversationContext(previousTurns, this.config.outputLanguage);
+      const quickConversationTurns = previousTurns.filter((turn: any) => turn?.completed).slice(-3).length;
       if (quickConversationContext) {
         quickPrompt = `${quickConversationContext}\n\n${quickPrompt}`;
       }
@@ -2456,19 +2451,41 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
         unregisterSdkAbortHandle();
       }
 
+      if (timedOut) {
+        terminationReason = 'timeout';
+        terminationMessage = localize(
+          this.config.outputLanguage,
+          `快速问答超过 ${Math.round(timeoutMs / 1000)} 秒超时，结果可能不完整。`,
+          `Fast Q&A timed out after ${Math.round(timeoutMs / 1000)} seconds; the result may be incomplete.`,
+        );
+      }
+
       let conclusionText = finalResult || getAccumulatedAnswer() || '';
       let mergedFindings = mergeFindings([extractFindingsFromText(conclusionText)]);
-      const isPartialResult = terminationReason === MAX_TURNS_TERMINATION_REASON;
+      const isPartialResult = terminationReason === MAX_TURNS_TERMINATION_REASON || terminationReason === 'timeout';
       if (isPartialResult) {
-        terminationMessage ||= buildMaxTurnsTerminationMessage({
-          mode: 'fast',
-          turns: quickRounds,
-          maxTurns: quickConfig.maxTurns,
-          outputLanguage: this.config.outputLanguage,
-        });
+        if (terminationReason === MAX_TURNS_TERMINATION_REASON) {
+          terminationMessage ||= buildMaxTurnsTerminationMessage({
+            mode: 'fast',
+            turns: quickRounds,
+            maxTurns: quickConfig.maxTurns,
+            outputLanguage: this.config.outputLanguage,
+          });
+        }
+        const partialMessage = terminationMessage || localize(
+          this.config.outputLanguage,
+          '快速问答未能生成完整可核验答案。',
+          'Fast Q&A could not produce a complete verifiable answer.',
+        );
         conclusionText = conclusionText.trim()
-          ? prependPartialNotice(conclusionText, terminationMessage, this.config.outputLanguage)
-          : buildMaxTurnsFallbackConclusion({
+          ? prependPartialNotice(conclusionText, partialMessage, this.config.outputLanguage)
+          : terminationReason === 'timeout'
+            ? (terminationMessage || localize(
+                this.config.outputLanguage,
+                '快速问答超时，未能生成可核验答案。',
+                'Fast Q&A timed out before producing a verifiable answer.',
+              ))
+            : buildMaxTurnsFallbackConclusion({
               mode: 'fast',
               turns: quickRounds,
               maxTurns: quickConfig.maxTurns,
@@ -2510,6 +2527,27 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
         partial: isPartialResult || undefined,
         terminationReason,
         terminationMessage,
+        quickRun: buildQuickRunReceipt({
+          requestedMode: options.analysisMode ?? 'auto',
+          profile: shouldMarkQuickRunTriage(query) ? 'triage' : undefined,
+          budget: quickBudget,
+          actualTurns: quickRounds,
+          elapsedMs: Date.now() - startTime,
+          stopReason: quickStopReasonFromTermination({
+            partial: isPartialResult,
+            terminationReason,
+            actualTurns: quickRounds,
+            targetTurns: quickBudget.targetTurns,
+            hardCapTurns: quickBudget.hardCapTurns,
+          }),
+          evidence: {
+            frontendPrequeryInjected: analysisRunSpec.traceContext.datasetCount,
+          },
+          contextInjected: {
+            conversationTurns: quickConversationTurns,
+            ...quickMemoryPayload.counts,
+          },
+        }),
       };
       const quickGateIssue = applyFinalResultQualityGate({ result: quickResult, query, sceneType });
       if (quickGateIssue) {
@@ -3098,6 +3136,11 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       traceFeatures,
       knowledgeScope,
     );
+    const caseBackgroundContext = buildCaseBackgroundContext(
+      sceneType,
+      architecture?.type,
+      knowledgeScope,
+    );
 
     // Phase 6: Session-scoped artifact store + analysis notes
     if (!this.artifactStores.has(sessionId)) {
@@ -3156,6 +3199,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
     const { server: mcpServer, allowedTools } = createClaudeMcpServer({
       sessionId,
       traceId,
+      userQuery: query,
       traceProcessorService: this.traceProcessorService,
       skillExecutor,
       packageName: effectivePackageName,
@@ -3231,6 +3275,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       sqlErrorFixPairs: sqlErrorFixPairs.length > 0 ? sqlErrorFixPairs : undefined,
       patternContext,
       negativePatternContext,
+      caseBackgroundContext,
       previousPlan,
       planHistory: analysisPlan.history.length > 0 ? analysisPlan.history : undefined,
       selectionContext: options.selectionContext,
@@ -3242,11 +3287,17 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       codeAwareMode: options.codeAwareMode,
       codebaseIds: options.codebaseIds,
     };
-    const systemPrompt = buildSystemPrompt(analysisContextForRebuild);
+    const systemPromptParts = buildSystemPromptParts(analysisContextForRebuild);
+    const systemPrompt = systemPromptParts.fullPrompt;
+    const sdkSystemPrompt = buildClaudeSdkSystemPrompt(
+      systemPromptParts,
+      this.runtimeCapabilities,
+    );
 
     return {
       mcpServer,
       systemPrompt,
+      sdkSystemPrompt,
       effectiveEffort,
       agents,
       sessionContext,
