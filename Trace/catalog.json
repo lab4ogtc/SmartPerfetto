@@ -1,0 +1,4490 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "schema_version": 1,
+      "id": "android-scroll-customer",
+      "kind": "real",
+      "title": "Android 16 customer scroll",
+      "description": "Existing customer scrolling fixture with multiple gesture and jank events.",
+      "scene": "scrolling",
+      "tags": [
+        "android",
+        "scrolling",
+        "customer",
+        "jank"
+      ],
+      "aliases": [
+        "scroll-demo-customer-scroll.pftrace"
+      ],
+      "trace": {
+        "file": "trace.pftrace",
+        "format": "perfetto-protobuf",
+        "sha256": "1015ba963c49cd57d08d8997c4c48027026f2d6e41f7eb72b4b1356e39f7af3a",
+        "materialization": "committed"
+      },
+      "android": {
+        "release": "16",
+        "api_level": 36,
+        "device": "OPPO PKH110",
+        "build_fingerprint": "OPPO/PKH110/OP5DC1L1:16/AP3A.240617.008/V.2a01376-7328d8-769621:user/release-keys",
+        "compatibility": {
+          "min_api": 36,
+          "max_api": 36
+        }
+      },
+      "source": {
+        "origin": "Legacy SmartPerfetto test-traces fixture; original capture provenance was not recorded",
+        "captured_at": null,
+        "imported_at": "2026-07-13T00:00:00.000Z",
+        "license": null,
+        "consent": null,
+        "privacy_review": "pending",
+        "sanitization_review": "pending",
+        "publication": "legacy-tracked"
+      },
+      "analysis": {
+        "results": [
+          "analysis/scroll-demo-customer-scroll.pftrace.fps_report.txt"
+        ],
+        "logs": []
+      },
+      "coverage": {
+        "skills": [],
+        "strategies": [],
+        "expectations": []
+      },
+      "case_dir": "Trace/real/android-scroll-customer",
+      "manifest_path": "Trace/real/android-scroll-customer/case.json"
+    },
+    {
+      "schema_version": 1,
+      "id": "android-scroll-standard",
+      "kind": "real",
+      "title": "Android 15 standard AOSP scroll",
+      "description": "Existing standard Android View scrolling fixture without pre-animation.",
+      "scene": "scrolling",
+      "tags": [
+        "android",
+        "scrolling",
+        "aosp",
+        "view"
+      ],
+      "aliases": [
+        "scroll_Standard-AOSP-App-Without-PreAnimation.pftrace"
+      ],
+      "trace": {
+        "file": "trace.pftrace",
+        "format": "perfetto-protobuf",
+        "sha256": "df7eebc5c6ff19b48331f8f1bca346612d86a5ae26eae202d46842a83f87a653",
+        "materialization": "committed"
+      },
+      "android": {
+        "release": "15",
+        "api_level": 35,
+        "device": "nubia pacific",
+        "build_fingerprint": "nubia/pacific/pacific:15/1.4.1.0/101:user/release-keys",
+        "compatibility": {
+          "min_api": 35,
+          "max_api": 35
+        }
+      },
+      "source": {
+        "origin": "Legacy SmartPerfetto test-traces fixture; original capture provenance was not recorded",
+        "captured_at": null,
+        "imported_at": "2026-07-13T00:00:00.000Z",
+        "license": null,
+        "consent": null,
+        "privacy_review": "pending",
+        "sanitization_review": "pending",
+        "publication": "legacy-tracked"
+      },
+      "analysis": {
+        "results": [
+          "analysis/scroll_Standard-AOSP-App-Without-PreAnimation.pftrace.fps_report.txt"
+        ],
+        "logs": []
+      },
+      "coverage": {
+        "skills": [],
+        "strategies": [],
+        "expectations": []
+      },
+      "case_dir": "Trace/real/android-scroll-standard",
+      "manifest_path": "Trace/real/android-scroll-standard/case.json"
+    },
+    {
+      "schema_version": 1,
+      "id": "android-startup-heavy",
+      "kind": "real",
+      "title": "Android 16 heavy startup",
+      "description": "Existing SmartPerfetto heavy application startup fixture captured on a Xiaomi pandora device.",
+      "scene": "startup",
+      "tags": [
+        "android",
+        "startup",
+        "heavy"
+      ],
+      "aliases": [
+        "lacunh_heavy.pftrace"
+      ],
+      "trace": {
+        "file": "trace.pftrace",
+        "format": "perfetto-protobuf",
+        "sha256": "2a0c7b85e7f4a14e43b7f8d6de21172e05eba1ed3ad8ef7df539bb5e59b6ba63",
+        "materialization": "committed"
+      },
+      "android": {
+        "release": "16",
+        "api_level": 36,
+        "device": "Xiaomi pandora",
+        "build_fingerprint": "Xiaomi/pandora/pandora:16/BP2A.250605.031.A3/OS3.0.34.0.WBLCNXM:user/release-keys",
+        "compatibility": {
+          "min_api": 36,
+          "max_api": 36
+        }
+      },
+      "source": {
+        "origin": "Legacy SmartPerfetto test-traces fixture; original capture provenance was not recorded",
+        "captured_at": null,
+        "imported_at": "2026-07-13T00:00:00.000Z",
+        "license": null,
+        "consent": null,
+        "privacy_review": "pending",
+        "sanitization_review": "pending",
+        "publication": "legacy-tracked"
+      },
+      "analysis": {
+        "results": [
+          "analysis/lacunh_heavy.pftrace.fps_report.txt"
+        ],
+        "logs": []
+      },
+      "coverage": {
+        "skills": [],
+        "strategies": [],
+        "expectations": []
+      },
+      "case_dir": "Trace/real/android-startup-heavy",
+      "manifest_path": "Trace/real/android-startup-heavy/case.json"
+    },
+    {
+      "schema_version": 1,
+      "id": "android-startup-light",
+      "kind": "real",
+      "title": "Android 16 light startup",
+      "description": "Existing SmartPerfetto light application startup fixture captured on a Google raven device.",
+      "scene": "startup",
+      "tags": [
+        "android",
+        "startup",
+        "light"
+      ],
+      "aliases": [
+        "launch_light.pftrace"
+      ],
+      "trace": {
+        "file": "trace.pftrace",
+        "format": "perfetto-protobuf",
+        "sha256": "6c5479fd1b765ee4d29692c43a8204b972bc0f97eb373aca98ea7e11e99fd8b4",
+        "materialization": "committed"
+      },
+      "android": {
+        "release": "16",
+        "api_level": 36,
+        "device": "Google raven",
+        "build_fingerprint": "google/raven_beta/raven:16/BP31.250523.010/13667654:user/release-keys",
+        "compatibility": {
+          "min_api": 36,
+          "max_api": 36
+        }
+      },
+      "source": {
+        "origin": "Legacy SmartPerfetto test-traces fixture; original capture provenance was not recorded",
+        "captured_at": null,
+        "imported_at": "2026-07-13T00:00:00.000Z",
+        "license": null,
+        "consent": null,
+        "privacy_review": "pending",
+        "sanitization_review": "pending",
+        "publication": "legacy-tracked"
+      },
+      "analysis": {
+        "results": [
+          "analysis/launch_light.pftrace.fps_report.txt"
+        ],
+        "logs": []
+      },
+      "coverage": {
+        "skills": [],
+        "strategies": [],
+        "expectations": []
+      },
+      "case_dir": "Trace/real/android-startup-light",
+      "manifest_path": "Trace/real/android-startup-light/case.json"
+    },
+    {
+      "schema_version": 1,
+      "id": "binder-io-blocking",
+      "kind": "constructed",
+      "title": "Binder, lock, and I/O blocking",
+      "description": "Deterministic binder, lock, and i/o blocking signals over the android-startup-heavy real base trace.",
+      "scene": "io",
+      "tags": [
+        "android",
+        "constructed",
+        "io"
+      ],
+      "aliases": [],
+      "trace": {
+        "file": "trace.overlay.pftrace",
+        "format": "perfetto-protobuf",
+        "sha256": "e3d9f69a6a1009f685c8abcb70951c4d42f1186db2f63dcba026b0058d848866",
+        "materialization": "base-plus-overlay"
+      },
+      "android": {
+        "release": "16",
+        "api_level": 36,
+        "device": "Xiaomi pandora base",
+        "build_fingerprint": null,
+        "compatibility": {
+          "min_api": 35,
+          "max_api": 36
+        }
+      },
+      "source": {
+        "origin": "SmartPerfetto deterministic trace generator",
+        "captured_at": null,
+        "imported_at": "2026-07-13T00:00:00.000Z",
+        "license": "AGPL-3.0-or-later",
+        "consent": "generated",
+        "privacy_review": "not-applicable",
+        "sanitization_review": "not-applicable",
+        "publication": "public"
+      },
+      "analysis": {
+        "results": [
+          "analysis/expected.json"
+        ],
+        "logs": []
+      },
+      "construction": {
+        "base_case_id": "android-startup-heavy",
+        "scenario_file": "scenario.json",
+        "generator_version": 1,
+        "seed": "binder-io-blocking-v1",
+        "output": "Trace/.generated/constructed/binder-io-blocking/trace.pftrace"
+      },
+      "coverage": {
+        "skills": [
+          "android_kernel_wakelock_summary",
+          "anr_analysis",
+          "anr_context_in_range",
+          "anr_detail",
+          "anr_main_thread_blocking",
+          "binder_analysis",
+          "binder_blocking_in_range",
+          "binder_detail",
+          "binder_in_range",
+          "binder_module",
+          "binder_root_cause",
+          "binder_storm_detection",
+          "block_io_analysis",
+          "blocking_chain_analysis",
+          "filesystem_module",
+          "io_pressure",
+          "lock_binder_wait",
+          "lock_contention_analysis",
+          "lock_contention_in_range",
+          "lock_contention_module",
+          "main_thread_file_io_in_range",
+          "page_fault_in_range",
+          "wakelock_tracking"
+        ],
+        "strategies": [
+          "anr",
+          "io"
+        ],
+        "expectations": [
+          {
+            "id": "execute-android_kernel_wakelock_summary",
+            "type": "skill",
+            "target": "android_kernel_wakelock_summary",
+            "mode": "graceful_empty",
+            "source_file": "backend/skills/atomic/android_kernel_wakelock_summary.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "wakelock_summary"
+            ],
+            "semantic_step": "wakelock_summary",
+            "limitation_reason": "The current generator does not emit android_kernel_wakelock counter tracks.",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          },
+          {
+            "id": "execute-anr_analysis",
+            "type": "skill",
+            "target": "anr_analysis",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/anr_analysis.skill.yaml",
+            "parameters": {
+              "multi_anr_threshold": 3,
+              "multi_anr_span_seconds": 10,
+              "io_wait_threshold_ms": 500,
+              "uninterruptible_wait_threshold_ms": 500,
+              "enable_lock_probe": true,
+              "lock_contention_futex_p95_critical_ms": 20,
+              "lock_contention_mutex_p95_warning_ms": 10,
+              "enable_detail_analysis": true
+            },
+            "required_steps": [
+              "init_cpu_topology",
+              "get_anr_context",
+              "anr_detection"
+            ],
+            "semantic_step": "anr_detection",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          },
+          {
+            "id": "definition-anr_context_in_range",
+            "type": "skill",
+            "target": "anr_context_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/anr_context_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          },
+          {
+            "id": "execute-anr_detail",
+            "type": "skill",
+            "target": "anr_detail",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/anr_detail.skill.yaml",
+            "parameters": {
+              "anr_ts": 1,
+              "timeout_ns": 1,
+              "process_name": "com.smartperfetto.fixture",
+              "pid": 700000,
+              "upid": "${fixture_upid}",
+              "anr_type": ""
+            },
+            "required_steps": [
+              "init_cpu_topology",
+              "anr_info"
+            ],
+            "semantic_step": "anr_info",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          },
+          {
+            "id": "execute-anr_main_thread_blocking",
+            "type": "skill",
+            "target": "anr_main_thread_blocking",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/anr_main_thread_blocking.skill.yaml",
+            "parameters": {
+              "process_name": "com.smartperfetto.fixture"
+            },
+            "required_steps": [
+              "main_thread_state"
+            ],
+            "semantic_step": "main_thread_state",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          },
+          {
+            "id": "execute-binder_analysis",
+            "type": "skill",
+            "target": "binder_analysis",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/binder_analysis.skill.yaml",
+            "parameters": {
+              "slow_binder_critical_ms": 50,
+              "slow_binder_warning_ms": 16,
+              "main_thread_txn_warning": 50,
+              "server_response_warning_ms": 20
+            },
+            "required_steps": [
+              "check_binder"
+            ],
+            "semantic_step": "check_binder",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          },
+          {
+            "id": "definition-binder_blocking_in_range",
+            "type": "skill",
+            "target": "binder_blocking_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/binder_blocking_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          },
+          {
+            "id": "execute-binder_detail",
+            "type": "skill",
+            "target": "binder_detail",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/binder_detail.skill.yaml",
+            "parameters": {
+              "binder_ts": 1,
+              "binder_end_ts": "${trace_end}",
+              "dur_ms": 1,
+              "server_process": "",
+              "process_name": "com.smartperfetto.fixture"
+            },
+            "required_steps": [
+              "init_cpu_topology",
+              "binder_info"
+            ],
+            "semantic_step": "binder_info",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          },
+          {
+            "id": "definition-binder_in_range",
+            "type": "skill",
+            "target": "binder_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/binder_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          },
+          {
+            "id": "execute-binder_module",
+            "type": "skill",
+            "target": "binder_module",
+            "mode": "semantic",
+            "source_file": "backend/skills/modules/kernel/binder_module.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "binder_summary"
+            ],
+            "semantic_step": "binder_summary",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          },
+          {
+            "id": "execute-binder_root_cause",
+            "type": "skill",
+            "target": "binder_root_cause",
+            "mode": "graceful_empty",
+            "source_file": "backend/skills/atomic/binder_root_cause.skill.yaml",
+            "parameters": {
+              "process_name": "com.smartperfetto.fixture",
+              "start_ts": "${trace_start}",
+              "end_ts": "${trace_end}"
+            },
+            "required_steps": [
+              "slow_binder_breakdown"
+            ],
+            "semantic_step": "slow_binder_breakdown",
+            "limitation_reason": "The fixture has blocking slices but no kernel Binder transaction packet chain.",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          },
+          {
+            "id": "execute-binder_storm_detection",
+            "type": "skill",
+            "target": "binder_storm_detection",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/binder_storm_detection.skill.yaml",
+            "parameters": {
+              "threshold": 50
+            },
+            "required_steps": [
+              "binder_density"
+            ],
+            "semantic_step": "binder_density",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          },
+          {
+            "id": "execute-block_io_analysis",
+            "type": "skill",
+            "target": "block_io_analysis",
+            "mode": "graceful_empty",
+            "source_file": "backend/skills/composite/block_io_analysis.skill.yaml",
+            "parameters": {
+              "min_queue_depth": 5
+            },
+            "required_steps": [
+              "data_check",
+              "io_overview"
+            ],
+            "semantic_step": "io_overview",
+            "limitation_reason": "The fixture does not yet emit block_rq ftrace events.",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          },
+          {
+            "id": "execute-blocking_chain_analysis",
+            "type": "skill",
+            "target": "blocking_chain_analysis",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/blocking_chain_analysis.skill.yaml",
+            "parameters": {
+              "process_name": "com.smartperfetto.fixture",
+              "start_ts": "${trace_start}",
+              "end_ts": "${trace_end}"
+            },
+            "required_steps": [
+              "thread_state_distribution"
+            ],
+            "semantic_step": "thread_state_distribution",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          },
+          {
+            "id": "execute-filesystem_module",
+            "type": "skill",
+            "target": "filesystem_module",
+            "mode": "semantic",
+            "source_file": "backend/skills/modules/kernel/filesystem_module.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "io_overview"
+            ],
+            "semantic_step": "io_overview",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          },
+          {
+            "id": "execute-io_pressure",
+            "type": "skill",
+            "target": "io_pressure",
+            "mode": "graceful_empty",
+            "source_file": "backend/skills/composite/io_pressure.skill.yaml",
+            "parameters": {
+              "min_duration_ms": 1,
+              "max_items": 20,
+              "long_io_threshold_ms": 10,
+              "critical_io_wait_ms": 5000,
+              "warning_io_wait_ms": 1000
+            },
+            "required_steps": [
+              "data_check",
+              "io_wait_overview"
+            ],
+            "semantic_step": "io_wait_overview",
+            "limitation_reason": "The fixture does not yet emit PSI I/O pressure counters.",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          },
+          {
+            "id": "execute-lock_binder_wait",
+            "type": "skill",
+            "target": "lock_binder_wait",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/lock_binder_wait.skill.yaml",
+            "parameters": {
+              "process_name": "com.smartperfetto.fixture",
+              "start_ts": "${trace_start}",
+              "end_ts": "${trace_end}"
+            },
+            "required_steps": [
+              "main_thread_blocking_chain"
+            ],
+            "semantic_step": "main_thread_blocking_chain",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          },
+          {
+            "id": "execute-lock_contention_analysis",
+            "type": "skill",
+            "target": "lock_contention_analysis",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/lock_contention_analysis.skill.yaml",
+            "parameters": {
+              "min_duration_ms": 10
+            },
+            "required_steps": [
+              "data_check",
+              "owner_contention_events"
+            ],
+            "semantic_step": "owner_contention_events",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          },
+          {
+            "id": "execute-lock_contention_in_range",
+            "type": "skill",
+            "target": "lock_contention_in_range",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/lock_contention_in_range.skill.yaml",
+            "parameters": {
+              "start_ts": "${trace_start}",
+              "end_ts": "${trace_end}"
+            },
+            "required_steps": [
+              "monitor_contentions"
+            ],
+            "semantic_step": "monitor_contentions",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          },
+          {
+            "id": "execute-lock_contention_module",
+            "type": "skill",
+            "target": "lock_contention_module",
+            "mode": "semantic",
+            "source_file": "backend/skills/modules/kernel/lock_contention_module.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "lock_contention_overview"
+            ],
+            "semantic_step": "lock_contention_overview",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          },
+          {
+            "id": "definition-main_thread_file_io_in_range",
+            "type": "skill",
+            "target": "main_thread_file_io_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/main_thread_file_io_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          },
+          {
+            "id": "definition-page_fault_in_range",
+            "type": "skill",
+            "target": "page_fault_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/page_fault_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          },
+          {
+            "id": "execute-wakelock_tracking",
+            "type": "skill",
+            "target": "wakelock_tracking",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/wakelock_tracking.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "wakelock_events"
+            ],
+            "semantic_step": "wakelock_events",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          },
+          {
+            "id": "strategy-anr",
+            "type": "strategy",
+            "target": "anr",
+            "query": "anr",
+            "expected_strategy": "anr",
+            "source_file": "backend/strategies/anr.strategy.md",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          },
+          {
+            "id": "strategy-io",
+            "type": "strategy",
+            "target": "io",
+            "query": "io",
+            "expected_strategy": "io",
+            "source_file": "backend/strategies/io.strategy.md",
+            "required_marker": "SmartPerfetto::CASE::binder-io-blocking"
+          }
+        ]
+      },
+      "case_dir": "Trace/constructed/binder-io-blocking",
+      "manifest_path": "Trace/constructed/binder-io-blocking/case.json"
+    },
+    {
+      "schema_version": 1,
+      "id": "flutter-scroll-surface-view",
+      "kind": "real",
+      "title": "Android 15 Flutter SurfaceView scroll",
+      "description": "Existing WeChat Flutter scrolling fixture rendered through SurfaceView.",
+      "scene": "scrolling",
+      "tags": [
+        "android",
+        "flutter",
+        "scrolling",
+        "surfaceview",
+        "wechat"
+      ],
+      "aliases": [
+        "Scroll-Flutter-SurfaceView-Wechat-Wenyiwen.pftrace"
+      ],
+      "trace": {
+        "file": "trace.pftrace",
+        "format": "perfetto-protobuf",
+        "sha256": "e876c56b5d7290acda596e73929c1a127df4255e9ca6951605dad40833e67a53",
+        "materialization": "committed"
+      },
+      "android": {
+        "release": "15",
+        "api_level": 35,
+        "device": "nubia pacific",
+        "build_fingerprint": "nubia/pacific/pacific:15/1.4.1.0/101:user/release-keys",
+        "compatibility": {
+          "min_api": 35,
+          "max_api": 35
+        }
+      },
+      "source": {
+        "origin": "Legacy SmartPerfetto test-traces fixture; original capture provenance was not recorded",
+        "captured_at": null,
+        "imported_at": "2026-07-13T00:00:00.000Z",
+        "license": null,
+        "consent": null,
+        "privacy_review": "pending",
+        "sanitization_review": "pending",
+        "publication": "legacy-tracked"
+      },
+      "analysis": {
+        "results": [
+          "analysis/Scroll-Flutter-SurfaceView-Wechat-Wenyiwen.pftrace.fps_report.txt"
+        ],
+        "logs": []
+      },
+      "coverage": {
+        "skills": [],
+        "strategies": [],
+        "expectations": []
+      },
+      "case_dir": "Trace/real/flutter-scroll-surface-view",
+      "manifest_path": "Trace/real/flutter-scroll-surface-view/case.json"
+    },
+    {
+      "schema_version": 1,
+      "id": "flutter-scroll-texture-view",
+      "kind": "real",
+      "title": "Android 15 Flutter TextureView scroll",
+      "description": "Existing Flutter scrolling fixture rendered through TextureView.",
+      "scene": "scrolling",
+      "tags": [
+        "android",
+        "flutter",
+        "scrolling",
+        "textureview"
+      ],
+      "aliases": [
+        "Scroll-Flutter-327-TextureView.pftrace"
+      ],
+      "known_issues": [
+        "The original capture reports seven trace_sorter_negative_timestamp_dropped health events."
+      ],
+      "trace": {
+        "file": "trace.pftrace",
+        "format": "perfetto-protobuf",
+        "sha256": "645deaa9fc564e0ea33072c83f5ecf1d0a6f53a97055cc98c640e8294deb315e",
+        "materialization": "committed"
+      },
+      "android": {
+        "release": "15",
+        "api_level": 35,
+        "device": "nubia pacific",
+        "build_fingerprint": "nubia/pacific/pacific:15/1.4.1.0/101:user/release-keys",
+        "compatibility": {
+          "min_api": 35,
+          "max_api": 35
+        }
+      },
+      "source": {
+        "origin": "Legacy SmartPerfetto test-traces fixture; original capture provenance was not recorded",
+        "captured_at": null,
+        "imported_at": "2026-07-13T00:00:00.000Z",
+        "license": null,
+        "consent": null,
+        "privacy_review": "pending",
+        "sanitization_review": "pending",
+        "publication": "legacy-tracked"
+      },
+      "analysis": {
+        "results": [
+          "analysis/Scroll-Flutter-327-TextureView.pftrace.fps_report.txt"
+        ],
+        "logs": []
+      },
+      "coverage": {
+        "skills": [],
+        "strategies": [],
+        "expectations": []
+      },
+      "case_dir": "Trace/real/flutter-scroll-texture-view",
+      "manifest_path": "Trace/real/flutter-scroll-texture-view/case.json"
+    },
+    {
+      "schema_version": 1,
+      "id": "framework-pipelines",
+      "kind": "constructed",
+      "title": "Framework rendering pipeline signatures",
+      "description": "Deterministic framework rendering pipeline signatures signals over the android-startup-heavy real base trace.",
+      "scene": "pipeline",
+      "tags": [
+        "android",
+        "constructed",
+        "pipeline"
+      ],
+      "aliases": [],
+      "trace": {
+        "file": "trace.overlay.pftrace",
+        "format": "perfetto-protobuf",
+        "sha256": "35c5cf1014ac0032188fb3da8d08899fa1ea3bb25ac6f34eb7f1c00645f3a9b3",
+        "materialization": "base-plus-overlay"
+      },
+      "android": {
+        "release": "16",
+        "api_level": 36,
+        "device": "Xiaomi pandora base",
+        "build_fingerprint": null,
+        "compatibility": {
+          "min_api": 35,
+          "max_api": 36
+        }
+      },
+      "source": {
+        "origin": "SmartPerfetto deterministic trace generator",
+        "captured_at": null,
+        "imported_at": "2026-07-13T00:00:00.000Z",
+        "license": "AGPL-3.0-or-later",
+        "consent": "generated",
+        "privacy_review": "not-applicable",
+        "sanitization_review": "not-applicable",
+        "publication": "public"
+      },
+      "analysis": {
+        "results": [
+          "analysis/expected.json"
+        ],
+        "logs": []
+      },
+      "construction": {
+        "base_case_id": "android-startup-heavy",
+        "scenario_file": "scenario.json",
+        "generator_version": 1,
+        "seed": "framework-pipelines-v1",
+        "output": "Trace/.generated/constructed/framework-pipelines/trace.pftrace"
+      },
+      "coverage": {
+        "skills": [
+          "ams_module",
+          "art_module",
+          "code_pinpoint",
+          "compose_recomposition_hotspot",
+          "pipeline_4feature_scoring",
+          "pipeline_android_pip_freeform",
+          "pipeline_android_view_mixed",
+          "pipeline_android_view_multi_window",
+          "pipeline_android_view_software",
+          "pipeline_android_view_standard_blast",
+          "pipeline_android_view_standard_legacy",
+          "pipeline_chrome_browser_viz",
+          "pipeline_compose_standard",
+          "pipeline_flutter_surfaceview_impeller",
+          "pipeline_flutter_surfaceview_skia",
+          "pipeline_game_engine",
+          "pipeline_imagereader_pipeline",
+          "pipeline_key_slices_overlay",
+          "pipeline_rn_new_arch",
+          "pipeline_rn_old_arch",
+          "pipeline_rn_skia",
+          "pipeline_software_compositing",
+          "pipeline_surface_control_api",
+          "pipeline_surfaceview_blast",
+          "pipeline_variable_refresh_rate",
+          "pipeline_video_overlay_hwc",
+          "pipeline_webview_gl_functor",
+          "pipeline_webview_surface_control",
+          "pipeline_webview_surfaceview_wrapper",
+          "systemui_module",
+          "third_party_module",
+          "wms_module"
+        ],
+        "strategies": [
+          "pipeline"
+        ],
+        "expectations": [
+          {
+            "id": "execute-ams_module",
+            "type": "skill",
+            "target": "ams_module",
+            "mode": "semantic",
+            "source_file": "backend/skills/modules/framework/ams_module.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "startup_timing"
+            ],
+            "semantic_step": "startup_timing",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "execute-art_module",
+            "type": "skill",
+            "target": "art_module",
+            "mode": "semantic",
+            "source_file": "backend/skills/modules/framework/art_module.skill.yaml",
+            "parameters": {
+              "package": "com.smartperfetto.fixture"
+            },
+            "required_steps": [
+              "gc_overview"
+            ],
+            "semantic_step": "gc_overview",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "execute-code_pinpoint",
+            "type": "skill",
+            "target": "code_pinpoint",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/code_pinpoint.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "hot_slices"
+            ],
+            "semantic_step": "hot_slices",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "execute-compose_recomposition_hotspot",
+            "type": "skill",
+            "target": "compose_recomposition_hotspot",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/compose_recomposition_hotspot.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "frame_timeline_check",
+              "recomposition_overview"
+            ],
+            "semantic_step": "recomposition_overview",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "execute-pipeline_4feature_scoring",
+            "type": "skill",
+            "target": "pipeline_4feature_scoring",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/pipeline_4feature_scoring.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "producer_thread_signature"
+            ],
+            "semantic_step": "producer_thread_signature",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "definition-pipeline_android_pip_freeform",
+            "type": "skill",
+            "target": "pipeline_android_pip_freeform",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/android_pip_freeform.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "definition-pipeline_android_view_mixed",
+            "type": "skill",
+            "target": "pipeline_android_view_mixed",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/android_view_mixed.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "definition-pipeline_android_view_multi_window",
+            "type": "skill",
+            "target": "pipeline_android_view_multi_window",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/android_view_multi_window.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "definition-pipeline_android_view_software",
+            "type": "skill",
+            "target": "pipeline_android_view_software",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/android_view_software.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "definition-pipeline_android_view_standard_blast",
+            "type": "skill",
+            "target": "pipeline_android_view_standard_blast",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/android_view_standard_blast.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "definition-pipeline_android_view_standard_legacy",
+            "type": "skill",
+            "target": "pipeline_android_view_standard_legacy",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/android_view_standard_legacy.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "definition-pipeline_chrome_browser_viz",
+            "type": "skill",
+            "target": "pipeline_chrome_browser_viz",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/chrome_browser_viz.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "definition-pipeline_compose_standard",
+            "type": "skill",
+            "target": "pipeline_compose_standard",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/compose_standard.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "definition-pipeline_flutter_surfaceview_impeller",
+            "type": "skill",
+            "target": "pipeline_flutter_surfaceview_impeller",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/flutter_surfaceview_impeller.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "definition-pipeline_flutter_surfaceview_skia",
+            "type": "skill",
+            "target": "pipeline_flutter_surfaceview_skia",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/flutter_surfaceview_skia.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "definition-pipeline_game_engine",
+            "type": "skill",
+            "target": "pipeline_game_engine",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/game_engine.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "definition-pipeline_imagereader_pipeline",
+            "type": "skill",
+            "target": "pipeline_imagereader_pipeline",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/imagereader_pipeline.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "execute-pipeline_key_slices_overlay",
+            "type": "skill",
+            "target": "pipeline_key_slices_overlay",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/pipeline_key_slices_overlay.skill.yaml",
+            "parameters": {
+              "slice_names": "'Choreographer#doFrame','DrawFrame','queueBuffer','latchBuffer'"
+            },
+            "required_steps": [
+              "pipeline_key_slices_overlay"
+            ],
+            "semantic_step": "pipeline_key_slices_overlay",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "definition-pipeline_rn_new_arch",
+            "type": "skill",
+            "target": "pipeline_rn_new_arch",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/rn_new_arch.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "definition-pipeline_rn_old_arch",
+            "type": "skill",
+            "target": "pipeline_rn_old_arch",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/rn_old_arch.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "definition-pipeline_rn_skia",
+            "type": "skill",
+            "target": "pipeline_rn_skia",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/rn_skia.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "definition-pipeline_software_compositing",
+            "type": "skill",
+            "target": "pipeline_software_compositing",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/software_compositing.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "definition-pipeline_surface_control_api",
+            "type": "skill",
+            "target": "pipeline_surface_control_api",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/surface_control_api.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "definition-pipeline_surfaceview_blast",
+            "type": "skill",
+            "target": "pipeline_surfaceview_blast",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/surfaceview_blast.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "definition-pipeline_variable_refresh_rate",
+            "type": "skill",
+            "target": "pipeline_variable_refresh_rate",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/variable_refresh_rate.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "definition-pipeline_video_overlay_hwc",
+            "type": "skill",
+            "target": "pipeline_video_overlay_hwc",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/video_overlay_hwc.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "definition-pipeline_webview_gl_functor",
+            "type": "skill",
+            "target": "pipeline_webview_gl_functor",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/webview_gl_functor.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "definition-pipeline_webview_surface_control",
+            "type": "skill",
+            "target": "pipeline_webview_surface_control",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/webview_surface_control.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "definition-pipeline_webview_surfaceview_wrapper",
+            "type": "skill",
+            "target": "pipeline_webview_surfaceview_wrapper",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/webview_surfaceview_wrapper.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "execute-systemui_module",
+            "type": "skill",
+            "target": "systemui_module",
+            "mode": "semantic",
+            "source_file": "backend/skills/modules/app/systemui_module.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "systemui_process"
+            ],
+            "semantic_step": "systemui_process",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "execute-third_party_module",
+            "type": "skill",
+            "target": "third_party_module",
+            "mode": "semantic",
+            "source_file": "backend/skills/modules/app/third_party_module.skill.yaml",
+            "parameters": {
+              "package": "com.smartperfetto.fixture"
+            },
+            "required_steps": [
+              "thread_overview"
+            ],
+            "semantic_step": "thread_overview",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "execute-wms_module",
+            "type": "skill",
+            "target": "wms_module",
+            "mode": "semantic",
+            "source_file": "backend/skills/modules/framework/wms_module.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "window_animation_overview"
+            ],
+            "semantic_step": "window_animation_overview",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          },
+          {
+            "id": "strategy-pipeline",
+            "type": "strategy",
+            "target": "pipeline",
+            "query": "管线识别",
+            "expected_strategy": "pipeline",
+            "source_file": "backend/strategies/pipeline.strategy.md",
+            "required_marker": "SmartPerfetto::CASE::framework-pipelines"
+          }
+        ]
+      },
+      "case_dir": "Trace/constructed/framework-pipelines",
+      "manifest_path": "Trace/constructed/framework-pipelines/case.json"
+    },
+    {
+      "schema_version": 1,
+      "id": "general-runtime-contracts",
+      "kind": "constructed",
+      "title": "General analysis and runtime contracts",
+      "description": "Deterministic general analysis and runtime contracts signals over the android-scroll-customer real base trace.",
+      "scene": "general",
+      "tags": [
+        "android",
+        "constructed",
+        "general"
+      ],
+      "aliases": [],
+      "trace": {
+        "file": "trace.overlay.pftrace",
+        "format": "perfetto-protobuf",
+        "sha256": "2627a1c665d57bd90a52a8c01feb98e188125c99bd4268e2282318445b0c743a",
+        "materialization": "base-plus-overlay"
+      },
+      "android": {
+        "release": "16",
+        "api_level": 36,
+        "device": "OPPO PKH110 base",
+        "build_fingerprint": null,
+        "compatibility": {
+          "min_api": 35,
+          "max_api": 36
+        }
+      },
+      "source": {
+        "origin": "SmartPerfetto deterministic trace generator",
+        "captured_at": null,
+        "imported_at": "2026-07-13T00:00:00.000Z",
+        "license": "AGPL-3.0-or-later",
+        "consent": "generated",
+        "privacy_review": "not-applicable",
+        "sanitization_review": "not-applicable",
+        "publication": "public"
+      },
+      "analysis": {
+        "results": [
+          "analysis/expected.json"
+        ],
+        "logs": []
+      },
+      "construction": {
+        "base_case_id": "android-scroll-customer",
+        "scenario_file": "scenario.json",
+        "generator_version": 1,
+        "seed": "general-runtime-contracts-v1",
+        "output": "Trace/.generated/constructed/general-runtime-contracts/trace.pftrace"
+      },
+      "coverage": {
+        "skills": [
+          "callstack_analysis",
+          "fence_wait_decomposition",
+          "global_trace_sanity_check",
+          "main_thread_slices_in_range",
+          "main_thread_states_in_range",
+          "multi_trace_result_comparison",
+          "process_identity_resolver"
+        ],
+        "strategies": [
+          "general",
+          "multi_trace_result_comparison",
+          "overview",
+          "runtime_correctness",
+          "smart",
+          "teaching",
+          "verifier_misdiagnosis"
+        ],
+        "expectations": [
+          {
+            "id": "execute-callstack_analysis",
+            "type": "skill",
+            "target": "callstack_analysis",
+            "mode": "graceful_empty",
+            "source_file": "backend/skills/deep/callstack_analysis.skill.yaml",
+            "parameters": {
+              "min_samples": 10
+            },
+            "required_steps": [
+              "check_samples"
+            ],
+            "semantic_step": "check_samples",
+            "limitation_reason": "The fixture does not contain perf samples or interned callstacks.",
+            "required_marker": "SmartPerfetto::CASE::general-runtime-contracts"
+          },
+          {
+            "id": "execute-fence_wait_decomposition",
+            "type": "skill",
+            "target": "fence_wait_decomposition",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/fence_wait_decomposition.skill.yaml",
+            "parameters": {
+              "start_ts": "${trace_start}",
+              "end_ts": "${trace_end}"
+            },
+            "required_steps": [
+              "acquire_fence_wait"
+            ],
+            "semantic_step": "acquire_fence_wait",
+            "required_marker": "SmartPerfetto::CASE::general-runtime-contracts"
+          },
+          {
+            "id": "execute-global_trace_sanity_check",
+            "type": "skill",
+            "target": "global_trace_sanity_check",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/global_trace_sanity_check.skill.yaml",
+            "parameters": {
+              "max_rows": 20
+            },
+            "required_steps": [
+              "trace_window"
+            ],
+            "semantic_step": "trace_window",
+            "required_marker": "SmartPerfetto::CASE::general-runtime-contracts"
+          },
+          {
+            "id": "definition-main_thread_slices_in_range",
+            "type": "skill",
+            "target": "main_thread_slices_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/main_thread_slices_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::general-runtime-contracts"
+          },
+          {
+            "id": "definition-main_thread_states_in_range",
+            "type": "skill",
+            "target": "main_thread_states_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/main_thread_states_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::general-runtime-contracts"
+          },
+          {
+            "id": "definition-multi_trace_result_comparison",
+            "type": "skill",
+            "target": "multi_trace_result_comparison",
+            "mode": "definition",
+            "source_file": "backend/skills/comparison/multi_trace_result_comparison.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::general-runtime-contracts"
+          },
+          {
+            "id": "definition-process_identity_resolver",
+            "type": "skill",
+            "target": "process_identity_resolver",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/process_identity_resolver.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::general-runtime-contracts"
+          },
+          {
+            "id": "strategy-general",
+            "type": "strategy",
+            "target": "general",
+            "query": "分析这份 trace",
+            "expected_strategy": "general",
+            "source_file": "backend/strategies/general.strategy.md",
+            "required_marker": "SmartPerfetto::CASE::general-runtime-contracts"
+          },
+          {
+            "id": "strategy-multi_trace_result_comparison",
+            "type": "strategy",
+            "target": "multi_trace_result_comparison",
+            "query": "分析结果对比",
+            "expected_strategy": "multi_trace_result_comparison",
+            "source_file": "backend/strategies/multi-trace-result-comparison.strategy.md",
+            "required_marker": "SmartPerfetto::CASE::general-runtime-contracts"
+          },
+          {
+            "id": "strategy-overview",
+            "type": "strategy",
+            "target": "overview",
+            "query": "发生了什么",
+            "expected_strategy": "overview",
+            "source_file": "backend/strategies/overview.strategy.md",
+            "required_marker": "SmartPerfetto::CASE::general-runtime-contracts"
+          },
+          {
+            "id": "strategy-runtime_correctness",
+            "type": "strategy",
+            "target": "runtime_correctness",
+            "query": "runtime",
+            "expected_strategy": "runtime_correctness",
+            "source_file": "backend/strategies/runtime-correctness.strategy.md",
+            "required_marker": "SmartPerfetto::CASE::general-runtime-contracts"
+          },
+          {
+            "id": "strategy-smart",
+            "type": "strategy",
+            "target": "smart",
+            "query": "smart",
+            "expected_strategy": "smart",
+            "source_file": "backend/strategies/smart.strategy.md",
+            "required_marker": "SmartPerfetto::CASE::general-runtime-contracts"
+          },
+          {
+            "id": "strategy-teaching",
+            "type": "strategy",
+            "target": "teaching",
+            "query": "教学",
+            "expected_strategy": "teaching",
+            "source_file": "backend/strategies/teaching.strategy.md",
+            "required_marker": "SmartPerfetto::CASE::general-runtime-contracts"
+          },
+          {
+            "id": "strategy-verifier_misdiagnosis",
+            "type": "strategy",
+            "target": "verifier_misdiagnosis",
+            "query": "contract-only:verifier_misdiagnosis",
+            "expected_strategy": "verifier_misdiagnosis",
+            "source_file": "backend/strategies/verifier-misdiagnosis.strategy.md",
+            "required_marker": "SmartPerfetto::CASE::general-runtime-contracts"
+          }
+        ]
+      },
+      "case_dir": "Trace/constructed/general-runtime-contracts",
+      "manifest_path": "Trace/constructed/general-runtime-contracts/case.json"
+    },
+    {
+      "schema_version": 1,
+      "id": "gpu-workload",
+      "kind": "constructed",
+      "title": "GPU workload and frequency",
+      "description": "Deterministic gpu workload and frequency signals over the android-scroll-customer real base trace.",
+      "scene": "gpu",
+      "tags": [
+        "android",
+        "constructed",
+        "gpu"
+      ],
+      "aliases": [],
+      "trace": {
+        "file": "trace.overlay.pftrace",
+        "format": "perfetto-protobuf",
+        "sha256": "0827bcf705796a74829d16c8d1a8bd313d7f505975f72ee62ab7b2dc33756950",
+        "materialization": "base-plus-overlay"
+      },
+      "android": {
+        "release": "16",
+        "api_level": 36,
+        "device": "OPPO PKH110 base",
+        "build_fingerprint": null,
+        "compatibility": {
+          "min_api": 35,
+          "max_api": 36
+        }
+      },
+      "source": {
+        "origin": "SmartPerfetto deterministic trace generator",
+        "captured_at": null,
+        "imported_at": "2026-07-13T00:00:00.000Z",
+        "license": "AGPL-3.0-or-later",
+        "consent": "generated",
+        "privacy_review": "not-applicable",
+        "sanitization_review": "not-applicable",
+        "publication": "public"
+      },
+      "analysis": {
+        "results": [
+          "analysis/expected.json"
+        ],
+        "logs": []
+      },
+      "construction": {
+        "base_case_id": "android-scroll-customer",
+        "scenario_file": "scenario.json",
+        "generator_version": 1,
+        "seed": "gpu-workload-v1",
+        "output": "Trace/.generated/constructed/gpu-workload/trace.pftrace"
+      },
+      "coverage": {
+        "skills": [
+          "android_gpu_work_period_track",
+          "gpu_analysis",
+          "gpu_compute_kernel_analysis",
+          "gpu_freq_in_range",
+          "gpu_frequency_analysis",
+          "gpu_metrics",
+          "gpu_module",
+          "gpu_v57_ai_diagnostics",
+          "pipeline_angle_gles_vulkan",
+          "pipeline_opengl_es",
+          "pipeline_vulkan_native"
+        ],
+        "strategies": [],
+        "expectations": [
+          {
+            "id": "execute-android_gpu_work_period_track",
+            "type": "skill",
+            "target": "android_gpu_work_period_track",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/android_gpu_work_period_track.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "gpu_work"
+            ],
+            "semantic_step": "gpu_work",
+            "required_marker": "SmartPerfetto::CASE::gpu-workload"
+          },
+          {
+            "id": "execute-gpu_analysis",
+            "type": "skill",
+            "target": "gpu_analysis",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/gpu_analysis.skill.yaml",
+            "parameters": {
+              "high_freq_threshold_pct": 70,
+              "mid_freq_threshold_pct": 40,
+              "low_freq_threshold_pct": 10,
+              "freq_drop_ratio": 0.7,
+              "freq_drop_count_threshold": 20,
+              "high_load_min_dur_ns": 500000000
+            },
+            "required_steps": [
+              "data_check",
+              "gpu_freq_overview"
+            ],
+            "semantic_step": "gpu_freq_overview",
+            "required_marker": "SmartPerfetto::CASE::gpu-workload"
+          },
+          {
+            "id": "execute-gpu_compute_kernel_analysis",
+            "type": "skill",
+            "target": "gpu_compute_kernel_analysis",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/gpu_compute_kernel_analysis.skill.yaml",
+            "parameters": {
+              "max_rows": 50
+            },
+            "required_steps": [
+              "data_check",
+              "kernel_summary",
+              "launch_configuration"
+            ],
+            "semantic_step": "kernel_summary",
+            "required_marker": "SmartPerfetto::CASE::gpu-workload"
+          },
+          {
+            "id": "definition-gpu_freq_in_range",
+            "type": "skill",
+            "target": "gpu_freq_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/gpu_freq_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::gpu-workload"
+          },
+          {
+            "id": "definition-gpu_frequency_analysis",
+            "type": "skill",
+            "target": "gpu_frequency_analysis",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/gpu_frequency_analysis.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::gpu-workload"
+          },
+          {
+            "id": "execute-gpu_metrics",
+            "type": "skill",
+            "target": "gpu_metrics",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/gpu_metrics.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "gpu_frequency"
+            ],
+            "semantic_step": "gpu_frequency",
+            "required_marker": "SmartPerfetto::CASE::gpu-workload"
+          },
+          {
+            "id": "execute-gpu_module",
+            "type": "skill",
+            "target": "gpu_module",
+            "mode": "semantic",
+            "source_file": "backend/skills/modules/hardware/gpu_module.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "gpu_frequency_overview"
+            ],
+            "semantic_step": "gpu_frequency_overview",
+            "required_marker": "SmartPerfetto::CASE::gpu-workload"
+          },
+          {
+            "id": "execute-gpu_v57_ai_diagnostics",
+            "type": "skill",
+            "target": "gpu_v57_ai_diagnostics",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/gpu_v57_ai_diagnostics.skill.yaml",
+            "parameters": {
+              "target_freq_ratio": 0.9,
+              "min_throttle_ns": 1000,
+              "max_rows": 20
+            },
+            "required_steps": [
+              "data_check",
+              "gpu_inventory"
+            ],
+            "semantic_step": "gpu_inventory",
+            "required_marker": "SmartPerfetto::CASE::gpu-workload"
+          },
+          {
+            "id": "definition-pipeline_angle_gles_vulkan",
+            "type": "skill",
+            "target": "pipeline_angle_gles_vulkan",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/angle_gles_vulkan.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::gpu-workload"
+          },
+          {
+            "id": "definition-pipeline_opengl_es",
+            "type": "skill",
+            "target": "pipeline_opengl_es",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/opengl_es.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::gpu-workload"
+          },
+          {
+            "id": "definition-pipeline_vulkan_native",
+            "type": "skill",
+            "target": "pipeline_vulkan_native",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/vulkan_native.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::gpu-workload"
+          }
+        ]
+      },
+      "case_dir": "Trace/constructed/gpu-workload",
+      "manifest_path": "Trace/constructed/gpu-workload/case.json"
+    },
+    {
+      "schema_version": 1,
+      "id": "input-interaction-latency",
+      "kind": "constructed",
+      "title": "Input and interaction latency",
+      "description": "Deterministic input and interaction latency signals over the android-scroll-customer real base trace.",
+      "scene": "interaction",
+      "tags": [
+        "android",
+        "constructed",
+        "interaction"
+      ],
+      "aliases": [],
+      "trace": {
+        "file": "trace.overlay.pftrace",
+        "format": "perfetto-protobuf",
+        "sha256": "cf03df9f70c45b9e855da8915233c26d985bdb1e8d508d6fb5e1d7c6807968c9",
+        "materialization": "base-plus-overlay"
+      },
+      "android": {
+        "release": "16",
+        "api_level": 36,
+        "device": "OPPO PKH110 base",
+        "build_fingerprint": null,
+        "compatibility": {
+          "min_api": 35,
+          "max_api": 36
+        }
+      },
+      "source": {
+        "origin": "SmartPerfetto deterministic trace generator",
+        "captured_at": null,
+        "imported_at": "2026-07-13T00:00:00.000Z",
+        "license": "AGPL-3.0-or-later",
+        "consent": "generated",
+        "privacy_review": "not-applicable",
+        "sanitization_review": "not-applicable",
+        "publication": "public"
+      },
+      "analysis": {
+        "results": [
+          "analysis/expected.json"
+        ],
+        "logs": []
+      },
+      "construction": {
+        "base_case_id": "android-scroll-customer",
+        "scenario_file": "scenario.json",
+        "generator_version": 1,
+        "seed": "input-interaction-latency-v1",
+        "output": "Trace/.generated/constructed/input-interaction-latency/trace.pftrace"
+      },
+      "coverage": {
+        "skills": [
+          "app_lifecycle_in_range",
+          "battery_doze_state_timeline",
+          "click_response_analysis",
+          "click_response_detail",
+          "device_state_timeline",
+          "input_events_in_range",
+          "input_module",
+          "main_thread_handler_callback_slices",
+          "navigation_analysis",
+          "scene_reconstruction",
+          "state_timeline",
+          "touch_to_display_latency"
+        ],
+        "strategies": [
+          "interaction",
+          "touch_tracking"
+        ],
+        "expectations": [
+          {
+            "id": "definition-app_lifecycle_in_range",
+            "type": "skill",
+            "target": "app_lifecycle_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/app_lifecycle_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+          },
+          {
+            "id": "execute-battery_doze_state_timeline",
+            "type": "skill",
+            "target": "battery_doze_state_timeline",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/battery_doze_state_timeline.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "deep_idle_intervals"
+            ],
+            "semantic_step": "deep_idle_intervals",
+            "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+          },
+          {
+            "id": "execute-click_response_analysis",
+            "type": "skill",
+            "target": "click_response_analysis",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/click_response_analysis.skill.yaml",
+            "parameters": {
+              "slow_event_threshold_ms": 100,
+              "avg_latency_critical_ms": 100,
+              "avg_handling_warning_ms": 50,
+              "avg_dispatch_warning_ms": 20,
+              "binder_blocking_threshold_ms": 30,
+              "critical_event_threshold_ms": 200,
+              "thread_state_min_dur_ms": 50,
+              "enable_per_event_detail": true
+            },
+            "required_steps": [
+              "check_input_data"
+            ],
+            "semantic_step": "check_input_data",
+            "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+          },
+          {
+            "id": "execute-click_response_detail",
+            "type": "skill",
+            "target": "click_response_detail",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/click_response_detail.skill.yaml",
+            "parameters": {
+              "event_ts": "${trace_start}",
+              "event_end_ts": "${trace_end}",
+              "total_ms": 1,
+              "process_name": "com.smartperfetto.fixture"
+            },
+            "required_steps": [
+              "init_cpu_topology",
+              "event_info"
+            ],
+            "semantic_step": "event_info",
+            "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+          },
+          {
+            "id": "execute-device_state_timeline",
+            "type": "skill",
+            "target": "device_state_timeline",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/device_state_timeline.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "cpu_freq_transitions"
+            ],
+            "semantic_step": "cpu_freq_transitions",
+            "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+          },
+          {
+            "id": "definition-input_events_in_range",
+            "type": "skill",
+            "target": "input_events_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/input_events_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+          },
+          {
+            "id": "execute-input_module",
+            "type": "skill",
+            "target": "input_module",
+            "mode": "semantic",
+            "source_file": "backend/skills/modules/framework/input_module.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "click_response_overview"
+            ],
+            "semantic_step": "click_response_overview",
+            "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+          },
+          {
+            "id": "execute-main_thread_handler_callback_slices",
+            "type": "skill",
+            "target": "main_thread_handler_callback_slices",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/main_thread_handler_callback_slices.skill.yaml",
+            "parameters": {
+              "package": "",
+              "start_ts": "${trace_start}",
+              "end_ts": "${trace_end}",
+              "min_dur_ns": 100000,
+              "top_k": 20
+            },
+            "required_steps": [
+              "callback_slices"
+            ],
+            "semantic_step": "callback_slices",
+            "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+          },
+          {
+            "id": "execute-navigation_analysis",
+            "type": "skill",
+            "target": "navigation_analysis",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/navigation_analysis.skill.yaml",
+            "parameters": {
+              "slow_navigation_ms": 400,
+              "nav_rating_good_ms": 200,
+              "nav_rating_severe_ms": 700,
+              "slow_lifecycle_ms": 100,
+              "blocking_op_min_dur_ms": 5,
+              "inflate_critical_ms": 100,
+              "binder_blocking_ms": 16,
+              "oncreate_slow_ms": 200
+            },
+            "required_steps": [
+              "check_lifecycle_data",
+              "get_process",
+              "navigation_overview"
+            ],
+            "semantic_step": "navigation_overview",
+            "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+          },
+          {
+            "id": "execute-scene_reconstruction",
+            "type": "skill",
+            "target": "scene_reconstruction",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/scene_reconstruction.skill.yaml",
+            "parameters": {
+              "trace_id": 1
+            },
+            "required_steps": [
+              "trace_time_range"
+            ],
+            "semantic_step": "trace_time_range",
+            "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+          },
+          {
+            "id": "execute-state_timeline",
+            "type": "skill",
+            "target": "state_timeline",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/state_timeline.skill.yaml",
+            "parameters": {
+              "trace_id": 1
+            },
+            "required_steps": [
+              "timeline_bounds",
+              "device_state_lane"
+            ],
+            "semantic_step": "device_state_lane",
+            "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+          },
+          {
+            "id": "definition-touch_to_display_latency",
+            "type": "skill",
+            "target": "touch_to_display_latency",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/touch_to_display_latency.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+          },
+          {
+            "id": "strategy-interaction",
+            "type": "strategy",
+            "target": "interaction",
+            "query": "点击",
+            "expected_strategy": "interaction",
+            "source_file": "backend/strategies/interaction.strategy.md",
+            "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+          },
+          {
+            "id": "strategy-touch_tracking",
+            "type": "strategy",
+            "target": "touch_tracking",
+            "query": "跟手度",
+            "expected_strategy": "touch_tracking",
+            "source_file": "backend/strategies/touch-tracking.strategy.md",
+            "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+          }
+        ]
+      },
+      "case_dir": "Trace/constructed/input-interaction-latency",
+      "manifest_path": "Trace/constructed/input-interaction-latency/case.json"
+    },
+    {
+      "schema_version": 1,
+      "id": "linux-system-state",
+      "kind": "constructed",
+      "title": "Linux and Android system state",
+      "description": "Deterministic linux and android system state signals over the android-startup-light real base trace.",
+      "scene": "linux",
+      "tags": [
+        "android",
+        "constructed",
+        "linux"
+      ],
+      "aliases": [],
+      "trace": {
+        "file": "trace.overlay.pftrace",
+        "format": "perfetto-protobuf",
+        "sha256": "f00d779b7a75887416a4e564508903e4db87ee3caa8a7066ff1975c62c88031a",
+        "materialization": "base-plus-overlay"
+      },
+      "android": {
+        "release": "16",
+        "api_level": 36,
+        "device": "Google raven base",
+        "build_fingerprint": null,
+        "compatibility": {
+          "min_api": 35,
+          "max_api": 36
+        }
+      },
+      "source": {
+        "origin": "SmartPerfetto deterministic trace generator",
+        "captured_at": null,
+        "imported_at": "2026-07-13T00:00:00.000Z",
+        "license": "AGPL-3.0-or-later",
+        "consent": "generated",
+        "privacy_review": "not-applicable",
+        "sanitization_review": "not-applicable",
+        "publication": "public"
+      },
+      "analysis": {
+        "results": [
+          "analysis/expected.json"
+        ],
+        "logs": []
+      },
+      "construction": {
+        "base_case_id": "android-startup-light",
+        "scenario_file": "scenario.json",
+        "generator_version": 1,
+        "seed": "linux-system-state-v1",
+        "output": "Trace/.generated/constructed/linux-system-state/trace.pftrace"
+      },
+      "coverage": {
+        "skills": [
+          "device_state_snapshot",
+          "linux_perf_counter_hotspots",
+          "linux_systemd_journald_analysis",
+          "trace_state_track_summary"
+        ],
+        "strategies": [
+          "linux"
+        ],
+        "expectations": [
+          {
+            "id": "execute-device_state_snapshot",
+            "type": "skill",
+            "target": "device_state_snapshot",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/device_state_snapshot.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "environment_snapshot"
+            ],
+            "semantic_step": "environment_snapshot",
+            "required_marker": "SmartPerfetto::CASE::linux-system-state"
+          },
+          {
+            "id": "execute-linux_perf_counter_hotspots",
+            "type": "skill",
+            "target": "linux_perf_counter_hotspots",
+            "mode": "graceful_empty",
+            "source_file": "backend/skills/atomic/linux_perf_counter_hotspots.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "perf_counter_hotspots"
+            ],
+            "semantic_step": "perf_counter_hotspots",
+            "limitation_reason": "The fixture does not contain PMU perf sample/counter packets.",
+            "required_marker": "SmartPerfetto::CASE::linux-system-state"
+          },
+          {
+            "id": "definition-linux_systemd_journald_analysis",
+            "type": "skill",
+            "target": "linux_systemd_journald_analysis",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/linux_systemd_journald_analysis.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::linux-system-state"
+          },
+          {
+            "id": "definition-trace_state_track_summary",
+            "type": "skill",
+            "target": "trace_state_track_summary",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/trace_state_track_summary.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::linux-system-state"
+          },
+          {
+            "id": "strategy-linux",
+            "type": "strategy",
+            "target": "linux",
+            "query": "linux",
+            "expected_strategy": "linux",
+            "source_file": "backend/strategies/linux.strategy.md",
+            "required_marker": "SmartPerfetto::CASE::linux-system-state"
+          }
+        ]
+      },
+      "case_dir": "Trace/constructed/linux-system-state",
+      "manifest_path": "Trace/constructed/linux-system-state/case.json"
+    },
+    {
+      "schema_version": 1,
+      "id": "media-network-camera",
+      "kind": "constructed",
+      "title": "Media, network, and camera pipeline",
+      "description": "Deterministic media, network, and camera pipeline signals over the android-scroll-customer real base trace.",
+      "scene": "media",
+      "tags": [
+        "android",
+        "constructed",
+        "media"
+      ],
+      "aliases": [],
+      "trace": {
+        "file": "trace.overlay.pftrace",
+        "format": "perfetto-protobuf",
+        "sha256": "4abf868de9627fd097ba4a473eca1f137a0d17351b12e43817dc0c0e16448ce4",
+        "materialization": "base-plus-overlay"
+      },
+      "android": {
+        "release": "16",
+        "api_level": 36,
+        "device": "OPPO PKH110 base",
+        "build_fingerprint": null,
+        "compatibility": {
+          "min_api": 35,
+          "max_api": 36
+        }
+      },
+      "source": {
+        "origin": "SmartPerfetto deterministic trace generator",
+        "captured_at": null,
+        "imported_at": "2026-07-13T00:00:00.000Z",
+        "license": "AGPL-3.0-or-later",
+        "consent": "generated",
+        "privacy_review": "not-applicable",
+        "sanitization_review": "not-applicable",
+        "publication": "public"
+      },
+      "analysis": {
+        "results": [
+          "analysis/expected.json"
+        ],
+        "logs": []
+      },
+      "construction": {
+        "base_case_id": "android-scroll-customer",
+        "scenario_file": "scenario.json",
+        "generator_version": 1,
+        "seed": "media-network-camera-v1",
+        "output": "Trace/.generated/constructed/media-network-camera/trace.pftrace"
+      },
+      "coverage": {
+        "skills": [
+          "camera_trace_evidence",
+          "media_codec_activity",
+          "modem_network_correlation_summary",
+          "network_analysis",
+          "pipeline_camera_pipeline",
+          "webview_v8_analysis"
+        ],
+        "strategies": [
+          "media",
+          "network"
+        ],
+        "expectations": [
+          {
+            "id": "execute-camera_trace_evidence",
+            "type": "skill",
+            "target": "camera_trace_evidence",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/camera_trace_evidence.skill.yaml",
+            "parameters": {
+              "max_rows": 20
+            },
+            "required_steps": [
+              "evidence_coverage"
+            ],
+            "semantic_step": "evidence_coverage",
+            "required_marker": "SmartPerfetto::CASE::media-network-camera"
+          },
+          {
+            "id": "execute-media_codec_activity",
+            "type": "skill",
+            "target": "media_codec_activity",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/media_codec_activity.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "codec_activity_summary"
+            ],
+            "semantic_step": "codec_activity_summary",
+            "required_marker": "SmartPerfetto::CASE::media-network-camera"
+          },
+          {
+            "id": "execute-modem_network_correlation_summary",
+            "type": "skill",
+            "target": "modem_network_correlation_summary",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/modem_network_correlation_summary.skill.yaml",
+            "parameters": {
+              "top_n": 20
+            },
+            "required_steps": [
+              "modem_network_correlation"
+            ],
+            "semantic_step": "modem_network_correlation",
+            "required_marker": "SmartPerfetto::CASE::media-network-camera"
+          },
+          {
+            "id": "execute-network_analysis",
+            "type": "skill",
+            "target": "network_analysis",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/network_analysis.skill.yaml",
+            "parameters": {
+              "heavy_traffic_critical_mb": 100,
+              "heavy_traffic_warning_mb": 10,
+              "frequent_active_periods": 20
+            },
+            "required_steps": [
+              "check_network_data",
+              "check_network_slices",
+              "evidence_scope",
+              "network_overview",
+              "traffic_by_interface",
+              "app_traffic_ranking",
+              "transport_distribution",
+              "port_analysis",
+              "traffic_timeline",
+              "large_transfers",
+              "network_power_cost",
+              "network_slice_overview"
+            ],
+            "semantic_step": "network_slice_overview",
+            "required_marker": "SmartPerfetto::CASE::media-network-camera"
+          },
+          {
+            "id": "definition-pipeline_camera_pipeline",
+            "type": "skill",
+            "target": "pipeline_camera_pipeline",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/camera_pipeline.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::media-network-camera"
+          },
+          {
+            "id": "execute-webview_v8_analysis",
+            "type": "skill",
+            "target": "webview_v8_analysis",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/webview_v8_analysis.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "v8_gc_events"
+            ],
+            "semantic_step": "v8_gc_events",
+            "required_marker": "SmartPerfetto::CASE::media-network-camera"
+          },
+          {
+            "id": "strategy-media",
+            "type": "strategy",
+            "target": "media",
+            "query": "视频",
+            "expected_strategy": "media",
+            "source_file": "backend/strategies/media.strategy.md",
+            "required_marker": "SmartPerfetto::CASE::media-network-camera"
+          },
+          {
+            "id": "strategy-network",
+            "type": "strategy",
+            "target": "network",
+            "query": "网络",
+            "expected_strategy": "network",
+            "source_file": "backend/strategies/network.strategy.md",
+            "required_marker": "SmartPerfetto::CASE::media-network-camera"
+          }
+        ]
+      },
+      "case_dir": "Trace/constructed/media-network-camera",
+      "manifest_path": "Trace/constructed/media-network-camera/case.json"
+    },
+    {
+      "schema_version": 1,
+      "id": "memory-gc-pressure",
+      "kind": "constructed",
+      "title": "Memory and GC pressure",
+      "description": "Deterministic memory and gc pressure signals over the android-startup-light real base trace.",
+      "scene": "memory",
+      "tags": [
+        "android",
+        "constructed",
+        "memory"
+      ],
+      "aliases": [],
+      "trace": {
+        "file": "trace.overlay.pftrace",
+        "format": "perfetto-protobuf",
+        "sha256": "7f8327497c3bcc9d04675a98794eee6afc5e39d056db27ebc1cd0f5d8ee35d5d",
+        "materialization": "base-plus-overlay"
+      },
+      "android": {
+        "release": "16",
+        "api_level": 36,
+        "device": "Google raven base",
+        "build_fingerprint": null,
+        "compatibility": {
+          "min_api": 35,
+          "max_api": 36
+        }
+      },
+      "source": {
+        "origin": "SmartPerfetto deterministic trace generator",
+        "captured_at": null,
+        "imported_at": "2026-07-13T00:00:00.000Z",
+        "license": "AGPL-3.0-or-later",
+        "consent": "generated",
+        "privacy_review": "not-applicable",
+        "sanitization_review": "not-applicable",
+        "publication": "public"
+      },
+      "analysis": {
+        "results": [
+          "analysis/expected.json"
+        ],
+        "logs": []
+      },
+      "construction": {
+        "base_case_id": "android-startup-light",
+        "scenario_file": "scenario.json",
+        "generator_version": 1,
+        "seed": "memory-gc-pressure-v1",
+        "output": "Trace/.generated/constructed/memory-gc-pressure/trace.pftrace"
+      },
+      "coverage": {
+        "skills": [
+          "android_bitmap_memory_per_process",
+          "android_heap_dominator_path_extract",
+          "android_heap_graph_leak_candidates",
+          "android_heap_graph_summary",
+          "android_memory_v57_ai_diagnostics",
+          "dmabuf_analysis",
+          "gc_analysis",
+          "gc_events_in_range",
+          "linux_process_rss_swap_timeline",
+          "lmk_analysis",
+          "lmk_kill_attribution",
+          "logcat_analysis",
+          "memory_analysis",
+          "memory_growth_detector",
+          "memory_module",
+          "memory_pressure_in_range",
+          "memory_rss_high_watermark",
+          "native_heap_breakdown",
+          "oom_adjuster_score_timeline"
+        ],
+        "strategies": [
+          "memory"
+        ],
+        "expectations": [
+          {
+            "id": "execute-android_bitmap_memory_per_process",
+            "type": "skill",
+            "target": "android_bitmap_memory_per_process",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/android_bitmap_memory_per_process.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "bitmap_memory"
+            ],
+            "semantic_step": "bitmap_memory",
+            "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+          },
+          {
+            "id": "execute-android_heap_dominator_path_extract",
+            "type": "skill",
+            "target": "android_heap_dominator_path_extract",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/android_heap_dominator_path_extract.skill.yaml",
+            "parameters": {
+              "max_rows": 500
+            },
+            "required_steps": [
+              "data_check",
+              "dominator_paths"
+            ],
+            "semantic_step": "dominator_paths",
+            "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+          },
+          {
+            "id": "execute-android_heap_graph_leak_candidates",
+            "type": "skill",
+            "target": "android_heap_graph_leak_candidates",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/android_heap_graph_leak_candidates.skill.yaml",
+            "parameters": {
+              "lifecycle_slice_prefix": "SI$",
+              "max_candidates": 50,
+              "max_reference_edges": 100
+            },
+            "required_steps": [
+              "leak_candidates"
+            ],
+            "semantic_step": "leak_candidates",
+            "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+          },
+          {
+            "id": "execute-android_heap_graph_summary",
+            "type": "skill",
+            "target": "android_heap_graph_summary",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/android_heap_graph_summary.skill.yaml",
+            "parameters": {
+              "max_rows": 30
+            },
+            "required_steps": [
+              "heap_graph_availability"
+            ],
+            "semantic_step": "heap_graph_availability",
+            "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+          },
+          {
+            "id": "execute-android_memory_v57_ai_diagnostics",
+            "type": "skill",
+            "target": "android_memory_v57_ai_diagnostics",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/android_memory_v57_ai_diagnostics.skill.yaml",
+            "parameters": {
+              "min_size_mb": 1,
+              "max_rows": 40
+            },
+            "required_steps": [
+              "data_check",
+              "heap_graph_repeated_objects"
+            ],
+            "semantic_step": "heap_graph_repeated_objects",
+            "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+          },
+          {
+            "id": "execute-dmabuf_analysis",
+            "type": "skill",
+            "target": "dmabuf_analysis",
+            "mode": "unavailable",
+            "source_file": "backend/skills/composite/dmabuf_analysis.skill.yaml",
+            "parameters": {
+              "min_size_mb": 1
+            },
+            "required_steps": [
+              "data_check",
+              "dmabuf_overview"
+            ],
+            "semantic_step": "dmabuf_overview",
+            "limitation_reason": "The fixture does not contain DMA-BUF allocation/residency events.",
+            "expected_error": "Condition not met",
+            "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+          },
+          {
+            "id": "execute-gc_analysis",
+            "type": "skill",
+            "target": "gc_analysis",
+            "mode": "unavailable",
+            "source_file": "backend/skills/composite/gc_analysis.skill.yaml",
+            "parameters": {
+              "min_gc_dur_ms": 5
+            },
+            "required_steps": [
+              "data_check",
+              "gc_overview"
+            ],
+            "semantic_step": "gc_overview",
+            "limitation_reason": "The fixture has GC marker slices but not ART garbage-collection packets.",
+            "expected_error": "Condition not met",
+            "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+          },
+          {
+            "id": "definition-gc_events_in_range",
+            "type": "skill",
+            "target": "gc_events_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/gc_events_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+          },
+          {
+            "id": "execute-linux_process_rss_swap_timeline",
+            "type": "skill",
+            "target": "linux_process_rss_swap_timeline",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/linux_process_rss_swap_timeline.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "rss_swap_peaks"
+            ],
+            "semantic_step": "rss_swap_peaks",
+            "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+          },
+          {
+            "id": "execute-lmk_analysis",
+            "type": "skill",
+            "target": "lmk_analysis",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/lmk_analysis.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "data_check",
+              "lmk_overview"
+            ],
+            "semantic_step": "lmk_overview",
+            "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+          },
+          {
+            "id": "execute-lmk_kill_attribution",
+            "type": "skill",
+            "target": "lmk_kill_attribution",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/lmk_kill_attribution.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "lmk_events"
+            ],
+            "semantic_step": "lmk_events",
+            "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+          },
+          {
+            "id": "definition-logcat_analysis",
+            "type": "skill",
+            "target": "logcat_analysis",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/logcat_analysis.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+          },
+          {
+            "id": "execute-memory_analysis",
+            "type": "skill",
+            "target": "memory_analysis",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/memory_analysis.skill.yaml",
+            "parameters": {
+              "gc_count_critical": 100,
+              "gc_count_warning": 50,
+              "gc_total_time_critical_ms": 2000,
+              "main_thread_gc_critical": 10,
+              "single_gc_warning_ms": 50
+            },
+            "required_steps": [
+              "get_process"
+            ],
+            "semantic_step": "get_process",
+            "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+          },
+          {
+            "id": "execute-memory_growth_detector",
+            "type": "skill",
+            "target": "memory_growth_detector",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/memory_growth_detector.skill.yaml",
+            "parameters": {
+              "growth_warning_mb": 50,
+              "growth_pct_min_mb": 5,
+              "growth_warning_pct": 20,
+              "growth_critical_pct": 50,
+              "jump_warning_mb": 10,
+              "peak_avg_warning_ratio": 2
+            },
+            "required_steps": [
+              "memory_growth"
+            ],
+            "semantic_step": "memory_growth",
+            "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+          },
+          {
+            "id": "execute-memory_module",
+            "type": "skill",
+            "target": "memory_module",
+            "mode": "semantic",
+            "source_file": "backend/skills/modules/hardware/memory_module.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "memory_overview"
+            ],
+            "semantic_step": "memory_overview",
+            "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+          },
+          {
+            "id": "execute-memory_pressure_in_range",
+            "type": "skill",
+            "target": "memory_pressure_in_range",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/memory_pressure_in_range.skill.yaml",
+            "parameters": {
+              "start_ts": "${trace_start}",
+              "end_ts": "${trace_end}"
+            },
+            "required_steps": [
+              "memory_pressure_analysis"
+            ],
+            "semantic_step": "memory_pressure_analysis",
+            "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+          },
+          {
+            "id": "execute-memory_rss_high_watermark",
+            "type": "skill",
+            "target": "memory_rss_high_watermark",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/memory_rss_high_watermark.skill.yaml",
+            "parameters": {
+              "top_n": 30
+            },
+            "required_steps": [
+              "rss_peaks"
+            ],
+            "semantic_step": "rss_peaks",
+            "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+          },
+          {
+            "id": "execute-native_heap_breakdown",
+            "type": "skill",
+            "target": "native_heap_breakdown",
+            "mode": "graceful_empty",
+            "source_file": "backend/skills/atomic/native_heap_breakdown.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "native_heap_hotspots"
+            ],
+            "semantic_step": "native_heap_hotspots",
+            "limitation_reason": "The fixture does not contain heapprofd allocation packets.",
+            "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+          },
+          {
+            "id": "execute-oom_adjuster_score_timeline",
+            "type": "skill",
+            "target": "oom_adjuster_score_timeline",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/oom_adjuster_score_timeline.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "oom_intervals"
+            ],
+            "semantic_step": "oom_intervals",
+            "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+          },
+          {
+            "id": "strategy-memory",
+            "type": "strategy",
+            "target": "memory",
+            "query": "内存",
+            "expected_strategy": "memory",
+            "source_file": "backend/strategies/memory.strategy.md",
+            "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+          }
+        ]
+      },
+      "case_dir": "Trace/constructed/memory-gc-pressure",
+      "manifest_path": "Trace/constructed/memory-gc-pressure/case.json"
+    },
+    {
+      "schema_version": 1,
+      "id": "power-thermal",
+      "kind": "constructed",
+      "title": "Power and thermal throttling",
+      "description": "Deterministic power and thermal throttling signals over the android-scroll-customer real base trace.",
+      "scene": "power",
+      "tags": [
+        "android",
+        "constructed",
+        "power"
+      ],
+      "aliases": [],
+      "trace": {
+        "file": "trace.overlay.pftrace",
+        "format": "perfetto-protobuf",
+        "sha256": "d821be29b55da321f6c2578846bd8dc7acadee49d6be15757d2709c783b24246",
+        "materialization": "base-plus-overlay"
+      },
+      "android": {
+        "release": "16",
+        "api_level": 36,
+        "device": "OPPO PKH110 base",
+        "build_fingerprint": null,
+        "compatibility": {
+          "min_api": 35,
+          "max_api": 36
+        }
+      },
+      "source": {
+        "origin": "SmartPerfetto deterministic trace generator",
+        "captured_at": null,
+        "imported_at": "2026-07-13T00:00:00.000Z",
+        "license": "AGPL-3.0-or-later",
+        "consent": "generated",
+        "privacy_review": "not-applicable",
+        "sanitization_review": "not-applicable",
+        "publication": "public"
+      },
+      "analysis": {
+        "results": [
+          "analysis/expected.json"
+        ],
+        "logs": []
+      },
+      "construction": {
+        "base_case_id": "android-scroll-customer",
+        "scenario_file": "scenario.json",
+        "generator_version": 1,
+        "seed": "power-thermal-v1",
+        "output": "Trace/.generated/constructed/power-thermal/trace.pftrace"
+      },
+      "coverage": {
+        "skills": [
+          "android_dvfs_counter_stats",
+          "battery_charge_timeline",
+          "battery_drain_attribution",
+          "battery_drain_rate_summary",
+          "gpu_power_state_analysis",
+          "mali_gpu_power_state",
+          "power_consumption_overview",
+          "power_module",
+          "power_rails_energy_breakdown",
+          "suspend_wakeup_analysis",
+          "thermal_module",
+          "thermal_predictor",
+          "thermal_throttling",
+          "thermal_throttling_chain",
+          "wakeup_frequency_summary",
+          "wattson_app_startup_power",
+          "wattson_rails_power_breakdown",
+          "wattson_thread_power_attribution"
+        ],
+        "strategies": [
+          "power"
+        ],
+        "expectations": [
+          {
+            "id": "execute-android_dvfs_counter_stats",
+            "type": "skill",
+            "target": "android_dvfs_counter_stats",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/android_dvfs_counter_stats.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "dvfs_stats"
+            ],
+            "semantic_step": "dvfs_stats",
+            "required_marker": "SmartPerfetto::CASE::power-thermal"
+          },
+          {
+            "id": "execute-battery_charge_timeline",
+            "type": "skill",
+            "target": "battery_charge_timeline",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/battery_charge_timeline.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "battery_samples"
+            ],
+            "semantic_step": "battery_samples",
+            "required_marker": "SmartPerfetto::CASE::power-thermal"
+          },
+          {
+            "id": "execute-battery_drain_attribution",
+            "type": "skill",
+            "target": "battery_drain_attribution",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/battery_drain_attribution.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "battery_drain_rate"
+            ],
+            "semantic_step": "battery_drain_rate",
+            "required_marker": "SmartPerfetto::CASE::power-thermal"
+          },
+          {
+            "id": "execute-battery_drain_rate_summary",
+            "type": "skill",
+            "target": "battery_drain_rate_summary",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/battery_drain_rate_summary.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "drain_rate"
+            ],
+            "semantic_step": "drain_rate",
+            "required_marker": "SmartPerfetto::CASE::power-thermal"
+          },
+          {
+            "id": "definition-gpu_power_state_analysis",
+            "type": "skill",
+            "target": "gpu_power_state_analysis",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/gpu_power_state_analysis.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::power-thermal"
+          },
+          {
+            "id": "execute-mali_gpu_power_state",
+            "type": "skill",
+            "target": "mali_gpu_power_state",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/mali_gpu_power_state.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "mali_state"
+            ],
+            "semantic_step": "mali_state",
+            "required_marker": "SmartPerfetto::CASE::power-thermal"
+          },
+          {
+            "id": "execute-power_consumption_overview",
+            "type": "skill",
+            "target": "power_consumption_overview",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/power_consumption_overview.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "hardware_rails"
+            ],
+            "semantic_step": "hardware_rails",
+            "required_marker": "SmartPerfetto::CASE::power-thermal"
+          },
+          {
+            "id": "execute-power_module",
+            "type": "skill",
+            "target": "power_module",
+            "mode": "semantic",
+            "source_file": "backend/skills/modules/hardware/power_module.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "wakelock_overview"
+            ],
+            "semantic_step": "wakelock_overview",
+            "required_marker": "SmartPerfetto::CASE::power-thermal"
+          },
+          {
+            "id": "execute-power_rails_energy_breakdown",
+            "type": "skill",
+            "target": "power_rails_energy_breakdown",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/power_rails_energy_breakdown.skill.yaml",
+            "parameters": {
+              "top_n": 30
+            },
+            "required_steps": [
+              "rail_energy"
+            ],
+            "semantic_step": "rail_energy",
+            "required_marker": "SmartPerfetto::CASE::power-thermal"
+          },
+          {
+            "id": "execute-suspend_wakeup_analysis",
+            "type": "skill",
+            "target": "suspend_wakeup_analysis",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/suspend_wakeup_analysis.skill.yaml",
+            "parameters": {
+              "frequent_wakeup_critical": 50,
+              "frequent_wakeup_warning": 20,
+              "abort_pct_critical": 30,
+              "abort_pct_warning": 10,
+              "low_suspend_pct": 30
+            },
+            "required_steps": [
+              "check_suspend_data",
+              "check_wakeup_data",
+              "check_suspend_slices",
+              "suspend_overview"
+            ],
+            "semantic_step": "suspend_overview",
+            "required_marker": "SmartPerfetto::CASE::power-thermal"
+          },
+          {
+            "id": "execute-thermal_module",
+            "type": "skill",
+            "target": "thermal_module",
+            "mode": "semantic",
+            "source_file": "backend/skills/modules/hardware/thermal_module.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "temperature_overview"
+            ],
+            "semantic_step": "temperature_overview",
+            "required_marker": "SmartPerfetto::CASE::power-thermal"
+          },
+          {
+            "id": "definition-thermal_predictor",
+            "type": "skill",
+            "target": "thermal_predictor",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/thermal_predictor.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::power-thermal"
+          },
+          {
+            "id": "execute-thermal_throttling",
+            "type": "skill",
+            "target": "thermal_throttling",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/thermal_throttling.skill.yaml",
+            "parameters": {
+              "enable_expert_probes": true,
+              "thermal_predictor_high_drop_pct": 30,
+              "thermal_predictor_medium_drop_pct": 15,
+              "thermal_predictor_high_core_ratio_pct": 50,
+              "thermal_predictor_medium_core_ratio_pct": 25,
+              "thermal_predictor_core_drop_threshold_pct": 30,
+              "gpu_transition_threshold_pct": 12,
+              "gpu_downshift_warning_pct": 25
+            },
+            "required_steps": [
+              "data_check",
+              "expert_analysis_window",
+              "thermal_predictor_probe",
+              "thermal_overview"
+            ],
+            "semantic_step": "thermal_overview",
+            "required_marker": "SmartPerfetto::CASE::power-thermal"
+          },
+          {
+            "id": "execute-thermal_throttling_chain",
+            "type": "skill",
+            "target": "thermal_throttling_chain",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/thermal_throttling_chain.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "thermal"
+            ],
+            "semantic_step": "thermal",
+            "required_marker": "SmartPerfetto::CASE::power-thermal"
+          },
+          {
+            "id": "execute-wakeup_frequency_summary",
+            "type": "skill",
+            "target": "wakeup_frequency_summary",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/wakeup_frequency_summary.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "wakeup_frequency"
+            ],
+            "semantic_step": "wakeup_frequency",
+            "required_marker": "SmartPerfetto::CASE::power-thermal"
+          },
+          {
+            "id": "execute-wattson_app_startup_power",
+            "type": "skill",
+            "target": "wattson_app_startup_power",
+            "mode": "graceful_empty",
+            "source_file": "backend/skills/atomic/wattson_app_startup_power.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "startup_power"
+            ],
+            "semantic_step": "startup_power",
+            "limitation_reason": "Wattson startup attribution is device-model gated and unsupported by this base device.",
+            "required_marker": "SmartPerfetto::CASE::power-thermal"
+          },
+          {
+            "id": "execute-wattson_rails_power_breakdown",
+            "type": "skill",
+            "target": "wattson_rails_power_breakdown",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/wattson_rails_power_breakdown.skill.yaml",
+            "parameters": {
+              "top_n": 20
+            },
+            "required_steps": [
+              "rails_aggregation"
+            ],
+            "semantic_step": "rails_aggregation",
+            "required_marker": "SmartPerfetto::CASE::power-thermal"
+          },
+          {
+            "id": "execute-wattson_thread_power_attribution",
+            "type": "skill",
+            "target": "wattson_thread_power_attribution",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/wattson_thread_power_attribution.skill.yaml",
+            "parameters": {
+              "top_n": 30
+            },
+            "required_steps": [
+              "thread_attribution"
+            ],
+            "semantic_step": "thread_attribution",
+            "required_marker": "SmartPerfetto::CASE::power-thermal"
+          },
+          {
+            "id": "strategy-power",
+            "type": "strategy",
+            "target": "power",
+            "query": "功耗",
+            "expected_strategy": "power",
+            "source_file": "backend/strategies/power.strategy.md",
+            "required_marker": "SmartPerfetto::CASE::power-thermal"
+          }
+        ]
+      },
+      "case_dir": "Trace/constructed/power-thermal",
+      "manifest_path": "Trace/constructed/power-thermal/case.json"
+    },
+    {
+      "schema_version": 1,
+      "id": "rendering-jank",
+      "kind": "constructed",
+      "title": "Rendering pipeline jank",
+      "description": "Deterministic rendering pipeline jank signals over the android-scroll-customer real base trace.",
+      "scene": "scrolling",
+      "tags": [
+        "android",
+        "constructed",
+        "scrolling"
+      ],
+      "aliases": [],
+      "trace": {
+        "file": "trace.overlay.pftrace",
+        "format": "perfetto-protobuf",
+        "sha256": "3545492fc56cacbc73022aae8db4528c9c8f3fe54df733ff6273d95a416b2f55",
+        "materialization": "base-plus-overlay"
+      },
+      "android": {
+        "release": "16",
+        "api_level": 36,
+        "device": "OPPO PKH110 base",
+        "build_fingerprint": null,
+        "compatibility": {
+          "min_api": 35,
+          "max_api": 36
+        }
+      },
+      "source": {
+        "origin": "SmartPerfetto deterministic trace generator",
+        "captured_at": null,
+        "imported_at": "2026-07-13T00:00:00.000Z",
+        "license": "AGPL-3.0-or-later",
+        "consent": "generated",
+        "privacy_review": "not-applicable",
+        "sanitization_review": "not-applicable",
+        "publication": "public"
+      },
+      "analysis": {
+        "results": [
+          "analysis/expected.json"
+        ],
+        "logs": []
+      },
+      "construction": {
+        "base_case_id": "android-scroll-customer",
+        "scenario_file": "scenario.json",
+        "generator_version": 1,
+        "seed": "rendering-jank-v1",
+        "output": "Trace/.generated/constructed/rendering-jank/trace.pftrace"
+      },
+      "coverage": {
+        "skills": [
+          "app_frame_production",
+          "buffer_transaction_lifecycle",
+          "choreographer_module",
+          "chrome_scroll_jank_frame_timeline",
+          "consumer_jank_detection",
+          "flutter_scrolling_analysis",
+          "fpsgo_analysis",
+          "frame_blocking_calls",
+          "frame_overrun_summary",
+          "frame_pipeline_variance",
+          "frame_production_gap",
+          "frame_ui_time_breakdown",
+          "game_fps_analysis",
+          "game_main_loop_jank",
+          "gl_standalone_swap_jank",
+          "gpu_render_in_range",
+          "input_to_frame_latency",
+          "jank_frame_detail",
+          "pipeline_flutter_textureview",
+          "pipeline_hardware_buffer_renderer",
+          "pipeline_textureview_standard",
+          "pipeline_webview_textureview_custom",
+          "present_fence_timing",
+          "render_pipeline_latency",
+          "render_thread_slices",
+          "rendering_pipeline_detection",
+          "rn_bridge_to_frame_jank",
+          "rn_fabric_render_jank",
+          "scroll_response_latency",
+          "scroll_session_analysis",
+          "scrolling_analysis",
+          "sf_composition_in_range",
+          "sf_frame_consumption",
+          "sf_layer_count_in_range",
+          "surfaceflinger_analysis",
+          "surfaceflinger_module",
+          "textureview_producer_frame_timing",
+          "vrr_detection",
+          "vsync_alignment_in_range",
+          "vsync_config",
+          "vsync_period_detection",
+          "vsync_phase_alignment",
+          "webview_drawfunctor_jank_chain"
+        ],
+        "strategies": [
+          "game",
+          "scroll_response",
+          "scrolling"
+        ],
+        "expectations": [
+          {
+            "id": "execute-app_frame_production",
+            "type": "skill",
+            "target": "app_frame_production",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/app_frame_production.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "app_production_stats"
+            ],
+            "semantic_step": "app_production_stats",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-buffer_transaction_lifecycle",
+            "type": "skill",
+            "target": "buffer_transaction_lifecycle",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/buffer_transaction_lifecycle.skill.yaml",
+            "parameters": {
+              "start_ts": "${trace_start}",
+              "end_ts": "${trace_end}"
+            },
+            "required_steps": [
+              "apply_transaction_summary"
+            ],
+            "semantic_step": "apply_transaction_summary",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-choreographer_module",
+            "type": "skill",
+            "target": "choreographer_module",
+            "mode": "semantic",
+            "source_file": "backend/skills/modules/framework/choreographer_module.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "doframe_overview"
+            ],
+            "semantic_step": "doframe_overview",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-chrome_scroll_jank_frame_timeline",
+            "type": "skill",
+            "target": "chrome_scroll_jank_frame_timeline",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/chrome_scroll_jank_frame_timeline.skill.yaml",
+            "parameters": {
+              "min_janky_frames": 1
+            },
+            "required_steps": [
+              "chrome_trace_availability"
+            ],
+            "semantic_step": "chrome_trace_availability",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-consumer_jank_detection",
+            "type": "skill",
+            "target": "consumer_jank_detection",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/consumer_jank_detection.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "vsync_config",
+              "consumer_jank_frames"
+            ],
+            "semantic_step": "consumer_jank_frames",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-flutter_scrolling_analysis",
+            "type": "skill",
+            "target": "flutter_scrolling_analysis",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/flutter_scrolling_analysis.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "flutter_frame_overview"
+            ],
+            "semantic_step": "flutter_frame_overview",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "definition-fpsgo_analysis",
+            "type": "skill",
+            "target": "fpsgo_analysis",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/fpsgo_analysis.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "definition-frame_blocking_calls",
+            "type": "skill",
+            "target": "frame_blocking_calls",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/frame_blocking_calls.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-frame_overrun_summary",
+            "type": "skill",
+            "target": "frame_overrun_summary",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/frame_overrun_summary.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "overrun_frames"
+            ],
+            "semantic_step": "overrun_frames",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "definition-frame_pipeline_variance",
+            "type": "skill",
+            "target": "frame_pipeline_variance",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/frame_pipeline_variance.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-frame_production_gap",
+            "type": "skill",
+            "target": "frame_production_gap",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/frame_production_gap.skill.yaml",
+            "parameters": {
+              "process_name": "com.smartperfetto.fixture"
+            },
+            "required_steps": [
+              "gap_summary"
+            ],
+            "semantic_step": "gap_summary",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-frame_ui_time_breakdown",
+            "type": "skill",
+            "target": "frame_ui_time_breakdown",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/frame_ui_time_breakdown.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "ui_time"
+            ],
+            "semantic_step": "ui_time",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-game_fps_analysis",
+            "type": "skill",
+            "target": "game_fps_analysis",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/game_fps_analysis.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "detect_target_fps"
+            ],
+            "semantic_step": "detect_target_fps",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-game_main_loop_jank",
+            "type": "skill",
+            "target": "game_main_loop_jank",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/game_main_loop_jank.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "engine_loop_summary"
+            ],
+            "semantic_step": "engine_loop_summary",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-gl_standalone_swap_jank",
+            "type": "skill",
+            "target": "gl_standalone_swap_jank",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/gl_standalone_swap_jank.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "swap_interval_summary"
+            ],
+            "semantic_step": "swap_interval_summary",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "definition-gpu_render_in_range",
+            "type": "skill",
+            "target": "gpu_render_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/gpu_render_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-input_to_frame_latency",
+            "type": "skill",
+            "target": "input_to_frame_latency",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/input_to_frame_latency.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "vsync_period"
+            ],
+            "semantic_step": "vsync_period",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-jank_frame_detail",
+            "type": "skill",
+            "target": "jank_frame_detail",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/jank_frame_detail.skill.yaml",
+            "parameters": {
+              "package": "com.smartperfetto.fixture",
+              "pid": 700000,
+              "start_ts": "${trace_start}",
+              "end_ts": "${trace_end}"
+            },
+            "required_steps": [
+              "init_cpu_topology",
+              "monitor_contention_check",
+              "gc_table_check",
+              "gpu_table_check",
+              "binder_table_check",
+              "quadrant_analysis"
+            ],
+            "semantic_step": "quadrant_analysis",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "definition-pipeline_flutter_textureview",
+            "type": "skill",
+            "target": "pipeline_flutter_textureview",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/flutter_textureview.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "definition-pipeline_hardware_buffer_renderer",
+            "type": "skill",
+            "target": "pipeline_hardware_buffer_renderer",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/hardware_buffer_renderer.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "definition-pipeline_textureview_standard",
+            "type": "skill",
+            "target": "pipeline_textureview_standard",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/textureview_standard.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "definition-pipeline_webview_textureview_custom",
+            "type": "skill",
+            "target": "pipeline_webview_textureview_custom",
+            "mode": "definition",
+            "source_file": "backend/skills/pipelines/webview_textureview_custom.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-present_fence_timing",
+            "type": "skill",
+            "target": "present_fence_timing",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/present_fence_timing.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "present_fence_stats"
+            ],
+            "semantic_step": "present_fence_stats",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "definition-render_pipeline_latency",
+            "type": "skill",
+            "target": "render_pipeline_latency",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/render_pipeline_latency.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-render_thread_slices",
+            "type": "skill",
+            "target": "render_thread_slices",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/render_thread_slices.skill.yaml",
+            "parameters": {
+              "start_ts": "${trace_start}",
+              "end_ts": "${trace_end}"
+            },
+            "required_steps": [
+              "render_slices"
+            ],
+            "semantic_step": "render_slices",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-rendering_pipeline_detection",
+            "type": "skill",
+            "target": "rendering_pipeline_detection",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/rendering_pipeline_detection.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "score_pipelines"
+            ],
+            "semantic_step": "score_pipelines",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-rn_bridge_to_frame_jank",
+            "type": "skill",
+            "target": "rn_bridge_to_frame_jank",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/rn_bridge_to_frame_jank.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "rn_bridge_frame_overlap"
+            ],
+            "semantic_step": "rn_bridge_frame_overlap",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-rn_fabric_render_jank",
+            "type": "skill",
+            "target": "rn_fabric_render_jank",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/rn_fabric_render_jank.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "fabric_frame_overlap"
+            ],
+            "semantic_step": "fabric_frame_overlap",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "definition-scroll_response_latency",
+            "type": "skill",
+            "target": "scroll_response_latency",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/scroll_response_latency.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-scroll_session_analysis",
+            "type": "skill",
+            "target": "scroll_session_analysis",
+            "mode": "unavailable",
+            "source_file": "backend/skills/composite/scroll_session_analysis.skill.yaml",
+            "parameters": {
+              "session_id": 1,
+              "start_ts": "${trace_start}",
+              "end_ts": "${trace_end}"
+            },
+            "required_steps": [
+              "full_session_stats"
+            ],
+            "semantic_step": "full_session_stats",
+            "limitation_reason": "The generator does not yet emit Winscope android_input_event packets.",
+            "expected_error": "Trace is missing required tables: android_input_event",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-scrolling_analysis",
+            "type": "skill",
+            "target": "scrolling_analysis",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/scrolling_analysis.skill.yaml",
+            "parameters": {
+              "enable_expert_probes": true,
+              "frame_variance_probe_min_janky_frames": 1,
+              "frame_variance_transition_threshold_ms": 1,
+              "input_handling_budget_ratio": 0.5,
+              "input_event_backlog_threshold": 3
+            },
+            "required_steps": [
+              "init_cpu_topology",
+              "frame_timeline_check",
+              "vsync_config"
+            ],
+            "semantic_step": "vsync_config",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "definition-sf_composition_in_range",
+            "type": "skill",
+            "target": "sf_composition_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/sf_composition_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-sf_frame_consumption",
+            "type": "skill",
+            "target": "sf_frame_consumption",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/sf_frame_consumption.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "sf_consumption_stats"
+            ],
+            "semantic_step": "sf_consumption_stats",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-sf_layer_count_in_range",
+            "type": "skill",
+            "target": "sf_layer_count_in_range",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/sf_layer_count_in_range.skill.yaml",
+            "parameters": {
+              "start_ts": "${trace_start}",
+              "end_ts": "${trace_end}"
+            },
+            "required_steps": [
+              "layer_summary"
+            ],
+            "semantic_step": "layer_summary",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-surfaceflinger_analysis",
+            "type": "skill",
+            "target": "surfaceflinger_analysis",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/surfaceflinger_analysis.skill.yaml",
+            "parameters": {
+              "slow_composition_multiplier": 1.5,
+              "composition_rating_poor_ms": 12,
+              "composition_rating_fair_ms": 8,
+              "composition_rating_good_ms": 4,
+              "long_fence_threshold_ms": 10,
+              "fence_critical_ms": 16,
+              "fence_warning_ms": 8,
+              "slow_pct_threshold": 10,
+              "gpu_comp_ratio_threshold": 0.5
+            },
+            "required_steps": [
+              "data_check",
+              "vsync_config"
+            ],
+            "semantic_step": "vsync_config",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-surfaceflinger_module",
+            "type": "skill",
+            "target": "surfaceflinger_module",
+            "mode": "semantic",
+            "source_file": "backend/skills/modules/framework/surfaceflinger_module.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "frame_overview"
+            ],
+            "semantic_step": "frame_overview",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-textureview_producer_frame_timing",
+            "type": "skill",
+            "target": "textureview_producer_frame_timing",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/textureview_producer_frame_timing.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "textureview_signal_summary"
+            ],
+            "semantic_step": "textureview_signal_summary",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-vrr_detection",
+            "type": "skill",
+            "target": "vrr_detection",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/vrr_detection.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "vsync_interval_distribution"
+            ],
+            "semantic_step": "vsync_interval_distribution",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "definition-vsync_alignment_in_range",
+            "type": "skill",
+            "target": "vsync_alignment_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/vsync_alignment_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-vsync_config",
+            "type": "skill",
+            "target": "vsync_config",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/vsync_config.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "detect_vsync_config"
+            ],
+            "semantic_step": "detect_vsync_config",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-vsync_period_detection",
+            "type": "skill",
+            "target": "vsync_period_detection",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/vsync_period_detection.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "detect_vsync_period"
+            ],
+            "semantic_step": "detect_vsync_period",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-vsync_phase_alignment",
+            "type": "skill",
+            "target": "vsync_phase_alignment",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/vsync_phase_alignment.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "vsync_timeline"
+            ],
+            "semantic_step": "vsync_timeline",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "execute-webview_drawfunctor_jank_chain",
+            "type": "skill",
+            "target": "webview_drawfunctor_jank_chain",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/webview_drawfunctor_jank_chain.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "drawfunctor_signal_summary"
+            ],
+            "semantic_step": "drawfunctor_signal_summary",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "strategy-game",
+            "type": "strategy",
+            "target": "game",
+            "query": "游戏",
+            "expected_strategy": "game",
+            "source_file": "backend/strategies/game.strategy.md",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "strategy-scroll_response",
+            "type": "strategy",
+            "target": "scroll_response",
+            "query": "滑动响应",
+            "expected_strategy": "scroll_response",
+            "source_file": "backend/strategies/scroll-response.strategy.md",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          },
+          {
+            "id": "strategy-scrolling",
+            "type": "strategy",
+            "target": "scrolling",
+            "query": "滑动",
+            "expected_strategy": "scrolling",
+            "source_file": "backend/strategies/scrolling.strategy.md",
+            "required_marker": "SmartPerfetto::CASE::rendering-jank"
+          }
+        ]
+      },
+      "case_dir": "Trace/constructed/rendering-jank",
+      "manifest_path": "Trace/constructed/rendering-jank/case.json"
+    },
+    {
+      "schema_version": 1,
+      "id": "scheduler-cpu-contention",
+      "kind": "constructed",
+      "title": "Scheduler and CPU contention",
+      "description": "Deterministic scheduler and cpu contention signals over the android-scroll-customer real base trace.",
+      "scene": "cpu",
+      "tags": [
+        "android",
+        "constructed",
+        "cpu"
+      ],
+      "aliases": [],
+      "trace": {
+        "file": "trace.overlay.pftrace",
+        "format": "perfetto-protobuf",
+        "sha256": "f28f29a672ea9aa39c16533feeb06e003b1ae29084374364250fd7736ac33c51",
+        "materialization": "base-plus-overlay"
+      },
+      "android": {
+        "release": "16",
+        "api_level": 36,
+        "device": "OPPO PKH110 base",
+        "build_fingerprint": null,
+        "compatibility": {
+          "min_api": 35,
+          "max_api": 36
+        }
+      },
+      "source": {
+        "origin": "SmartPerfetto deterministic trace generator",
+        "captured_at": null,
+        "imported_at": "2026-07-13T00:00:00.000Z",
+        "license": "AGPL-3.0-or-later",
+        "consent": "generated",
+        "privacy_review": "not-applicable",
+        "sanitization_review": "not-applicable",
+        "publication": "public"
+      },
+      "analysis": {
+        "results": [
+          "analysis/expected.json"
+        ],
+        "logs": []
+      },
+      "construction": {
+        "base_case_id": "android-scroll-customer",
+        "scenario_file": "scenario.json",
+        "generator_version": 1,
+        "seed": "scheduler-cpu-contention-v1",
+        "output": "Trace/.generated/constructed/scheduler-cpu-contention/trace.pftrace"
+      },
+      "coverage": {
+        "skills": [
+          "android_job_scheduler_events",
+          "cache_miss_impact",
+          "cpu_analysis",
+          "cpu_cluster_load_in_range",
+          "cpu_cluster_mapping_view",
+          "cpu_freq_residency_summary",
+          "cpu_freq_timeline",
+          "cpu_idle_analysis",
+          "cpu_idle_state_residency",
+          "cpu_load_in_range",
+          "cpu_module",
+          "cpu_process_utilization_period",
+          "cpu_profiling",
+          "cpu_slice_analysis",
+          "cpu_thread_utilization_period",
+          "cpu_throttling_in_range",
+          "cpu_time_per_frame",
+          "cpu_topology_detection",
+          "cpu_topology_view",
+          "cpu_utilization_per_period",
+          "futex_wait_distribution",
+          "irq_analysis",
+          "linux_irq_summary",
+          "linux_runqueue_depth_timeline",
+          "linux_sched_latency_distribution",
+          "main_thread_sched_latency_in_range",
+          "process_slice_cpu_hotspots",
+          "sched_latency_in_range",
+          "scheduler_module",
+          "scheduling_analysis",
+          "screen_off_background_cpu_attribution",
+          "selection_range_cpu_sched_summary",
+          "system_load_in_range",
+          "task_migration_in_range",
+          "thread_affinity_violation",
+          "util_tracking_analysis"
+        ],
+        "strategies": [],
+        "expectations": [
+          {
+            "id": "execute-android_job_scheduler_events",
+            "type": "skill",
+            "target": "android_job_scheduler_events",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/android_job_scheduler_events.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "job_events"
+            ],
+            "semantic_step": "job_events",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "definition-cache_miss_impact",
+            "type": "skill",
+            "target": "cache_miss_impact",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/cache_miss_impact.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-cpu_analysis",
+            "type": "skill",
+            "target": "cpu_analysis",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/cpu_analysis.skill.yaml",
+            "parameters": {
+              "big_core_threshold_pct": 30,
+              "running_threshold_pct": 50,
+              "sched_delay_critical_ms": 16,
+              "blocked_function_threshold_ms": 50,
+              "enable_expert_probes": true,
+              "affinity_probe_migration_ratio_threshold_pct": 25,
+              "affinity_violation_warning_threshold_pct": 35,
+              "cache_miss_high_avg_delta_threshold": 500000,
+              "cache_miss_medium_avg_delta_threshold": 100000
+            },
+            "required_steps": [
+              "init_cpu_topology",
+              "get_process"
+            ],
+            "semantic_step": "get_process",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-cpu_cluster_load_in_range",
+            "type": "skill",
+            "target": "cpu_cluster_load_in_range",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/cpu_cluster_load_in_range.skill.yaml",
+            "parameters": {
+              "start_ts": "${trace_start}",
+              "end_ts": "${trace_end}"
+            },
+            "required_steps": [
+              "init_cpu_topology",
+              "cluster_load"
+            ],
+            "semantic_step": "cluster_load",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-cpu_cluster_mapping_view",
+            "type": "skill",
+            "target": "cpu_cluster_mapping_view",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/cpu_cluster_mapping_view.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "cluster_mapping"
+            ],
+            "semantic_step": "cluster_mapping",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-cpu_freq_residency_summary",
+            "type": "skill",
+            "target": "cpu_freq_residency_summary",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/cpu_freq_residency_summary.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "freq_residency"
+            ],
+            "semantic_step": "freq_residency",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-cpu_freq_timeline",
+            "type": "skill",
+            "target": "cpu_freq_timeline",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/cpu_freq_timeline.skill.yaml",
+            "parameters": {
+              "start_ts": "${trace_start}",
+              "end_ts": "${trace_end}"
+            },
+            "required_steps": [
+              "init_cpu_topology",
+              "cpu_freq_changes",
+              "cpu_freq_summary"
+            ],
+            "semantic_step": "cpu_freq_summary",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "definition-cpu_idle_analysis",
+            "type": "skill",
+            "target": "cpu_idle_analysis",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/cpu_idle_analysis.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-cpu_idle_state_residency",
+            "type": "skill",
+            "target": "cpu_idle_state_residency",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/cpu_idle_state_residency.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "idle_residency"
+            ],
+            "semantic_step": "idle_residency",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-cpu_load_in_range",
+            "type": "skill",
+            "target": "cpu_load_in_range",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/cpu_load_in_range.skill.yaml",
+            "parameters": {
+              "start_ts": "${trace_start}",
+              "end_ts": "${trace_end}"
+            },
+            "required_steps": [
+              "init_cpu_topology",
+              "cpu_utilization"
+            ],
+            "semantic_step": "cpu_utilization",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-cpu_module",
+            "type": "skill",
+            "target": "cpu_module",
+            "mode": "semantic",
+            "source_file": "backend/skills/modules/hardware/cpu_module.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "init_cpu_topology",
+              "frequency_overview"
+            ],
+            "semantic_step": "frequency_overview",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-cpu_process_utilization_period",
+            "type": "skill",
+            "target": "cpu_process_utilization_period",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/cpu_process_utilization_period.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "process_util"
+            ],
+            "semantic_step": "process_util",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-cpu_profiling",
+            "type": "skill",
+            "target": "cpu_profiling",
+            "mode": "semantic",
+            "source_file": "backend/skills/deep/cpu_profiling.skill.yaml",
+            "parameters": {
+              "min_runtime_ms": 1
+            },
+            "required_steps": [
+              "init_cpu_topology",
+              "cpu_usage_overview"
+            ],
+            "semantic_step": "cpu_usage_overview",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-cpu_slice_analysis",
+            "type": "skill",
+            "target": "cpu_slice_analysis",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/cpu_slice_analysis.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "init_cpu_topology",
+              "cpu_time_by_core"
+            ],
+            "semantic_step": "cpu_time_by_core",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-cpu_thread_utilization_period",
+            "type": "skill",
+            "target": "cpu_thread_utilization_period",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/cpu_thread_utilization_period.skill.yaml",
+            "parameters": {
+              "top_n": 30
+            },
+            "required_steps": [
+              "thread_util"
+            ],
+            "semantic_step": "thread_util",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-cpu_throttling_in_range",
+            "type": "skill",
+            "target": "cpu_throttling_in_range",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/cpu_throttling_in_range.skill.yaml",
+            "parameters": {
+              "start_ts": "${trace_start}",
+              "end_ts": "${trace_end}"
+            },
+            "required_steps": [
+              "init_cpu_topology",
+              "throttle_detection"
+            ],
+            "semantic_step": "throttle_detection",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-cpu_time_per_frame",
+            "type": "skill",
+            "target": "cpu_time_per_frame",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/cpu_time_per_frame.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "cpu_time"
+            ],
+            "semantic_step": "cpu_time",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-cpu_topology_detection",
+            "type": "skill",
+            "target": "cpu_topology_detection",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/cpu_topology_detection.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "init_cpu_topology",
+              "detect_cpu_clusters"
+            ],
+            "semantic_step": "detect_cpu_clusters",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-cpu_topology_view",
+            "type": "skill",
+            "target": "cpu_topology_view",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/cpu_topology_view.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "inspect_existing_topology_object",
+              "drop_existing_topology_view",
+              "drop_existing_topology_table",
+              "create_topology_view",
+              "read_topology"
+            ],
+            "semantic_step": "read_topology",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-cpu_utilization_per_period",
+            "type": "skill",
+            "target": "cpu_utilization_per_period",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/cpu_utilization_per_period.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "system_util"
+            ],
+            "semantic_step": "system_util",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "definition-futex_wait_distribution",
+            "type": "skill",
+            "target": "futex_wait_distribution",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/futex_wait_distribution.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-irq_analysis",
+            "type": "skill",
+            "target": "irq_analysis",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/irq_analysis.skill.yaml",
+            "parameters": {
+              "hard_irq_long_threshold_us": 1000,
+              "soft_irq_long_threshold_us": 10000,
+              "irq_rate_heavy_threshold": 10000,
+              "irq_dur_heavy_threshold_ms": 50
+            },
+            "required_steps": [
+              "data_check",
+              "irq_overview"
+            ],
+            "semantic_step": "irq_overview",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-linux_irq_summary",
+            "type": "skill",
+            "target": "linux_irq_summary",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/linux_irq_summary.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "irq_summary"
+            ],
+            "semantic_step": "irq_summary",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-linux_runqueue_depth_timeline",
+            "type": "skill",
+            "target": "linux_runqueue_depth_timeline",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/linux_runqueue_depth_timeline.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "runqueue_pressure_summary"
+            ],
+            "semantic_step": "runqueue_pressure_summary",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-linux_sched_latency_distribution",
+            "type": "skill",
+            "target": "linux_sched_latency_distribution",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/linux_sched_latency_distribution.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "sched_latency_distribution"
+            ],
+            "semantic_step": "sched_latency_distribution",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "definition-main_thread_sched_latency_in_range",
+            "type": "skill",
+            "target": "main_thread_sched_latency_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/main_thread_sched_latency_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "definition-process_slice_cpu_hotspots",
+            "type": "skill",
+            "target": "process_slice_cpu_hotspots",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/process_slice_cpu_hotspots.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "definition-sched_latency_in_range",
+            "type": "skill",
+            "target": "sched_latency_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/sched_latency_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-scheduler_module",
+            "type": "skill",
+            "target": "scheduler_module",
+            "mode": "semantic",
+            "source_file": "backend/skills/modules/kernel/scheduler_module.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "init_cpu_topology",
+              "runnable_analysis"
+            ],
+            "semantic_step": "runnable_analysis",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "definition-scheduling_analysis",
+            "type": "skill",
+            "target": "scheduling_analysis",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/scheduling_analysis.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-screen_off_background_cpu_attribution",
+            "type": "skill",
+            "target": "screen_off_background_cpu_attribution",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/screen_off_background_cpu_attribution.skill.yaml",
+            "parameters": {
+              "top_n": 30
+            },
+            "required_steps": [
+              "screen_off_cpu"
+            ],
+            "semantic_step": "screen_off_cpu",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-selection_range_cpu_sched_summary",
+            "type": "skill",
+            "target": "selection_range_cpu_sched_summary",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/selection_range_cpu_sched_summary.skill.yaml",
+            "parameters": {
+              "start_ts": "${trace_start}",
+              "end_ts": "${trace_end}"
+            },
+            "required_steps": [
+              "init_cpu_topology",
+              "running_thread_quadrants"
+            ],
+            "semantic_step": "running_thread_quadrants",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "definition-system_load_in_range",
+            "type": "skill",
+            "target": "system_load_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/system_load_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "execute-task_migration_in_range",
+            "type": "skill",
+            "target": "task_migration_in_range",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/task_migration_in_range.skill.yaml",
+            "parameters": {
+              "start_ts": "${trace_start}",
+              "end_ts": "${trace_end}"
+            },
+            "required_steps": [
+              "init_cpu_topology",
+              "migration_analysis"
+            ],
+            "semantic_step": "migration_analysis",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "definition-thread_affinity_violation",
+            "type": "skill",
+            "target": "thread_affinity_violation",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/thread_affinity_violation.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          },
+          {
+            "id": "definition-util_tracking_analysis",
+            "type": "skill",
+            "target": "util_tracking_analysis",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/util_tracking_analysis.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::scheduler-cpu-contention"
+          }
+        ]
+      },
+      "case_dir": "Trace/constructed/scheduler-cpu-contention",
+      "manifest_path": "Trace/constructed/scheduler-cpu-contention/case.json"
+    },
+    {
+      "schema_version": 1,
+      "id": "startup-lifecycle",
+      "kind": "constructed",
+      "title": "Startup and process lifecycle",
+      "description": "Deterministic startup and process lifecycle signals over the android-startup-heavy real base trace.",
+      "scene": "startup",
+      "tags": [
+        "android",
+        "constructed",
+        "startup"
+      ],
+      "aliases": [],
+      "trace": {
+        "file": "trace.overlay.pftrace",
+        "format": "perfetto-protobuf",
+        "sha256": "884d969ba9a0e477e862c1178b25afca25c4a0c845cc77cc01db0371c4e40de7",
+        "materialization": "base-plus-overlay"
+      },
+      "android": {
+        "release": "16",
+        "api_level": 36,
+        "device": "Xiaomi pandora base",
+        "build_fingerprint": null,
+        "compatibility": {
+          "min_api": 35,
+          "max_api": 36
+        }
+      },
+      "source": {
+        "origin": "SmartPerfetto deterministic trace generator",
+        "captured_at": null,
+        "imported_at": "2026-07-13T00:00:00.000Z",
+        "license": "AGPL-3.0-or-later",
+        "consent": "generated",
+        "privacy_review": "not-applicable",
+        "sanitization_review": "not-applicable",
+        "publication": "public"
+      },
+      "analysis": {
+        "results": [
+          "analysis/expected.json"
+        ],
+        "logs": []
+      },
+      "construction": {
+        "base_case_id": "android-startup-heavy",
+        "scenario_file": "scenario.json",
+        "generator_version": 1,
+        "seed": "startup-lifecycle-v1",
+        "output": "Trace/.generated/constructed/startup-lifecycle/trace.pftrace"
+      },
+      "coverage": {
+        "skills": [
+          "app_process_starts_summary",
+          "launcher_module",
+          "startup_analysis",
+          "startup_binder_in_range",
+          "startup_binder_pool_analysis",
+          "startup_breakdown_in_range",
+          "startup_class_loading_in_range",
+          "startup_cpu_placement_timeline",
+          "startup_critical_tasks",
+          "startup_detail",
+          "startup_events_in_range",
+          "startup_freq_rampup",
+          "startup_gc_in_range",
+          "startup_hot_slice_states",
+          "startup_jit_analysis",
+          "startup_main_thread_binder_blocking_in_range",
+          "startup_main_thread_file_io_in_range",
+          "startup_main_thread_slices_in_range",
+          "startup_main_thread_states_in_range",
+          "startup_main_thread_sync_binder_in_range",
+          "startup_sched_latency_in_range",
+          "startup_slow_reasons",
+          "startup_thread_blocking_graph"
+        ],
+        "strategies": [
+          "startup"
+        ],
+        "expectations": [
+          {
+            "id": "execute-app_process_starts_summary",
+            "type": "skill",
+            "target": "app_process_starts_summary",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/app_process_starts_summary.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "process_starts"
+            ],
+            "semantic_step": "process_starts",
+            "required_marker": "SmartPerfetto::CASE::startup-lifecycle"
+          },
+          {
+            "id": "execute-launcher_module",
+            "type": "skill",
+            "target": "launcher_module",
+            "mode": "semantic",
+            "source_file": "backend/skills/modules/app/launcher_module.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "launcher_process"
+            ],
+            "semantic_step": "launcher_process",
+            "required_marker": "SmartPerfetto::CASE::startup-lifecycle"
+          },
+          {
+            "id": "execute-startup_analysis",
+            "type": "skill",
+            "target": "startup_analysis",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/startup_analysis.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "get_startups",
+              "startup_quality"
+            ],
+            "semantic_step": "startup_quality",
+            "required_marker": "SmartPerfetto::CASE::startup-lifecycle"
+          },
+          {
+            "id": "definition-startup_binder_in_range",
+            "type": "skill",
+            "target": "startup_binder_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/startup_binder_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::startup-lifecycle"
+          },
+          {
+            "id": "definition-startup_binder_pool_analysis",
+            "type": "skill",
+            "target": "startup_binder_pool_analysis",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/startup_binder_pool_analysis.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::startup-lifecycle"
+          },
+          {
+            "id": "definition-startup_breakdown_in_range",
+            "type": "skill",
+            "target": "startup_breakdown_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/startup_breakdown_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::startup-lifecycle"
+          },
+          {
+            "id": "definition-startup_class_loading_in_range",
+            "type": "skill",
+            "target": "startup_class_loading_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/startup_class_loading_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::startup-lifecycle"
+          },
+          {
+            "id": "definition-startup_cpu_placement_timeline",
+            "type": "skill",
+            "target": "startup_cpu_placement_timeline",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/startup_cpu_placement_timeline.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::startup-lifecycle"
+          },
+          {
+            "id": "definition-startup_critical_tasks",
+            "type": "skill",
+            "target": "startup_critical_tasks",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/startup_critical_tasks.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::startup-lifecycle"
+          },
+          {
+            "id": "execute-startup_detail",
+            "type": "skill",
+            "target": "startup_detail",
+            "mode": "semantic",
+            "source_file": "backend/skills/composite/startup_detail.skill.yaml",
+            "parameters": {
+              "startup_id": 1,
+              "start_ts": "${trace_start}",
+              "end_ts": "${trace_end}",
+              "dur_ms": 1,
+              "package": "com.smartperfetto.fixture",
+              "startup_type": "cold"
+            },
+            "required_steps": [
+              "init_cpu_topology",
+              "startup_info"
+            ],
+            "semantic_step": "startup_info",
+            "required_marker": "SmartPerfetto::CASE::startup-lifecycle"
+          },
+          {
+            "id": "definition-startup_events_in_range",
+            "type": "skill",
+            "target": "startup_events_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/startup_events_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::startup-lifecycle"
+          },
+          {
+            "id": "definition-startup_freq_rampup",
+            "type": "skill",
+            "target": "startup_freq_rampup",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/startup_freq_rampup.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::startup-lifecycle"
+          },
+          {
+            "id": "definition-startup_gc_in_range",
+            "type": "skill",
+            "target": "startup_gc_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/startup_gc_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::startup-lifecycle"
+          },
+          {
+            "id": "definition-startup_hot_slice_states",
+            "type": "skill",
+            "target": "startup_hot_slice_states",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/startup_hot_slice_states.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::startup-lifecycle"
+          },
+          {
+            "id": "definition-startup_jit_analysis",
+            "type": "skill",
+            "target": "startup_jit_analysis",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/startup_jit_analysis.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::startup-lifecycle"
+          },
+          {
+            "id": "definition-startup_main_thread_binder_blocking_in_range",
+            "type": "skill",
+            "target": "startup_main_thread_binder_blocking_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/startup_main_thread_binder_blocking_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::startup-lifecycle"
+          },
+          {
+            "id": "definition-startup_main_thread_file_io_in_range",
+            "type": "skill",
+            "target": "startup_main_thread_file_io_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/startup_main_thread_file_io_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::startup-lifecycle"
+          },
+          {
+            "id": "definition-startup_main_thread_slices_in_range",
+            "type": "skill",
+            "target": "startup_main_thread_slices_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/startup_main_thread_slices_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::startup-lifecycle"
+          },
+          {
+            "id": "definition-startup_main_thread_states_in_range",
+            "type": "skill",
+            "target": "startup_main_thread_states_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/startup_main_thread_states_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::startup-lifecycle"
+          },
+          {
+            "id": "definition-startup_main_thread_sync_binder_in_range",
+            "type": "skill",
+            "target": "startup_main_thread_sync_binder_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/startup_main_thread_sync_binder_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::startup-lifecycle"
+          },
+          {
+            "id": "definition-startup_sched_latency_in_range",
+            "type": "skill",
+            "target": "startup_sched_latency_in_range",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/startup_sched_latency_in_range.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::startup-lifecycle"
+          },
+          {
+            "id": "execute-startup_slow_reasons",
+            "type": "skill",
+            "target": "startup_slow_reasons",
+            "mode": "semantic",
+            "source_file": "backend/skills/atomic/startup_slow_reasons.skill.yaml",
+            "parameters": {},
+            "required_steps": [
+              "startup_overview"
+            ],
+            "semantic_step": "startup_overview",
+            "required_marker": "SmartPerfetto::CASE::startup-lifecycle"
+          },
+          {
+            "id": "definition-startup_thread_blocking_graph",
+            "type": "skill",
+            "target": "startup_thread_blocking_graph",
+            "mode": "definition",
+            "source_file": "backend/skills/atomic/startup_thread_blocking_graph.skill.yaml",
+            "required_marker": "SmartPerfetto::CASE::startup-lifecycle"
+          },
+          {
+            "id": "strategy-startup",
+            "type": "strategy",
+            "target": "startup",
+            "query": "启动",
+            "expected_strategy": "startup",
+            "source_file": "backend/strategies/startup.strategy.md",
+            "required_marker": "SmartPerfetto::CASE::startup-lifecycle"
+          }
+        ]
+      },
+      "case_dir": "Trace/constructed/startup-lifecycle",
+      "manifest_path": "Trace/constructed/startup-lifecycle/case.json"
+    }
+  ]
+}

@@ -20,7 +20,8 @@
  *
  * Out of scope here (M1 / M2):
  * - Diff and regression-gate computation (`baselineDiffer.ts`).
- * - MCP tool registration (`lookup_baseline`, `compare_to_baseline`).
+ * - MCP read tools (`lookup_baseline`, `compare_baselines`) and any future
+ *   trace-vs-baseline tool.
  * - Express CRUD route.
  *
  * @module baselineStore

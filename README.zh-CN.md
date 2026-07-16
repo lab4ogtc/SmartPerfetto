@@ -20,6 +20,36 @@ Provider Base URL 注意事项：预置的 Claude/Anthropic-compatible 和 OpenA
 
 项目已经开源，当前处于活跃开发阶段。UI、后端运行时和 Skill 系统已经可用，但公开 API 和内部合约仍可能继续调整。
 
+<!-- android-performance-ecosystem:start -->
+## Android 性能分析生态
+
+本仓库属于 [Android Performance Ecosystem](https://github.com/Gracker/android-performance-ecosystem)：它把可选插桩、采集、分析、系统知识与可复现案例连接成一套完整路径。
+
+| 阶段 | 项目 | 作用 | 地址 |
+| --- | --- | --- | --- |
+| 插桩 | [TraceFix](https://github.com/Gracker/TraceFix) | 在编译期注入 App 侧 android.os.Trace section，让方法执行在运行时 Trace 中可见。 | [GitHub](https://github.com/Gracker/TraceFix) |
+| 采集与测量 | [Perfetto Tools](https://github.com/Gracker/perfetto-tools) | 抓取可复现的 Perfetto Trace，并采集 FPS 或 Simpleperf 测量结果。 | [GitHub](https://github.com/Gracker/perfetto-tools) |
+| 分析 | [SmartPerfetto](https://github.com/Gracker/SmartPerfetto) | 通过 AI 辅助 Web UI、CLI、报告、会话、对比和证据工作流分析 Trace。 | [GitHub](https://github.com/Gracker/SmartPerfetto) |
+| Agent 分析 | [Perfetto Skills](https://github.com/Gracker/Perfetto-Skills) | 为 Agent 提供可移植的 Android、Linux、Chromium Perfetto 分析 Skill，并通过固定版本流程同步选定资产。 | [GitHub](https://github.com/Gracker/Perfetto-Skills) |
+| 学习 | [Android Performance Blog](https://github.com/Gracker/Gracker.github.io) | 通过文章、系统原理和案例复盘讲解 Perfetto 与 Systrace 分析。 | [AndroidPerformance.com](https://www.androidperformance.com/) · [GitHub](https://github.com/Gracker/Gracker.github.io) |
+| 系统知识 | Android Internal Wiki | 处于 alpha 阶段的 Android 系统知识库，覆盖 App、Framework、Native 与 Kernel 机制。 | **Coming soon** |
+| 复现 | [Trace for Blog (SystraceForBlog)](https://github.com/Gracker/SystraceForBlog) | 提供文章使用的 Perfetto、Systrace 及相关案例文件，支持动手复现。 | [GitHub](https://github.com/Gracker/SystraceForBlog) |
+<!-- android-performance-ecosystem:end -->
+
+## 如何选择 Perfetto 项目
+
+这三个项目互为补充。按自己的使用方式选择最小合适入口；它们彼此都不是安装或
+运行前置依赖。
+
+| 项目 | 形态 | 最适合 | 主要边界 | 适合选择它的情况 |
+|---|---|---|---|---|
+| [SmartPerfetto](https://github.com/Gracker/SmartPerfetto) | 完整 Web UI、CLI 和后端 | 端到端、交互式 Android 性能排查 | 托管 Skill 运行时、报告、会话、对比和 Provider 集成 | 希望直接使用完整分析产品 |
+| [Perfetto Skills](https://github.com/Gracker/Perfetto-Skills) | 可移植的标准 Agent Skill | 具备本地文件和终端能力的 Agent | 确定性本地 runner、证据契约和广泛分析工作流 | 希望在 Codex、Claude Code 或 OpenCode 中直接分析 Trace |
+| [Google 官方 Perfetto Skill](https://github.com/google/perfetto/tree/main/ai/skills/perfetto) | 官方上游 Agent Skill bundle | 上游优先的 Trace 录制与分析 | 官方录制、内存、GPU 和通用 PerfettoSQL 指引 | 希望使用最轻量、由上游直接维护的入口 |
+
+官方 Skill 的安装和发布方式见 Google 的
+[Perfetto AI 使用文档](https://perfetto.dev/docs/getting-started/using-ai)。
+
 ## 先配置 AI Provider
 
 SmartPerfetto 运行时只会使用一个 active 的模型 provider 来源。第一次配置时先选一种路径，不要混着配：
@@ -290,6 +320,8 @@ smp report <sessionId> --open
 
 # 从已连接 Android 设备抓 trace，并可直接分析。
 smp capture presets
+smp capture suggest "分析 Camera 打开到首帧预览延迟" --app com.example.camera
+smp capture config --preset camera --app com.example.camera --duration 20
 smp capture android --preset startup --app com.example.app --duration 10 --out launch.perfetto-trace
 smp capture android --preset cpu --app '*' --duration 30 --categories dalvikviktime my_custom_tag --out cpu-custom.perfetto-trace
 smp capture android --config ~/tools/perfetto_shell/perfetto.config --out ~/tools/perfetto_shell/trace/dut-game-launch.ptrace --analyze --query "分析应用启动"
@@ -297,6 +329,13 @@ smp capture android --config ~/tools/perfetto_shell/perfetto.config --out ~/tool
 # 或者直接进入 SmartPerfetto 交互 REPL。
 smp repl
 ```
+
+`camera` 预设会采集设备可能提供的 Camera/HAL/厂商 atrace 候选、Binder 与
+scheduler 上下文、FrameTimeline，以及 DMA-BUF 或旧版 ION ftrace 事件。atrace
+候选和这些内存 ftrace 事件均为可选证据，具体是否可用取决于 Android 版本、
+设备/厂商实现与内核支持。trace 仍可能缺少可移植的 Camera open、request/result、
+buffer 或预览 presentation 锚点；遇到这种证据缺口时，SmartPerfetto 会明确报告
+缺失，而不会编造“打开到首帧”耗时。
 
 npm CLI 包是正式独立终端产品，不启动也不包含 Web UI launcher；需要浏览器体验时使用 Docker 或 GitHub 免安装包。第一次分析时，CLI 会优先使用包内固定版本 `trace_processor_shell`；当前平台没有内置 binary 时会自动下载固定版本。Android 抓 trace 本身不会现场下载工具：`adb` 按 `ADB_PATH`、已批准的包内 slot、`PATH` 顺序解析；Android Q 之前或显式 `--sideload` 的 tracebox 抓取需要已批准的包内 `tracebox`，或通过 `--tracebox /path/to/tracebox` 指定。若网络无法访问 Google artifact bucket，可以设置 `TRACE_PROCESSOR_PATH=/path/to/trace_processor_shell` 使用本机已有 binary，或设置 `TRACE_PROCESSOR_DOWNLOAD_BASE` / `TRACE_PROCESSOR_DOWNLOAD_URL` 指向可信镜像；下载内容仍会按固定 SHA256 校验。`smartperfetto` 仍保留为长命令名；源码 checkout 里的脚本只用于维护者调试 CLI。完整命令、抓取预设、REPL slash 命令、存储布局和 resume 语义见 [CLI 参考](docs/reference/cli.md)。
 

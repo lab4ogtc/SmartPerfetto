@@ -8,6 +8,7 @@ import os from 'os';
 import path from 'path';
 import {
   EXPERIMENTAL_OPENCODE_RUNTIME_KIND,
+  OPENCODE_RUNTIME_KIND,
   OpenCodeRuntime,
   completeOpenCodeFinalReportPhaseIfDelivered,
   createOpenCodeHardenedConfig,
@@ -25,12 +26,34 @@ import {
   type OpenCodeSdkModuleLoader,
 } from '../openCodeRuntime';
 import type { RuntimeFactoryInput } from '../runtimeRegistry';
+import type { QueryResult, TraceInfo, TraceProcessorService } from '../../services/traceProcessorService';
 import { createTraceProcessorQueryCancelledError } from '../../services/traceProcessorCancellation';
+import * as quickEvidenceDirectAnswer from '../quickEvidenceDirectAnswer';
 
-function createFakeRuntimeInput(): RuntimeFactoryInput {
+type FakeTraceProcessorService = TraceProcessorService & {
+  query: jest.MockedFunction<(traceId: string, sql: string) => Promise<QueryResult>>;
+  getTrace: jest.MockedFunction<(traceId: string) => TraceInfo>;
+};
+
+function createFakeTraceProcessorService(): FakeTraceProcessorService {
   return {
-    traceProcessorService: {} as any,
-    selection: {
+    query: jest.fn(async () => ({ columns: [], rows: [], durationMs: 1 })),
+    getTrace: jest.fn(() => ({
+      id: 'trace-opencode',
+      filename: 'trace.pftrace',
+      size: 1,
+      uploadTime: new Date(),
+      status: 'ready',
+      traceOs: 'android',
+      traceFormat: 'perfetto_protobuf',
+    })),
+  } as unknown as FakeTraceProcessorService;
+}
+
+function createFakeRuntimeInput(overrides: Partial<RuntimeFactoryInput> = {}): RuntimeFactoryInput {
+  return {
+    traceProcessorService: overrides.traceProcessorService ?? createFakeTraceProcessorService(),
+    selection: overrides.selection ?? {
       kind: EXPERIMENTAL_OPENCODE_RUNTIME_KIND,
       source: 'env',
     },
@@ -397,6 +420,42 @@ describe('experimental OpenCode runtime contract', () => {
     ]);
   });
 
+  it('projects private wiki results before emitting OpenCode responses', async () => {
+    const updates: any[] = [];
+    await dispatchOpenCodeBridgeRequest([{
+      name: 'lookup_blog_knowledge',
+      exposure: 'internal',
+      tool: {},
+      shared: {
+        name: 'lookup_blog_knowledge',
+        description: 'Lookup knowledge',
+        exposure: 'internal',
+        inputSchema: {},
+        handler: jest.fn(async () => ({content: [{type: 'text', text: JSON.stringify({result: {
+          query: 'Handler',
+          probed: ['android_internals_wiki'],
+          retrievedAt: 1,
+          legacyPath: false,
+          hits: [{
+            chunkId: 'wiki-1',
+            score: 1,
+            metadata: {kind: 'android_internals_wiki', knowledgeSourceId: 'source-a'},
+            snippet: 'OPENCODE_PRIVATE_WIKI_CANARY',
+          }],
+        }})}]})),
+      },
+    } as any], {
+      jsonrpc: '2.0',
+      id: 'wiki-call',
+      method: 'tools/call',
+      params: {name: 'lookup_blog_knowledge', arguments: {}},
+    }, update => updates.push(update));
+
+    const serialized = JSON.stringify(updates.filter(update => update.type === 'agent_response'));
+    expect(serialized).not.toContain('OPENCODE_PRIVATE_WIKI_CANARY');
+    expect(serialized).toContain('snippetHash');
+  });
+
   it('records OpenCode MCP bridge tool executions into the shared analysis plan evidence log', async () => {
     const plan = {
       phases: [
@@ -686,6 +745,279 @@ describe('experimental OpenCode runtime contract', () => {
       expect.objectContaining({ type: 'progress' }),
       expect.objectContaining({ type: 'conclusion' }),
     ]));
+  });
+
+  it('injects dual-trace pane mapping into the OpenCode comparison system prompt', async () => {
+    const record: { createOptions?: Record<string, unknown>; promptInput?: unknown; closeCount: number } = {
+      closeCount: 0,
+    };
+    const runtime = new OpenCodeRuntime(
+      createFakeRuntimeInput({
+        selection: { kind: OPENCODE_RUNTIME_KIND, source: 'env' },
+      }),
+      {
+        env: {
+          SMARTPERFETTO_OPENCODE_MODEL_JSON: '{"providerID":"smartperfetto","modelID":"test-model"}',
+        },
+        moduleLoader: createFakeModuleLoader(record),
+      },
+    );
+
+    await runtime.analyze(
+      '对比左右 Trace 的启动速度差异',
+      'session-opencode-compare',
+      'trace-current',
+      {
+        analysisMode: 'full',
+        packageName: 'com.example',
+        referenceTraceId: 'trace-reference',
+        tracePairContext: {
+          schemaVersion: 1,
+          layout: 'horizontal',
+          primarySide: 'left',
+          referenceSide: 'right',
+          workspaceOpen: true,
+          panes: [
+            {
+              side: 'left',
+              traceSide: 'current',
+              traceId: 'trace-current',
+              traceName: 'Current Trace',
+              visualState: 'live',
+            },
+            {
+              side: 'right',
+              traceSide: 'reference',
+              traceId: 'trace-reference',
+              traceName: 'Reference Trace',
+              visualState: 'live',
+            },
+          ],
+        },
+      },
+    );
+
+    const promptInput = record.promptInput as { body?: { system?: string } } | undefined;
+    expect(promptInput?.body?.system).toContain('## 对比模式');
+    expect(promptInput?.body?.system).toContain('### 窗口映射');
+    expect(promptInput?.body?.system).toContain('左侧/当前 Trace');
+    expect(promptInput?.body?.system).toContain('右侧/参考 Trace');
+  });
+
+  it('answers default auto trace facts directly without loading the OpenCode SDK', async () => {
+    const traceProcessorService = createFakeTraceProcessorService();
+    traceProcessorService.query.mockImplementation(async (_traceId: string, sql: string) => {
+      expect(sql).toContain('runtime_cpu_core_count');
+      return {
+        columns: [
+          'observed_cpu_count',
+          'observed_cpus',
+          'universe_source',
+          'cpu_table_count',
+          'cpu_table_cpus',
+          'source_table',
+        ],
+        rows: [[
+          7,
+          '0, 1, 2, 3, 4, 5, 6',
+          'sched_observed',
+          7,
+          '0, 1, 2, 3, 4, 5, 6',
+          'sched_slice/thread_state',
+        ]],
+        durationMs: 2,
+      };
+    });
+    const record: { createOptions?: Record<string, unknown>; promptInput?: unknown; closeCount: number } = {
+      closeCount: 0,
+    };
+    const moduleLoader = createFakeModuleLoader(record);
+    const runtime = new OpenCodeRuntime(
+      createFakeRuntimeInput({
+        traceProcessorService,
+        selection: { kind: OPENCODE_RUNTIME_KIND, source: 'env' },
+      }),
+      {
+        env: {
+          SMARTPERFETTO_OPENCODE_MODEL_JSON: '{"providerID":"smartperfetto","modelID":"test-model"}',
+        },
+        moduleLoader,
+      },
+    );
+    const updates: unknown[] = [];
+    runtime.on('update', update => updates.push(update));
+
+    const result = await runtime.analyze(
+      '这个 trace 的 CPU 有几个核心？',
+      'session-opencode-auto-quick',
+      'trace-opencode',
+    );
+
+    expect(moduleLoader).not.toHaveBeenCalled();
+    expect(record.promptInput).toBeUndefined();
+    expect(record.createOptions).toBeUndefined();
+    expect(record.closeCount).toBe(0);
+    expect(result.quickRun).toMatchObject({
+      requestedMode: 'auto',
+      resolvedMode: 'quick',
+      actualTurns: 0,
+      stopReason: 'answered',
+      evidence: {
+        currentRunDataEnvelopes: 1,
+        citedEvidenceRefs: 1,
+      },
+    });
+    expect(result.rounds).toBe(0);
+    expect(result.conclusion).toContain('7 个 CPU 核心');
+    expect(result.conclusionContract?.claims?.[0]?.references?.[0]).toMatchObject({
+      column: 'observed_cpu_count',
+      value: 7,
+    });
+    expect(result.terminationReason).toBeUndefined();
+    expect(traceProcessorService.query).toHaveBeenCalledTimes(1);
+    expect(updates).toEqual([
+      expect.objectContaining({ type: 'data' }),
+      expect.objectContaining({ type: 'progress' }),
+      expect.objectContaining({ type: 'conclusion' }),
+      expect.objectContaining({ type: 'answer_token' }),
+    ]);
+  });
+
+  it('does not pre-run quick direct evidence for auto full scrolling diagnostics', async () => {
+    const traceProcessorService = createFakeTraceProcessorService();
+    const record: { createOptions?: Record<string, unknown>; promptInput?: unknown; closeCount: number } = {
+      closeCount: 0,
+    };
+    const moduleLoader = createFakeModuleLoader(record);
+    const runtime = new OpenCodeRuntime(
+      createFakeRuntimeInput({
+        traceProcessorService,
+        selection: { kind: OPENCODE_RUNTIME_KIND, source: 'env' },
+      }),
+      {
+        env: {
+          SMARTPERFETTO_OPENCODE_MODEL_JSON: '{"providerID":"smartperfetto","modelID":"test-model"}',
+        },
+        moduleLoader,
+      },
+    );
+    runtime.restoreArchitectureCache('trace-opencode-full-scroll', {
+      type: 'STANDARD',
+      confidence: 0.9,
+      evidence: [],
+    });
+    const directEvidence = jest.spyOn(
+      quickEvidenceDirectAnswer,
+      'buildRuntimeQuickEvidenceDirectAnswer',
+    );
+
+    try {
+      const result = await runtime.analyze(
+        '分析滑动性能',
+        'session-opencode-full-scroll',
+        'trace-opencode-full-scroll',
+      );
+
+      expect(directEvidence).not.toHaveBeenCalled();
+      expect(moduleLoader).toHaveBeenCalledTimes(1);
+      expect(record.promptInput).toBeDefined();
+      expect(result.quickRun).toBeUndefined();
+    } finally {
+      directEvidence.mockRestore();
+    }
+  });
+
+  it('skips focus detection for package-scoped trace fact fallback preparation', async () => {
+    const traceProcessorService = createFakeTraceProcessorService();
+    const sqlQueries: string[] = [];
+    traceProcessorService.query.mockImplementation(async (_traceId: string, sql: string) => {
+      sqlQueries.push(sql);
+      return { columns: [], rows: [], durationMs: 1 };
+    });
+    const record: { createOptions?: Record<string, unknown>; promptInput?: unknown; closeCount: number } = {
+      closeCount: 0,
+    };
+    const moduleLoader = createFakeModuleLoader(record);
+    const runtime = new OpenCodeRuntime(
+      createFakeRuntimeInput({
+        traceProcessorService,
+        selection: { kind: OPENCODE_RUNTIME_KIND, source: 'env' },
+      }),
+      {
+        env: {
+          SMARTPERFETTO_OPENCODE_MODEL_JSON: '{"providerID":"smartperfetto","modelID":"test-model"}',
+        },
+        moduleLoader,
+      },
+    );
+    runtime.restoreArchitectureCache('trace-opencode', {
+      type: 'STANDARD',
+      confidence: 0.9,
+      evidence: [],
+    });
+
+    await runtime.analyze(
+      '滑动 FPS 是多少？',
+      'session-opencode-package-fallback',
+      'trace-opencode',
+      { packageName: 'com.example.app' },
+    );
+
+    expect(moduleLoader).toHaveBeenCalledTimes(1);
+    expect(record.promptInput).toBeDefined();
+    expect(sqlQueries.some(sql => sql.includes('runtime_frame_metrics'))).toBe(true);
+    expect(sqlQueries.some(sql => sql.includes('android_battery_stats_event_slices'))).toBe(false);
+    expect(sqlQueries.some(sql => sql.includes('android_oom_adj_intervals'))).toBe(false);
+  });
+
+  it('answers acknowledgement follow-ups directly without loading the OpenCode SDK', async () => {
+    const traceProcessorService = createFakeTraceProcessorService();
+    const record: { createOptions?: Record<string, unknown>; promptInput?: unknown; closeCount: number } = {
+      closeCount: 0,
+    };
+    const moduleLoader = createFakeModuleLoader(record);
+    const runtime = new OpenCodeRuntime(
+      createFakeRuntimeInput({
+        traceProcessorService,
+        selection: { kind: OPENCODE_RUNTIME_KIND, source: 'env' },
+      }),
+      {
+        env: {},
+        moduleLoader,
+      },
+    );
+    const updates: unknown[] = [];
+    runtime.on('update', update => updates.push(update));
+
+    const result = await runtime.analyze(
+      '谢谢',
+      'session-opencode-ack',
+      'trace-opencode',
+    );
+
+    expect(moduleLoader).not.toHaveBeenCalled();
+    expect(record.promptInput).toBeUndefined();
+    expect(record.createOptions).toBeUndefined();
+    expect(record.closeCount).toBe(0);
+    expect(traceProcessorService.query).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      success: true,
+      conclusion: '收到。',
+      confidence: 1,
+      rounds: 0,
+      quickRun: {
+        requestedMode: 'auto',
+        resolvedMode: 'quick',
+        actualTurns: 0,
+        stopReason: 'answered',
+      },
+    });
+    expect(result.claimVerificationResult).toBeUndefined();
+    expect(updates).toEqual([
+      expect.objectContaining({ type: 'progress' }),
+      expect.objectContaining({ type: 'conclusion' }),
+      expect.objectContaining({ type: 'answer_token' }),
+    ]);
   });
 
   it('hydrates OpenCode opaque session state and prompts the restored session', async () => {

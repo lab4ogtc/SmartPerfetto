@@ -43,6 +43,8 @@ interface ReportResultLike {
   partial?: boolean;
   terminationReason?: string;
   terminationMessage?: string;
+  analysisReceipt?: AgentDrivenReportData['result']['analysisReceipt'];
+  uiActionProposals?: AgentDrivenReportData['result']['uiActionProposals'];
 }
 
 export interface BuildAgentReportDataInput {

@@ -10,6 +10,8 @@ import { sessionContextManager } from '../../agent/context/enhancedSessionContex
 import { ENTERPRISE_DB_PATH_ENV, openEnterpriseDb } from '../../services/enterpriseDb';
 import { getProviderService, resetProviderService } from '../../services/providerManager';
 import { saveClaudeSessionMapToRuntimeSnapshots } from '../../services/runtimeSnapshotStore';
+import type { TraceProcessorService } from '../../services/traceProcessorService';
+import * as quickEvidenceDirectAnswer from '../../agentRuntime/quickEvidenceDirectAnswer';
 import { ClaudeRuntime, __testing } from '../claudeRuntime';
 
 const claudeSdkMock = require('@anthropic-ai/claude-agent-sdk') as {
@@ -62,6 +64,8 @@ afterEach(async () => {
   claudeSdkMock.__resetQueryMock();
   sessionContextManager.remove('session-a');
   sessionContextManager.remove('session-quick');
+  sessionContextManager.remove('session-quick-focus-evidence');
+  sessionContextManager.remove('session-quick-selection-trace-fact');
   sessionContextManager.remove('session-provider');
   restoreEnvValue(ENTERPRISE_FEATURE_FLAG_ENV, originalEnv.enterprise);
   restoreEnvValue(ENTERPRISE_DB_PATH_ENV, originalEnv.enterpriseDbPath);
@@ -778,11 +782,521 @@ describe('ClaudeRuntime enterprise runtime_snapshots session map', () => {
     const calls = claudeSdkMock.__getQueryCalls();
     expect(calls).toHaveLength(1);
     expect(calls[0].options.resume).toBeUndefined();
+    expect(calls[0].options.allowedTools).toContain('mcp__smartperfetto__fetch_artifact');
     expect(calls[0].prompt).toContain('上一轮回答：主要包名是 com.example.app。');
     expect((runtime as any).sessionMap.get('session-quick')).toEqual(expect.objectContaining({
       sdkSessionId: 'full-sdk-session',
       mode: 'full',
     }));
+  });
+
+  it('emits focus evidence for auto-detected app-scoped direct quick facts', async () => {
+    const traceProcessor = {
+      query: jest.fn(async (_traceId: string, sql: string) => {
+        if (sql.includes('android_battery_stats_event_slices')) {
+          return {
+            columns: ['package_name', 'total_duration_ns', 'switch_count'],
+            rows: [['com.example.app', 1_250_000_000, 3]],
+            durationMs: 1,
+          };
+        }
+        if (sql.includes('runtime_app_process_thread_count')) {
+          return {
+            columns: [
+              'package_name',
+              'process_count',
+              'thread_count',
+              'process_names',
+              'process_thread_counts',
+              'source_table',
+            ],
+            rows: [[
+              'com.example.app',
+              2,
+              7,
+              'com.example.app,com.example.app:worker',
+              '4,3',
+              'process,thread,android_process_metadata',
+            ]],
+            durationMs: 2,
+          };
+        }
+        throw new Error(`Unexpected SQL: ${sql}`);
+      }),
+    };
+    const runtime = new ClaudeRuntime(traceProcessor as any, {
+      enableVerification: false,
+      enableSubAgents: false,
+    });
+    const updates: Array<{ type?: string; content?: unknown }> = [];
+    runtime.on('update', update => updates.push(update));
+
+    const result = await runtime.analyze(
+      '焦点应用有多少线程？',
+      'session-quick-focus-evidence',
+      'trace-quick-focus-evidence',
+    );
+
+    expect(claudeSdkMock.__getQueryCalls()).toHaveLength(0);
+    expect(traceProcessor.query).toHaveBeenCalledTimes(2);
+    expect(result.rounds).toBe(0);
+    expect(result.conclusion).toContain('焦点应用 com.example.app');
+    expect(result.quickRun).toMatchObject({
+      requestedMode: 'auto',
+      resolvedMode: 'quick',
+      actualTurns: 0,
+      stopReason: 'answered',
+      evidence: {
+        currentRunDataEnvelopes: 2,
+        citedEvidenceRefs: 1,
+      },
+    });
+    const dataUpdates = updates.filter(update => update.type === 'data');
+    expect(dataUpdates).toHaveLength(2);
+    expect(dataUpdates[0].content).toEqual([
+      expect.objectContaining({
+        meta: expect.objectContaining({
+          source: 'runtime_focus_detection',
+          intent: 'runtime_focus_app_detection',
+        }),
+      }),
+    ]);
+    expect(dataUpdates[1].content).toEqual([
+      expect.objectContaining({
+        meta: expect.objectContaining({
+          source: 'runtime_trace_fact:app_thread_count',
+        }),
+      }),
+    ]);
+  });
+
+  it('answers selected trace-wide frame facts without focus or SDK preflight', async () => {
+    const traceProcessor = {
+      query: jest.fn(async (_traceId: string, sql: string) => {
+        if (sql.includes('actual_frame_timeline_slice')) {
+          return {
+            columns: [
+              'scope',
+              'total_frames',
+              'window_start_ns',
+              'window_end_ns',
+              'duration_s',
+              'scope_start_ns',
+              'scope_end_ns',
+              'source_table',
+            ],
+            rows: [[
+              'selected_range',
+              57,
+              100,
+              200,
+              0.0000001,
+              100,
+              200,
+              'actual_frame_timeline_slice',
+            ]],
+            durationMs: 2,
+          };
+        }
+        throw new Error(`Unexpected SQL: ${sql}`);
+      }),
+    };
+    const runtime = new ClaudeRuntime(traceProcessor as any, {
+      enableVerification: false,
+      enableSubAgents: false,
+    });
+    const updates: Array<{ type?: string; content?: unknown }> = [];
+    runtime.on('update', update => updates.push(update));
+
+    const result = await runtime.analyze(
+      '这个 trace 一共有多少帧？',
+      'session-quick-selected-trace-frame-count',
+      'trace-quick-selected-trace-frame-count',
+      {
+        selectionContext: {
+          kind: 'area',
+          source: 'area_selection',
+          startNs: 100,
+          endNs: 200,
+        },
+      },
+    );
+
+    expect(claudeSdkMock.__getQueryCalls()).toHaveLength(0);
+    expect(traceProcessor.query).toHaveBeenCalledTimes(1);
+    expect(result.rounds).toBe(0);
+    expect(result.conclusion).toContain('当前选区的 FrameTimeline 中共有 57 帧');
+    expect(result.quickRun).toMatchObject({
+      requestedMode: 'auto',
+      resolvedMode: 'quick',
+      actualTurns: 0,
+      stopReason: 'answered',
+      evidence: {
+        currentRunDataEnvelopes: 1,
+        citedEvidenceRefs: 1,
+      },
+    });
+    const dataUpdates = updates.filter(update => update.type === 'data');
+    expect(dataUpdates).toHaveLength(1);
+    expect(dataUpdates[0].content).toEqual([
+      expect.objectContaining({
+        meta: expect.objectContaining({
+          source: 'runtime_trace_fact:trace_frame_count',
+        }),
+        data: expect.objectContaining({
+          rows: [[
+            'selected_range',
+            57,
+            100,
+            200,
+            0.0000001,
+            100,
+            200,
+            'actual_frame_timeline_slice',
+          ]],
+        }),
+      }),
+    ]);
+  });
+
+  it('skips architecture preflight when shared quick direct evidence answers', async () => {
+    const directEvidence = jest.spyOn(
+      quickEvidenceDirectAnswer,
+      'buildRuntimeQuickEvidenceDirectAnswer',
+    );
+    directEvidence.mockImplementation(async input => {
+      input.emitUpdate({
+        type: 'data',
+        content: [{
+          meta: {
+            type: 'skill_result',
+            version: '2.0.0',
+            source: 'scrolling_analysis:performance_summary',
+            timestamp: 1,
+            skillId: 'scrolling_analysis',
+            stepId: 'performance_summary',
+            evidenceRefId: 'data:skill:scrolling_analysis:current:test:performance_summary',
+            sourceToolCallId: 'runtime-skill:scrolling_analysis:test',
+            traceSide: 'current',
+            traceId: 'trace-quick-shared-direct',
+            planPhaseId: 'quick',
+          },
+          data: {
+            columns: ['total_frames'],
+            rows: [[347]],
+          },
+          display: {
+            layer: 'overview',
+            format: 'table',
+            title: '滑动性能概览',
+          },
+        }],
+        timestamp: Date.now(),
+      });
+      return {
+        directAnswer: {
+          conclusion:
+            '## 快速 Triage\n当前滑动概览可由 performance_summary 直接回答；' +
+            'evidence_ref_id=`data:skill:scrolling_analysis:current:test:performance_summary`。',
+          confidence: 0.9,
+          conclusionContract: {
+            schemaVersion: 'conclusion_contract_v1',
+            mode: 'focused_answer',
+            conclusions: [{
+              rank: 1,
+              statement: '当前滑动概览可由 performance_summary 直接回答。',
+              confidencePercent: 90,
+            }],
+            clusters: [],
+            evidenceChain: [{
+              conclusionId: 'quick_scrolling_summary',
+              text: 'performance_summary total_frames=347',
+            }],
+            claims: [{
+              id: 'quick_scrolling_total_frames',
+              text: 'performance_summary total_frames=347',
+              kind: 'numeric',
+              references: [{
+                evidenceRefId: 'data:skill:scrolling_analysis:current:test:performance_summary',
+                sourceRef: 'runtime-skill:scrolling_analysis:test',
+                column: 'total_frames',
+                value: 347,
+              }],
+              supportLevel: 'verified',
+            }],
+            uncertainties: [],
+            nextSteps: [],
+            metadata: {
+              confidencePercent: 90,
+              rounds: 0,
+              claimDerivation: 'explicit_model_contract',
+              claimVerificationScope: 'explicit_claims',
+            },
+          },
+        },
+        effectivePackageName: 'com.example.app',
+        evidenceCounts: {
+          currentRunDataEnvelopes: 1,
+          citedEvidenceRefs: 1,
+        },
+      };
+    });
+    const traceProcessor = {
+      query: jest.fn(async (_traceId: string, sql: string) => {
+        if (sql.includes('android_battery_stats_event_slices')) {
+          return {
+            columns: ['package_name', 'total_duration_ns', 'switch_count'],
+            rows: [['com.example.app', 1_250_000_000, 3]],
+            durationMs: 1,
+          };
+        }
+        throw new Error(`Unexpected SQL: ${sql}`);
+      }),
+    };
+    const runtime = new ClaudeRuntime(traceProcessor as unknown as TraceProcessorService, {
+      enableVerification: false,
+      enableSubAgents: false,
+    });
+    const updates: Array<{ type?: string; content?: unknown }> = [];
+    runtime.on('update', update => updates.push(update));
+
+    try {
+      const result = await runtime.analyze(
+        'scroll jank overview and smoothness',
+        'session-quick-shared-direct',
+        'trace-quick-shared-direct',
+      );
+
+      expect(directEvidence).toHaveBeenCalledTimes(1);
+      expect(claudeSdkMock.__getQueryCalls()).toHaveLength(0);
+      expect(traceProcessor.query).toHaveBeenCalledTimes(1);
+      expect(result.rounds).toBe(0);
+      expect(result.quickRun).toMatchObject({
+        requestedMode: 'auto',
+        resolvedMode: 'quick',
+        actualTurns: 0,
+        stopReason: 'answered',
+        evidence: {
+          currentRunDataEnvelopes: 1,
+          citedEvidenceRefs: 1,
+        },
+      });
+      expect(updates.map(update => update.type)).not.toContain('architecture_detected');
+    } finally {
+      directEvidence.mockRestore();
+      sessionContextManager.remove('session-quick-shared-direct');
+    }
+  });
+
+  it('keeps Claude mixed trace-fact plus scrolling quick evidence in the shared direct builder', async () => {
+    const directEvidence = jest.spyOn(
+      quickEvidenceDirectAnswer,
+      'buildRuntimeQuickEvidenceDirectAnswer',
+    );
+    directEvidence.mockImplementation(async input => {
+      expect(input.quickTraceFactPreEvidence).toBe(true);
+      expect(input.quickScrollingTriagePreEvidence).toBe(true);
+      expect(input.quickProcessIdentityPreEvidence).toBe(false);
+      expect(input.quickFocusAppPreEvidence).toBe(false);
+      return {
+        directAnswer: {
+          conclusion:
+            '## 快速 Triage\n- 总帧数和整体流畅度均已由运行时结构化证据回答。\n\n' +
+            '## 逐句数据引用（结构化来源）\n' +
+            '- Q1: FPS 和流畅度均有结构化引用。\n' +
+            '  - evidence_ref_id=`data:runtime:test`; source_ref=runtime; column=`fps`; value=`58`',
+          confidence: 0.9,
+          conclusionContract: {
+            schemaVersion: 'conclusion_contract_v1',
+            mode: 'focused_answer',
+            conclusions: [{
+              rank: 1,
+              statement: '总帧数和整体流畅度均已由运行时结构化证据回答。',
+              confidencePercent: 90,
+            }],
+            clusters: [],
+            evidenceChain: [{
+              conclusionId: 'quick_mixed_trace_scrolling',
+              text: 'runtime mixed trace fact and scrolling evidence',
+            }],
+            claims: [{
+              id: 'quick_mixed_fps',
+              text: '总帧数和流畅度均有结构化引用。',
+              kind: 'numeric',
+              references: [{
+                evidenceRefId: 'data:runtime:test',
+                sourceRef: 'runtime',
+                column: 'fps',
+                value: 58,
+              }],
+              supportLevel: 'verified',
+            }],
+            uncertainties: [],
+            nextSteps: [],
+            metadata: {
+              confidencePercent: 90,
+              rounds: 0,
+              claimDerivation: 'explicit_model_contract',
+              claimVerificationScope: 'explicit_claims',
+            },
+          },
+        },
+        evidenceCounts: {
+          currentRunDataEnvelopes: 2,
+          citedEvidenceRefs: 1,
+        },
+      };
+    });
+    const traceProcessor = {
+      query: jest.fn(async (_traceId: string, sql: string) => {
+        if (sql.includes('android_battery_stats_event_slices')) {
+          return {
+            columns: ['package_name', 'total_duration_ns', 'switch_count'],
+            rows: [['com.example.app', 1_250_000_000, 3]],
+            durationMs: 1,
+          };
+        }
+        throw new Error(`Unexpected SQL: ${sql}`);
+      }),
+    };
+    const runtime = new ClaudeRuntime(traceProcessor as unknown as TraceProcessorService, {
+      enableVerification: false,
+      enableSubAgents: false,
+    });
+
+    try {
+      const result = await runtime.analyze(
+        '总帧数是多少？整体流畅吗？',
+        'session-quick-mixed-trace-scrolling',
+        'trace-quick-mixed-trace-scrolling',
+      );
+
+      expect(directEvidence).toHaveBeenCalledTimes(1);
+      expect(claudeSdkMock.__getQueryCalls()).toHaveLength(0);
+      expect(result.rounds).toBe(0);
+      expect(result.quickRun).toMatchObject({
+        actualTurns: 0,
+        evidence: {
+          currentRunDataEnvelopes: 2,
+          citedEvidenceRefs: 1,
+        },
+      });
+      expect(result.conclusion).toContain('总帧数和整体流畅度');
+    } finally {
+      directEvidence.mockRestore();
+      sessionContextManager.remove('session-quick-mixed-trace-scrolling');
+    }
+  });
+
+  it('does not answer selected-range trace facts from global runtime pre-evidence', async () => {
+    const traceProcessor = {
+      query: jest.fn(async (_traceId: string, sql: string) => {
+        if (sql.includes('android_battery_stats_event_slices')) {
+          return {
+            columns: ['package_name', 'total_duration_ns', 'switch_count'],
+            rows: [['com.example.app', 1_250_000_000, 3]],
+            durationMs: 1,
+          };
+        }
+        return { columns: [], rows: [], durationMs: 1 };
+      }),
+    };
+    const runtime = new ClaudeRuntime(traceProcessor as any, {
+      enableVerification: false,
+      enableSubAgents: false,
+    });
+    (runtime as any).architectureCache.set('trace-quick-selection-trace-fact', {
+      type: 'STANDARD',
+      confidence: 0.9,
+      evidence: [],
+    });
+    claudeSdkMock.__setQueryImplementation(async function* () {
+      yield {
+        type: 'result',
+        subtype: 'success',
+        session_id: 'quick-selection-sdk-session',
+        num_turns: 1,
+        result: '选区内帧数需要基于选区上下文查询，不能使用全局 trace 计数直接代替。',
+      };
+    });
+
+    const result = await runtime.analyze(
+      '这个 trace 一共有多少帧？',
+      'session-quick-selection-trace-fact',
+      'trace-quick-selection-trace-fact',
+      {
+        selectionContext: {
+          kind: 'area',
+          source: 'area_selection',
+          startNs: 100,
+          endNs: 200,
+        },
+      },
+    );
+
+    expect(claudeSdkMock.__getQueryCalls()).toHaveLength(1);
+    expect(result.rounds).toBe(1);
+    expect(result.quickRun).toMatchObject({
+      requestedMode: 'auto',
+      resolvedMode: 'quick',
+      actualTurns: 1,
+      stopReason: 'answered',
+    });
+    const [call] = claudeSdkMock.__getQueryCalls();
+    expect(call.options.systemPrompt).toContain('用户选区上下文');
+    expect(call.options.systemPrompt).toContain('起始时间:** 100 ns');
+    expect(call.options.systemPrompt).toContain('结束时间:** 200 ns');
+  });
+
+  it('does not answer selected-range process identity questions from global runtime pre-evidence', async () => {
+    const traceProcessor = {
+      query: jest.fn(async () => ({ columns: [], rows: [], durationMs: 1 })),
+    };
+    const runtime = new ClaudeRuntime(traceProcessor as any, {
+      enableVerification: false,
+      enableSubAgents: false,
+    });
+    (runtime as any).architectureCache.set('trace-quick-selection-identity', {
+      type: 'STANDARD',
+      confidence: 0.9,
+      evidence: [],
+    });
+    claudeSdkMock.__setQueryImplementation(async function* () {
+      yield {
+        type: 'result',
+        subtype: 'success',
+        session_id: 'quick-selection-identity-sdk-session',
+        num_turns: 1,
+        result: '选区内进程身份需要基于选区上下文查询，不能使用全局 trace 进程身份直接代替。',
+      };
+    });
+
+    const result = await runtime.analyze(
+      '这个选区的应用包名和主要进程是什么？',
+      'session-quick-selection-identity',
+      'trace-quick-selection-identity',
+      {
+        selectionContext: {
+          kind: 'area',
+          source: 'area_selection',
+          startNs: 100,
+          endNs: 200,
+        },
+      },
+    );
+
+    expect(claudeSdkMock.__getQueryCalls()).toHaveLength(1);
+    expect(result.rounds).toBe(1);
+    expect(result.quickRun).toMatchObject({
+      requestedMode: 'auto',
+      resolvedMode: 'quick',
+      actualTurns: 1,
+      stopReason: 'answered',
+    });
+    const [call] = claudeSdkMock.__getQueryCalls();
+    expect(call.options.systemPrompt).toContain('用户选区上下文');
+    expect(call.options.systemPrompt).toContain('起始时间:** 100 ns');
+    expect(call.options.systemPrompt).toContain('结束时间:** 200 ns');
   });
 
   it('passes stable and volatile full-mode prompt blocks through the Claude cache boundary', async () => {

@@ -95,6 +95,23 @@ describe('classifyQueryWithOpenAILightModel', () => {
     expect(result.reason).toContain('timed out');
   });
 
+  it('propagates cancellation from the owning analysis', async () => {
+    installFetchMock(async ({ init }) => new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal as AbortSignal | undefined;
+      signal?.addEventListener('abort', () => {
+        const error = new Error('caller aborted');
+        error.name = 'AbortError';
+        reject(error);
+      });
+    }));
+    const analysis = new AbortController();
+
+    const classification = classifyQueryWithOpenAILightModel('q', baseConfig, analysis.signal);
+    analysis.abort();
+
+    await expect(classification).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
   it('falls back to full when baseURL is missing without making any HTTP call', async () => {
     const fetchMock = installFetchMock(async () => new Response('{}', { status: 200 }));
 

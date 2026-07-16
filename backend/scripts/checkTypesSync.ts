@@ -287,7 +287,8 @@ async function checkTypesSync(): Promise<boolean> {
 
   // Read files
   const backendContent = fs.readFileSync(backendContractPath, 'utf-8');
-  const conclusionContractContent = fs.readFileSync(conclusionContractPath, 'utf-8');
+  const conclusionContractContent = fs.readFileSync(conclusionContractPath, 'utf-8')
+    .replace(/import type \{CaseKnowledgeReportRecommendation\} from '..\/..\/types\/caseKnowledge';\n\n?/, '');
   const evidenceContractContent = fs.readFileSync(evidenceContractPath, 'utf-8');
   const claimVerificationContent = fs.readFileSync(claimVerificationPath, 'utf-8');
   const identityContractContent = fs.readFileSync(identityContractPath, 'utf-8');

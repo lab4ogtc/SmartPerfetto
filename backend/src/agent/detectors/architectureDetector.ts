@@ -23,34 +23,20 @@ import { createSkillExecutor } from '../../services/skillEngine/skillExecutor';
 import { ensureSkillRegistryInitialized, skillRegistry } from '../../services/skillEngine/skillLoader';
 import { parseCandidates } from '../../types/teaching.types';
 import {
+  ensurePipelineSkillsInitialized,
+  pipelineSkillLoader,
+} from '../../services/pipelineSkillLoader';
+import {
   rethrowIfTraceProcessorQueryCancelled,
   throwIfTraceProcessorQueryCancelled,
 } from '../../services/traceProcessorCancellation';
 
 // =============================================================================
-// Pipeline ID -> ArchitectureInfo.type mapping
+// Catalog-backed pipeline ID -> ArchitectureInfo.type mapping
 // =============================================================================
 
-function mapPipelineToArchType(pipelineId: string): RenderingArchitectureType {
-  if (pipelineId.startsWith('FLUTTER_')) return 'FLUTTER';
-  if (pipelineId.startsWith('WEBVIEW_')) return 'WEBVIEW';
-  if (pipelineId.startsWith('RN_')) return 'REACT_NATIVE';   // Phase E: S14 React Native
-  if (pipelineId === 'COMPOSE_STANDARD') return 'COMPOSE';
-  if (pipelineId === 'GAME_ENGINE') return 'GAME_ENGINE';
-  if (pipelineId === 'CAMERA_PIPELINE') return 'CAMERA';
-  if (pipelineId === 'VIDEO_OVERLAY_HWC') return 'VIDEO_OVERLAY';
-  if (pipelineId === 'SURFACEVIEW_BLAST') return 'SURFACEVIEW';
-  if (pipelineId.startsWith('OPENGL_') || pipelineId === 'ANGLE_GLES_VULKAN') return 'GLSURFACEVIEW';
-  if (pipelineId === 'VULKAN_NATIVE') return 'GLSURFACEVIEW';
-  if (pipelineId === 'ANDROID_VIEW_SOFTWARE') return 'SOFTWARE';
-  if (pipelineId === 'ANDROID_VIEW_MIXED') return 'MIXED';
-  if (pipelineId.startsWith('ANDROID_VIEW_')) return 'STANDARD';
-  if (pipelineId === 'ANDROID_PIP_FREEFORM') return 'STANDARD';
-  if (pipelineId === 'TEXTUREVIEW_STANDARD') return 'STANDARD';
-  if (pipelineId === 'SURFACE_CONTROL_API') return 'STANDARD';
-  if (pipelineId === 'HARDWARE_BUFFER_RENDERER') return 'STANDARD';
-  if (pipelineId === 'VARIABLE_REFRESH_RATE') return 'STANDARD';
-  return 'STANDARD';
+export function resolvePipelineArchitectureType(pipelineId: string): RenderingArchitectureType {
+  return pipelineSkillLoader.getPipelineCatalogEntry(pipelineId)?.architecture_type || 'STANDARD';
 }
 
 // =============================================================================
@@ -69,6 +55,7 @@ export async function detectArchitectureViaSkill(
 ): Promise<ArchitectureInfo> {
   throwIfTraceProcessorQueryCancelled(signal);
   try {
+    await ensurePipelineSkillsInitialized();
     const executor = createSkillExecutor(traceProcessorService);
     await ensureSkillRegistryInitialized();
     executor.registerSkills(skillRegistry.getAllSkills());
@@ -87,12 +74,13 @@ export async function detectArchitectureViaSkill(
     const pipelineRow = extractFirstRow(result.rawResults, 'determine_pipeline');
     const subvariantRow = extractFirstRow(result.rawResults, 'subvariants');
 
-    const pipelineId: string = pipelineRow?.primary_pipeline_id || 'ANDROID_VIEW_STANDARD_BLAST';
+    const pipelineId: string =
+      pipelineRow?.primary_pipeline_id || pipelineSkillLoader.getDefaultSelection().pipelineId;
     const confidence: number = typeof pipelineRow?.primary_confidence === 'number'
       ? pipelineRow.primary_confidence
       : 0.5;
 
-    const type = mapPipelineToArchType(pipelineId);
+    const type = resolvePipelineArchitectureType(pipelineId);
 
     const info: ArchitectureInfo = {
       type,

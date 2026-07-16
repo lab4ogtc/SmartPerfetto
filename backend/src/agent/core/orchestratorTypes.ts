@@ -38,6 +38,7 @@ import type { ClaimSupportV1 } from '../../types/evidenceContract';
 import type { ClaimVerificationResult } from '../../types/claimVerification';
 import type { IdentityResolutionV1 } from '../../types/identityContract';
 import type { CodeAwareMode } from '../../services/codebase/codeAwareFeature';
+import type { AnalysisReceiptV1, UiActionProposalV1 } from '../../types/dataContract';
 
 // =============================================================================
 // Agent ID Constants
@@ -235,6 +236,8 @@ export interface AnalysisResult {
   smartScenePreview?: SmartScenePreviewPayload;
   /** User-visible quick-mode run receipt. Metadata only; never claim support evidence. */
   quickRun?: QuickRunReceipt;
+  analysisReceipt?: AnalysisReceiptV1;
+  uiActionProposals?: UiActionProposalV1[];
 }
 
 export type AgentRuntimeAnalysisResult = AnalysisResult;
@@ -307,6 +310,8 @@ export interface AnalysisOptions {
    */
   referenceTraceId?: string;
 
+  tracePairContext?: import('../../agentv3/types').TracePairContext;
+
   /**
    * Analysis mode override from UI/CLI.
    * - 'fast': force quick path (target 5 turns, hard-cap protected)
@@ -330,6 +335,8 @@ export interface AnalysisOptions {
   codeAwareMode?: CodeAwareMode;
   /** Explicit codebase allowlist for this analysis session. */
   codebaseIds?: string[];
+  /** Explicit external knowledge-source allowlist for this analysis session. */
+  knowledgeSourceIds?: string[];
 
   /**
    * Enterprise persistence scope supplied by the route layer.
@@ -358,6 +365,7 @@ export interface TraceDataset {
   sourceToolCallId?: string;
   queryHash?: string;
   traceSide?: 'current' | 'reference';
+  paneSide?: import('../../agentv3/types').TracePaneSide;
   traceId?: string;
 }
 

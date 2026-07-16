@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartperfetto.dev/schemas/trace-scenario-v1.json",
+  "title": "SmartPerfetto Constructed Trace Scenario",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "clock", "actors", "signals"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "clock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["anchor", "duration_ns"],
+      "properties": {
+        "anchor": {"enum": ["trace-start", "trace-middle", "trace-end"]},
+        "duration_ns": {"type": "string", "pattern": "^[1-9][0-9]*$"}
+      }
+    },
+    "actors": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["processes", "threads"],
+      "properties": {
+        "processes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "name"],
+            "properties": {
+              "id": {"type": "string", "minLength": 1},
+              "name": {"type": "string", "minLength": 1},
+              "uid": {"type": "integer", "minimum": 0}
+            }
+          }
+        },
+        "threads": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "process", "name"],
+            "properties": {
+              "id": {"type": "string", "minLength": 1},
+              "process": {"type": "string", "minLength": 1},
+              "name": {"type": "string", "minLength": 1},
+              "is_main": {"type": "boolean"}
+            }
+          }
+        }
+      }
+    },
+    "signals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "at_ns"],
+        "properties": {
+          "type": {
+            "enum": [
+              "atrace-slice", "atrace-counter", "atrace-async-slice", "atrace-async-track-slice",
+              "sched-running", "process-stats", "battery-counters", "power-rail",
+              "gpu-work-period", "gpu-frequency", "gpu-power-state", "cpu-frequency", "cpu-idle",
+              "irq-span", "frame-timeline", "lmk-kill"
+            ]
+          },
+          "at_ns": {"type": "string", "pattern": "^[0-9]+$"},
+          "duration_ns": {"type": "string", "pattern": "^[0-9]+$"},
+          "process": {"type": "string"},
+          "thread": {"type": "string"},
+          "name": {"type": "string"},
+          "track_name": {"type": "string"},
+          "subsystem": {"type": "string"},
+          "layer_name": {"type": "string"},
+          "value": {"type": "number"},
+          "cpu": {"type": "integer", "minimum": 0},
+          "cpu_id": {"type": "integer", "minimum": 0},
+          "gpu_id": {"type": "integer", "minimum": 0},
+          "uid": {"type": "integer", "minimum": 0},
+          "irq": {"type": "integer", "minimum": 0},
+          "cookie": {"type": "integer", "minimum": 0},
+          "token": {"type": "integer", "minimum": 0},
+          "display_frame_token": {"type": "integer", "minimum": 0},
+          "jank_type": {"type": "integer", "minimum": 0},
+          "old_state": {"type": "integer", "minimum": 0},
+          "new_state": {"type": "integer", "minimum": 0},
+          "state": {"type": "integer", "minimum": 0},
+          "kill_reason": {"type": "integer", "minimum": 0},
+          "oom_score_adj": {"type": "integer"},
+          "vm_rss_kb": {"type": "integer", "minimum": 0},
+          "rss_anon_kb": {"type": "integer", "minimum": 0},
+          "rss_file_kb": {"type": "integer", "minimum": 0},
+          "rss_shmem_kb": {"type": "integer", "minimum": 0},
+          "vm_swap_kb": {"type": "integer", "minimum": 0},
+          "vm_hwm_kb": {"type": "integer", "minimum": 0},
+          "capacity_percent": {"type": "number"},
+          "charge_counter_uah": {"type": "string", "pattern": "^-?[0-9]+$"},
+          "current_ua": {"type": "string", "pattern": "^-?[0-9]+$"},
+          "current_avg_ua": {"type": "string", "pattern": "^-?[0-9]+$"},
+          "energy_counter_uwh": {"type": "string", "pattern": "^-?[0-9]+$"},
+          "voltage_uv": {"type": "string", "pattern": "^-?[0-9]+$"},
+          "start_energy_uws": {"type": "string", "pattern": "^[0-9]+$"},
+          "end_energy_uws": {"type": "string", "pattern": "^[0-9]+$"},
+          "active_duration_ns": {"type": "string", "pattern": "^[0-9]+$"},
+          "end_state": {"enum": ["R", "S", "D"]}
+        }
+      }
+    }
+  }
+}

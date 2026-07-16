@@ -25,6 +25,11 @@ export interface PlanToolCallRecorderInput {
   timestamp?: number;
 }
 
+export interface AnalysisPlanTracker {
+  current: AnalysisPlanV3 | null;
+  prePlanToolCallLog?: ToolCallRecord[];
+}
+
 export interface PlanEvidenceGap {
   phase: PlanPhase;
   matchedCalls: ToolCallRecord[];
@@ -33,6 +38,15 @@ export interface PlanEvidenceGap {
 
 function shortToolName(toolName: string): string {
   return toolName.startsWith(MCP_NAME_PREFIX) ? toolName.slice(MCP_NAME_PREFIX.length) : toolName;
+}
+
+function buildToolCallRecord(input: PlanToolCallRecorderInput): ToolCallRecord {
+  const callSummary = summarizeToolCallInput(shortToolName(input.toolName), input.input);
+  return {
+    toolName: input.toolName,
+    timestamp: input.timestamp ?? Date.now(),
+    ...callSummary,
+  };
 }
 
 function parseLeadingJsonObject(text: string): Record<string, unknown> | null {
@@ -106,12 +120,7 @@ export function recordPlanToolCall(
   }
   const shortName = shortToolName(input.toolName);
   const canSatisfyEvidence = isEvidenceCapableToolName(shortName);
-  const callSummary = summarizeToolCallInput(shortName, input.input);
-  const candidate: ToolCallRecord = {
-    toolName: input.toolName,
-    timestamp: input.timestamp ?? Date.now(),
-    ...callSummary,
-  };
+  const candidate = buildToolCallRecord(input);
 
   const expectedGapPhase = canSatisfyEvidence ? findBestPhaseForExpectedCallGap(plan, candidate) : undefined;
   const toolReturnedPhaseId = extractPlanPhaseIdFromToolResult(input.resultText);
@@ -143,6 +152,55 @@ export function recordPlanToolCall(
     plan.toolCallLog.splice(0, plan.toolCallLog.length - MAX_PLAN_TOOL_CALL_LOG);
   }
   return record;
+}
+
+export function recordPlanOrPrePlanToolCall(
+  tracker: AnalysisPlanTracker | null | undefined,
+  input: PlanToolCallRecorderInput,
+): ToolCallRecord | undefined {
+  if (!tracker) return undefined;
+  if (tracker.current) {
+    return recordPlanToolCall(tracker.current, input);
+  }
+
+  const shortName = shortToolName(input.toolName);
+  if (!isEvidenceCapableToolName(shortName)) return undefined;
+
+  if (!Array.isArray(tracker.prePlanToolCallLog)) {
+    tracker.prePlanToolCallLog = [];
+  }
+  const record = buildToolCallRecord(input);
+  tracker.prePlanToolCallLog.push(record);
+  if (tracker.prePlanToolCallLog.length > MAX_PLAN_TOOL_CALL_LOG) {
+    tracker.prePlanToolCallLog.splice(0, tracker.prePlanToolCallLog.length - MAX_PLAN_TOOL_CALL_LOG);
+  }
+  return record;
+}
+
+export function replayPrePlanToolCalls(tracker: AnalysisPlanTracker | null | undefined): number {
+  const plan = tracker?.current;
+  const prePlanToolCallLog = tracker?.prePlanToolCallLog;
+  if (!plan || !Array.isArray(prePlanToolCallLog) || prePlanToolCallLog.length === 0) return 0;
+  if (!Array.isArray(plan.toolCallLog)) {
+    plan.toolCallLog = [];
+  }
+
+  let replayed = 0;
+  for (const candidate of prePlanToolCallLog) {
+    const matchedPhase = findBestPhaseForExpectedCallGap(plan, candidate);
+    if (!matchedPhase) continue;
+    plan.toolCallLog.push({
+      ...candidate,
+      matchedPhaseId: matchedPhase.id,
+    });
+    replayed++;
+    if (plan.toolCallLog.length > MAX_PLAN_TOOL_CALL_LOG) {
+      plan.toolCallLog.splice(0, plan.toolCallLog.length - MAX_PLAN_TOOL_CALL_LOG);
+    }
+  }
+
+  tracker.prePlanToolCallLog = [];
+  return replayed;
 }
 
 export function findMissingExpectedCallsForPhase(

@@ -9,6 +9,7 @@ import {
   buildQuickConversationContext,
   buildQuickMemoryContext,
   buildQuickMemoryContextPayload,
+  buildTraceContextDataEnvelopes,
   buildRuntimeSessionMapKey,
   collectRecentFindings,
   decorateTraceContextDatasets,
@@ -63,15 +64,25 @@ describe('runtimeCommon', () => {
         ['doFrame', 16.7],
         ['binder', null],
       ],
+      traceSide: 'reference',
+      paneSide: 'right',
+      traceId: 'trace-b',
     }], 'trace-a');
     const markdown = formatTraceContext(datasets, 'en');
+    const envelopes = buildTraceContextDataEnvelopes(datasets, 'trace-a');
 
     expect(markdown).toContain('## Frontend Pre-queried Trace Data');
     expect(markdown).toContain('### Frame stats');
-    expect(markdown).toContain('evidence_ref_id: `data:frontend_prequery:current:');
+    expect(markdown).toContain('evidence_ref_id: `data:frontend_prequery:reference:');
     expect(markdown).toContain('source_tool_call_id: `frontend-prequery:');
+    expect(markdown).toContain('trace_side: `reference`');
+    expect(markdown).toContain('pane_side: `right`');
     expect(markdown).toContain('| doFrame | 16.7 |');
     expect(markdown).toContain('| binder | - |');
+    expect(datasets?.[0].paneSide).toBe('right');
+    expect(envelopes[0].meta.traceSide).toBe('reference');
+    expect(envelopes[0].meta.paneSide).toBe('right');
+    expect(envelopes[0].meta.traceId).toBe('trace-b');
   });
 
   it('keeps runtime caches bounded with shared LRU semantics', () => {

@@ -17,6 +17,12 @@ import { getTraceProcessorService } from '../services/traceProcessorService';
 import { resolveAgentRuntimeSelection } from '../agentRuntime';
 import { getOpenAIRuntimeDiagnostics, hasOpenAICredentials } from '../agentOpenAI';
 import type { TraceDataset } from '../agent/core/orchestratorTypes';
+import type {
+  SelectionContext,
+  TracePairContext,
+  TracePairLayout,
+  TraceSource,
+} from '../agentv3/types';
 import {
   DEFAULT_DEV_USER_ID,
   DEFAULT_TENANT_ID,
@@ -29,6 +35,7 @@ type SmartAction = 'preview' | 'analyze';
 
 interface VerifyOptions {
   tracePath: string;
+  referenceTracePath?: string;
   query: string;
   timeoutMs: number;
   maxRounds: number;
@@ -43,6 +50,7 @@ interface VerifyOptions {
   preset?: 'smart';
   /** Frontend-style pre-queried trace datasets forwarded as top-level traceContext. */
   traceContext?: TraceDataset[];
+  selectionContext?: SelectionContext;
   /** Smart action forwarded as options.smartAction. Defaults to analyze for --mode smart CLI runs. */
   smartAction?: SmartAction;
   /** Smart scene selection forwarded as options.smartSelection. */
@@ -100,6 +108,12 @@ interface VerifyOptions {
   requiredTools: string[];
   /** Skill ids that must be dispatched through invoke_skill during the run. */
   requiredSkills: string[];
+  tracePairLayout: TracePairLayout;
+  tracePairWorkspaceOpen: boolean;
+  tracePairSplitPercent: number;
+  tracePairActiveTraceSide: TraceSource;
+  tracePairMaximizedTraceSide?: TraceSource;
+  tracePairMinimizedTraceSides: TraceSource[];
 }
 
 interface SseSummary {
@@ -174,14 +188,15 @@ interface SseSummary {
   skillCallCounts: Record<string, number>;
 }
 
-const DEFAULT_TRACE = '../test-traces/scroll-demo-customer-scroll.pftrace';
+const DEFAULT_TRACE = '../Trace/real/android-scroll-customer/trace.pftrace';
 const DEFAULT_QUERY = '分析滑动性能';
 
 function printUsage(): void {
   console.log('Usage: npx tsx src/scripts/verifyAgentSseScrolling.ts [options]');
   console.log('');
   console.log('Options:');
-  console.log('  --trace <path>                    Trace path (default: ../test-traces/scroll-demo-customer-scroll.pftrace)');
+  console.log('  --trace <path>                    Trace path (default: ../Trace/real/android-scroll-customer/trace.pftrace)');
+  console.log('  --reference-trace <path>          Reference trace path for raw dual-trace comparison');
   console.log('  --query <text>                    Analyze query (default: 分析滑动性能)');
   console.log('  --timeout-ms <number>             SSE timeout in ms (default: 600000)');
   console.log('  --max-rounds <number>             Analysis max rounds (default: 3)');
@@ -189,6 +204,8 @@ function printUsage(): void {
   console.log('  --mode <fast|full|auto|smart>     Override analysisMode, or use smart as shorthand for --preset smart');
   console.log('  --preset <smart>                  Forward preset to the backend');
   console.log('  --trace-context-json <json|@file> Forward frontend-style traceContext datasets');
+  console.log('  --selection-context-json <json|@file>');
+  console.log('                                      Forward frontend-style selectionContext');
   console.log('  --smart-action <preview|analyze>  Smart action (default: analyze for --mode/--preset smart)');
   console.log('  --smart-scope <all|scene_types|scene_ids>');
   console.log('                                      Smart selection scope (default: all for analyze)');
@@ -214,6 +231,16 @@ function printUsage(): void {
   console.log('  --forbid-degraded-fallback <name>  Fail if a degraded event with this fallback is emitted; repeatable');
   console.log('  --require-tool <name>              Require an agent_task_dispatched tool call; repeatable');
   console.log('  --require-skill <skillId>          Require an invoke_skill call for a specific skillId; repeatable');
+  console.log('  --trace-pair-layout <horizontal|vertical>');
+  console.log('                                      Dual-trace visual layout metadata (default: horizontal)');
+  console.log('  --trace-pair-workspace-open        Mark both trace panes as visible in the same-page workspace');
+  console.log('  --trace-pair-split <number>        Primary pane split percent, clamped to 18..82 (default: 50)');
+  console.log('  --trace-pair-active <current|reference>');
+  console.log('                                      Active/focused trace pane (default: current)');
+  console.log('  --trace-pair-maximized <current|reference>');
+  console.log('                                      Mark one trace pane as maximized in tracePairContext');
+  console.log('  --trace-pair-minimized <current|reference>');
+  console.log('                                      Mark a trace pane as minimized; repeatable');
   console.log('  --require-data-envelope            Require at least one SSE data envelope, including in fast mode');
   console.log('  --require-quick-run                Require analysis_completed.quickRun receipt metadata');
   console.log('  --allow-no-data-envelopes          Do not require data envelopes in full mode');
@@ -248,6 +275,17 @@ function parseTraceContextArg(value: string): TraceDataset[] {
   return datasets;
 }
 
+function parseSelectionContextArg(value: string): SelectionContext {
+  const raw = value.startsWith('@')
+    ? fs.readFileSync(path.resolve(process.cwd(), value.slice(1)), 'utf8')
+    : value;
+  const parsed = JSON.parse(raw) as unknown;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('--selection-context-json must be a JSON object');
+  }
+  return parsed as SelectionContext;
+}
+
 function parseArgs(argv: string[]): VerifyOptions {
   const options: VerifyOptions = {
     tracePath: path.resolve(process.cwd(), DEFAULT_TRACE),
@@ -276,6 +314,11 @@ function parseArgs(argv: string[]): VerifyOptions {
     allowCapabilityLimitedRuntime: false,
     requiredTools: [],
     requiredSkills: [],
+    tracePairLayout: 'horizontal',
+    tracePairWorkspaceOpen: false,
+    tracePairSplitPercent: 50,
+    tracePairActiveTraceSide: 'current',
+    tracePairMinimizedTraceSides: [],
   };
   let smartScope: 'all' | 'scene_types' | 'scene_ids' | undefined;
   const smartSceneTypes: string[] = [];
@@ -361,6 +404,15 @@ function parseArgs(argv: string[]): VerifyOptions {
         throw new Error('--trace requires a value');
       }
       options.tracePath = path.resolve(process.cwd(), next);
+      i += 1;
+      continue;
+    }
+
+    if (arg === '--reference-trace') {
+      if (!next) {
+        throw new Error('--reference-trace requires a value');
+      }
+      options.referenceTracePath = path.resolve(process.cwd(), next);
       i += 1;
       continue;
     }
@@ -464,6 +516,15 @@ function parseArgs(argv: string[]): VerifyOptions {
         throw new Error('--trace-context-json requires a value');
       }
       options.traceContext = parseTraceContextArg(next);
+      i += 1;
+      continue;
+    }
+
+    if (arg === '--selection-context-json') {
+      if (!next) {
+        throw new Error('--selection-context-json requires a value');
+      }
+      options.selectionContext = parseSelectionContextArg(next);
       i += 1;
       continue;
     }
@@ -625,6 +686,66 @@ function parseArgs(argv: string[]): VerifyOptions {
       continue;
     }
 
+    if (arg === '--trace-pair-layout') {
+      if (!next) {
+        throw new Error('--trace-pair-layout requires a value');
+      }
+      if (next !== 'horizontal' && next !== 'vertical') {
+        throw new Error(`Invalid --trace-pair-layout value: ${next} (expected horizontal|vertical)`);
+      }
+      options.tracePairLayout = next;
+      i += 1;
+      continue;
+    }
+
+    if (arg === '--trace-pair-workspace-open') {
+      options.tracePairWorkspaceOpen = true;
+      continue;
+    }
+
+    if (arg === '--trace-pair-split') {
+      if (!next) {
+        throw new Error('--trace-pair-split requires a value');
+      }
+      const parsed = Number.parseFloat(next);
+      if (!Number.isFinite(parsed)) {
+        throw new Error(`Invalid --trace-pair-split value: ${next}`);
+      }
+      options.tracePairSplitPercent = parsed;
+      i += 1;
+      continue;
+    }
+
+    if (arg === '--trace-pair-active') {
+      if (!next) {
+        throw new Error('--trace-pair-active requires a value');
+      }
+      options.tracePairActiveTraceSide = parseTraceSourceArg(next, '--trace-pair-active');
+      i += 1;
+      continue;
+    }
+
+    if (arg === '--trace-pair-maximized') {
+      if (!next) {
+        throw new Error('--trace-pair-maximized requires a value');
+      }
+      options.tracePairMaximizedTraceSide = parseTraceSourceArg(next, '--trace-pair-maximized');
+      i += 1;
+      continue;
+    }
+
+    if (arg === '--trace-pair-minimized') {
+      if (!next) {
+        throw new Error('--trace-pair-minimized requires a value');
+      }
+      const traceSide = parseTraceSourceArg(next, '--trace-pair-minimized');
+      if (!options.tracePairMinimizedTraceSides.includes(traceSide)) {
+        options.tracePairMinimizedTraceSides.push(traceSide);
+      }
+      i += 1;
+      continue;
+    }
+
     if (arg === '--output') {
       if (!next) {
         throw new Error('--output requires a value');
@@ -666,6 +787,11 @@ function parseArgs(argv: string[]): VerifyOptions {
   }
 
   return options;
+}
+
+function parseTraceSourceArg(value: string, flag: string): TraceSource {
+  if (value === 'current' || value === 'reference') return value;
+  throw new Error(`Invalid ${flag} value: ${value} (expected current|reference)`);
 }
 
 function normalizeProviderIdArg(value: string): string | null {
@@ -770,6 +896,94 @@ function hasConcreteCodeReferences(text: string): boolean {
     || /\b(?:resolve_symbol|lookup_app_source)\s*\(/i.test(text)
     || (/\bfilePath\b/i.test(text) && /\blineRange\b/i.test(text))
     || /\b[\w.-]+(?:\/[\w.-]+)+\.(?:kt|java|kts|xml|cpp|cc|c|h|hpp|m|mm|swift|rs|go|py|ts|tsx|js|jsx|sql|md)(?::(?:L)?\d+(?:-\d+)?|\s+L\d+(?:-\d+)?)\b/i.test(text);
+}
+
+function clampTracePairSplitPercent(value: number): number {
+  if (!Number.isFinite(value)) return 50;
+  return Math.min(82, Math.max(18, Math.round(value)));
+}
+
+function isTracePairPaneLive(
+  options: VerifyOptions,
+  traceSide: TraceSource,
+): boolean {
+  if (!options.tracePairWorkspaceOpen) return traceSide === 'current';
+  if (
+    options.tracePairMaximizedTraceSide &&
+    options.tracePairMaximizedTraceSide !== traceSide
+  ) {
+    return false;
+  }
+  return !options.tracePairMinimizedTraceSides.includes(traceSide);
+}
+
+function buildTracePairContextForVerification(input: {
+  options: VerifyOptions;
+  traceId: string;
+  referenceTraceId: string;
+}): TracePairContext {
+  const { options, traceId, referenceTraceId } = input;
+  const primarySide = options.tracePairLayout === 'vertical' ? 'top' : 'left';
+  const referenceSide = options.tracePairLayout === 'vertical' ? 'bottom' : 'right';
+  const activeSide = options.tracePairActiveTraceSide === 'reference'
+    ? referenceSide
+    : primarySide;
+
+  return {
+    schemaVersion: 1,
+    layout: options.tracePairLayout,
+    primarySide,
+    referenceSide,
+    activeSide,
+    workspaceOpen: options.tracePairWorkspaceOpen,
+    splitPercent: clampTracePairSplitPercent(options.tracePairSplitPercent),
+    ...(options.tracePairMaximizedTraceSide
+      ? { maximizedTraceSide: options.tracePairMaximizedTraceSide }
+      : {}),
+    ...(options.tracePairMinimizedTraceSides.length > 0
+      ? { minimizedTraceSides: options.tracePairMinimizedTraceSides }
+      : {}),
+    aliases: {
+      left: 'current',
+      top: 'current',
+      primary: 'current',
+      main: 'current',
+      current: 'current',
+      '左': 'current',
+      '左侧': 'current',
+      '上': 'current',
+      '上方': 'current',
+      '主': 'current',
+      '当前': 'current',
+      right: 'reference',
+      bottom: 'reference',
+      reference: 'reference',
+      baseline: 'reference',
+      '右': 'reference',
+      '右侧': 'reference',
+      '下': 'reference',
+      '下方': 'reference',
+      '参考': 'reference',
+    },
+    panes: [
+      {
+        side: primarySide,
+        traceSide: 'current',
+        traceId,
+        traceName: path.basename(options.tracePath),
+        active: options.tracePairActiveTraceSide === 'current',
+        visualState: isTracePairPaneLive(options, 'current') ? 'live' : 'context_only',
+      },
+      {
+        side: referenceSide,
+        traceSide: 'reference',
+        traceId: referenceTraceId,
+        traceName: path.basename(options.referenceTracePath || 'reference.trace'),
+        active: options.tracePairActiveTraceSide === 'reference',
+        visualState: isTracePairPaneLive(options, 'reference') ? 'live' : 'context_only',
+      },
+    ],
+  };
 }
 
 interface TextChecks {
@@ -1144,6 +1358,9 @@ async function main(): Promise<void> {
   if (!fs.existsSync(options.tracePath)) {
     throw new Error(`Trace file not found: ${options.tracePath}`);
   }
+  if (options.referenceTracePath && !fs.existsSync(options.referenceTracePath)) {
+    throw new Error(`Reference trace file not found: ${options.referenceTracePath}`);
+  }
 
   const runtimeSelection = resolveAgentRuntimeSelection(options.providerId);
   if (runtimeSelection.kind === 'openai-agents-sdk' && !hasOpenAICredentials(options.providerId)) {
@@ -1166,6 +1383,7 @@ async function main(): Promise<void> {
 
   const traceProcessorService = getTraceProcessorService();
   let traceId = '';
+  let referenceTraceId = '';
   let sessionId = '';
 
   try {
@@ -1182,14 +1400,37 @@ async function main(): Promise<void> {
       userId: DEFAULT_DEV_USER_ID,
     });
 
+    let tracePairContext: TracePairContext | undefined;
+    if (options.referenceTracePath) {
+      referenceTraceId = await traceProcessorService.loadTraceFromFilePath(options.referenceTracePath);
+      await writeTraceMetadata({
+        id: referenceTraceId,
+        filename: path.basename(options.referenceTracePath),
+        size: fs.statSync(options.referenceTracePath).size,
+        uploadedAt: new Date().toISOString(),
+        status: 'ready',
+        path: traceProcessorService.getTraceFilePath(referenceTraceId),
+        tenantId: DEFAULT_TENANT_ID,
+        workspaceId: DEFAULT_WORKSPACE_ID,
+        userId: DEFAULT_DEV_USER_ID,
+      });
+      tracePairContext = buildTracePairContextForVerification({
+        options,
+        traceId,
+        referenceTraceId,
+      });
+    }
+
     const startResponse = await fetch(`${baseUrl}/api/agent/v1/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         traceId,
         query: options.query,
+        ...(referenceTraceId ? { referenceTraceId } : {}),
         ...(options.providerId !== undefined ? { providerId: options.providerId } : {}),
         ...(options.traceContext ? { traceContext: options.traceContext } : {}),
+        ...(options.selectionContext ? { selectionContext: options.selectionContext } : {}),
         options: {
           maxRounds: options.maxRounds,
           confidenceThreshold: options.confidenceThreshold,
@@ -1200,6 +1441,7 @@ async function main(): Promise<void> {
           ...(options.analysisMode ? { analysisMode: options.analysisMode } : {}),
           ...(options.codeAwareMode ? { codeAwareMode: options.codeAwareMode } : {}),
           ...(options.codebaseIds.length > 0 ? { codebaseIds: options.codebaseIds } : {}),
+          ...(tracePairContext ? { tracePairContext } : {}),
         },
       }),
     });
@@ -1238,6 +1480,12 @@ async function main(): Promise<void> {
         hasPlanSubmitted: sse.planSubmittedCount > 0,
         hasArchitectureDetected: sse.architectureDetectedCount > 0,
       };
+    const dualTraceChecks = options.referenceTracePath
+      ? {
+        hasReferenceTraceId: referenceTraceId.length > 0,
+        hasTracePairContext: Boolean(tracePairContext),
+      }
+      : {};
 
     // Mode expectation: if the caller pinned `--mode fast|full`, verify the backend honored it.
     // Catches regressions where a fast CLI flag silently falls back to the full pipeline (or vice versa).
@@ -1321,6 +1569,7 @@ async function main(): Promise<void> {
     const checks = {
       ...requiredChecks,
       ...fullModeChecks,
+      ...dualTraceChecks,
       ...modeExpectationChecks,
       ...conclusionEvidenceChecks,
       ...codeReferenceChecks,
@@ -1339,6 +1588,7 @@ async function main(): Promise<void> {
     };
     let passed = Object.values(requiredChecks).every(Boolean)
       && Object.values(modeExpectationChecks).every(Boolean)
+      && Object.values(dualTraceChecks).every(Boolean)
       && Object.values(conclusionEvidenceChecks).every(Boolean)
       && Object.values(codeReferenceChecks).every(Boolean)
       && Object.values(claimVerifierChecks).every(Boolean)
@@ -1362,13 +1612,16 @@ async function main(): Promise<void> {
         body: JSON.stringify({
           traceId,
           query: options.followUpQuery,
+          ...(referenceTraceId ? { referenceTraceId } : {}),
           ...(options.providerId !== undefined ? { providerId: options.providerId } : {}),
+          ...(options.selectionContext ? { selectionContext: options.selectionContext } : {}),
           options: {
             maxRounds: options.maxRounds,
             confidenceThreshold: options.confidenceThreshold,
             ...(options.analysisMode ? { analysisMode: options.analysisMode } : {}),
             ...(options.codeAwareMode ? { codeAwareMode: options.codeAwareMode } : {}),
             ...(options.codebaseIds.length > 0 ? { codebaseIds: options.codebaseIds } : {}),
+            ...(tracePairContext ? { tracePairContext } : {}),
           },
         }),
       });
@@ -1430,9 +1683,13 @@ async function main(): Promise<void> {
     const output = {
       timestamp: new Date().toISOString(),
       tracePath: options.tracePath,
+      referenceTracePath: options.referenceTracePath,
       query: options.query,
       preset: options.preset,
+      selectionContext: options.selectionContext,
       traceId,
+      referenceTraceId: referenceTraceId || undefined,
+      tracePairContext,
       sessionId,
       checks,
       passed,
@@ -1466,6 +1723,13 @@ async function main(): Promise<void> {
     if (traceId !== '' && !options.keepTrace) {
       try {
         await traceProcessorService.deleteTrace(traceId);
+      } catch {
+      }
+    }
+
+    if (referenceTraceId !== '' && !options.keepTrace) {
+      try {
+        await traceProcessorService.deleteTrace(referenceTraceId);
       } catch {
       }
     }

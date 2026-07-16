@@ -49,6 +49,7 @@ describe('AnalysisRunSpec shadow mode', () => {
       }],
       codeAwareMode: 'provider_send',
       codebaseIds: ['app', 'app', 'lib'],
+      knowledgeSourceIds: ['wiki-a', 'wiki-a', 'wiki-b'],
     };
 
     const spec = createAnalysisRunSpec({
@@ -91,6 +92,7 @@ describe('AnalysisRunSpec shadow mode', () => {
       },
       codeAwareMode: 'provider_send',
       codebaseIds: ['app', 'lib'],
+      knowledgeSourceIds: ['wiki-a', 'wiki-b'],
     });
     expect(spec.budget).toMatchObject({
       model: 'claude-sonnet-4-6',

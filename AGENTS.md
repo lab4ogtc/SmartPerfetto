@@ -50,6 +50,11 @@ cd backend && npm run build
 - Keep Provider Manager/runtime provider pinning semantics intact.
 - Do not push a root commit that points at a local-only `perfetto/` submodule
   commit.
+- Before committing or pushing changes to Skills, Strategies, portable SQL,
+  evidence/identity contracts, trace-processor pins, or the public exporter,
+  run `npm run check:perfetto-skills-impact` with the arguments defined in
+  `.claude/rules/skills.md` and record `required`, `not_required`, or `deferred` with the required
+  reason/handoff and change fingerprint.
 - Before feature or bug work, check the affected product surfaces in
   `.claude/rules/product-surface.md`.
 - Before syncing, rebasing, merging, or upgrading official Perfetto code,

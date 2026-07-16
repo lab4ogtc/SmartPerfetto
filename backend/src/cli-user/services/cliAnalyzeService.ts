@@ -34,6 +34,8 @@ import { SessionPersistenceService } from '../../services/sessionPersistenceServ
 import { getHTMLReportGenerator } from '../../services/htmlReportGenerator';
 import { buildAgentDrivenReportData } from '../../services/agentReportData';
 import { normalizeResultForReport } from '../../services/agentResultNormalizer';
+import { buildAnalysisReceipt } from '../../services/analysisReceiptBuilder';
+import { deriveUiActionProposals } from '../../services/uiActionProposalDeriver';
 import { persistAgentTurn } from '../../services/persistAgentSession';
 import { applyFinalResultQualityGate } from '../../services/finalResultQualityGate';
 import { runClaimVerification } from '../../services/verifier/claimVerificationRunner';
@@ -167,6 +169,10 @@ export class CliAnalyzeService {
     return getTraceProcessorService().query(traceId, sql);
   }
 
+  async prepareTraceProcessor(): Promise<void> {
+    await this.ensureTraceProcessorAvailable();
+  }
+
   async runTurn(input: RunTurnInput): Promise<RunTurnOutput> {
     // Resolve traceId: either passed in (we assume caller already loaded), or load now.
     let traceId = input.traceId;
@@ -248,7 +254,7 @@ export class CliAnalyzeService {
     }
     const qualityArtifacts = runClaimVerification({
       conclusionContract: normalized.conclusionContract,
-      dataEnvelopes: session.dataEnvelopes as any,
+      dataEnvelopes: session.dataEnvelopes as DataEnvelope[],
       comparisonReportSection: session.comparisonReportSection,
       policy: 'record_only',
     });
@@ -276,6 +282,18 @@ export class CliAnalyzeService {
         console.error('[CliAnalyzeService] onEvent handler threw:', (err as Error).message);
       }
     }
+    result.uiActionProposals = deriveUiActionProposals({
+      dataEnvelopes: session.dataEnvelopes as DataEnvelope[],
+      currentTraceId: traceId,
+      existingProposals: result.uiActionProposals,
+    });
+    result.analysisReceipt = buildAnalysisReceipt({
+      session,
+      result,
+      qualityArtifacts,
+      quickRun: result.quickRun,
+      providerId: session.providerId ?? null,
+    });
     session.result = result;
     sessionContextManager.get(sessionId, traceId)?.annotateLatestCompletedTurn({
       success: result.success,
@@ -376,6 +394,8 @@ export class CliAnalyzeService {
           partial: normalized.partial,
           terminationReason: normalized.terminationReason,
           terminationMessage: normalized.terminationMessage,
+          analysisReceipt: normalized.analysisReceipt ?? result.analysisReceipt,
+          uiActionProposals: normalized.uiActionProposals ?? result.uiActionProposals,
         },
       });
       const html = getHTMLReportGenerator().generateAgentDrivenHTML(reportData);

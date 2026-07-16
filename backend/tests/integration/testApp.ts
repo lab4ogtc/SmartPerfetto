@@ -24,6 +24,7 @@ import {
 
 // Import services
 import { TraceProcessorService, getTraceProcessorService } from '../../src/services/traceProcessorService';
+import { resolveTraceCase } from '../../src/utils/traceCorpus';
 
 // =============================================================================
 // Test App Factory
@@ -82,7 +83,7 @@ export function createTestApp() {
  * Load a test trace file and return its traceId
  */
 export async function loadTestTrace(traceName: string): Promise<string> {
-  const tracePath = path.resolve(process.cwd(), '..', 'test-traces', traceName);
+  const tracePath = resolveTraceCase(traceName);
 
   if (!fs.existsSync(tracePath)) {
     throw new Error(`Test trace not found: ${tracePath}`);
@@ -112,7 +113,7 @@ export async function cleanupTrace(traceId: string): Promise<void> {
  * Get test trace path
  */
 export function getTestTracePath(traceName: string): string {
-  return path.resolve(process.cwd(), '..', 'test-traces', traceName);
+  return resolveTraceCase(traceName);
 }
 
 /**

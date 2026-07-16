@@ -5,7 +5,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { assertAnalysisRuntimeReady } from '../runtimeGuard';
+import { assertAnalysisRuntimeReady, collectDoctorReport } from '../runtimeGuard';
 import { resetProviderService } from '../../../services/providerManager';
 
 describe('runtime guard', () => {
@@ -19,6 +19,7 @@ describe('runtime guard', () => {
     consoleLogSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'smartperfetto-runtime-guard-'));
     process.env = { ...originalEnv, PROVIDER_DATA_DIR_OVERRIDE: tmpDir };
+    delete process.env.SMARTPERFETTO_AI_ENABLED;
     delete process.env.SMARTPERFETTO_AGENT_RUNTIME;
     delete process.env.SMARTPERFETTO_ENABLE_EXPERIMENTAL_AGENT_RUNTIME;
     delete process.env.SMARTPERFETTO_EXPERIMENTAL_AGENT_RUNTIME;
@@ -54,6 +55,51 @@ describe('runtime guard', () => {
   test('rejects Claude runtime when explicit SDK binary path is not executable', () => {
     process.env.CLAUDE_BINARY_PATH = path.join(tmpDir, 'missing-claude-binary');
     expect(() => assertAnalysisRuntimeReady()).toThrow('native binary is not executable');
+  });
+
+  test('fails analysis guard with AI_DISABLED before runtime credential checks', () => {
+    process.env.SMARTPERFETTO_AI_ENABLED = 'false';
+    process.env.SMARTPERFETTO_AGENT_RUNTIME = 'openai-agents-sdk';
+
+    expect(() => assertAnalysisRuntimeReady()).toThrow('AI is disabled by SMARTPERFETTO_AI_ENABLED=false');
+  });
+
+  test('doctor discloses disabled AI without requiring selected runtime credentials', () => {
+    process.env.SMARTPERFETTO_AI_ENABLED = 'false';
+    process.env.SMARTPERFETTO_AGENT_RUNTIME = 'openai-agents-sdk';
+
+    const report = collectDoctorReport(tmpDir);
+
+    expect(report.ok).toBe(true);
+    expect(report.aiPolicy).toMatchObject({
+      aiEnabled: false,
+      env: {
+        key: 'SMARTPERFETTO_AI_ENABLED',
+        rawValue: 'false',
+        valid: true,
+      },
+    });
+    expect(report.checks.find(check => check.name === 'runtime')).toMatchObject({
+      ok: true,
+      status: 'warn',
+      message: 'AI is disabled; runtime credentials are not required for deterministic CLI flows',
+    });
+  });
+
+  test('doctor reports invalid AI policy env as a configuration error', () => {
+    process.env.SMARTPERFETTO_AI_ENABLED = 'sometimes';
+
+    const report = collectDoctorReport(tmpDir);
+
+    expect(report.ok).toBe(false);
+    expect(report.aiPolicy.env).toMatchObject({
+      rawValue: 'sometimes',
+      valid: false,
+    });
+    expect(report.checks.find(check => check.name === 'ai_policy')).toMatchObject({
+      ok: false,
+      status: 'error',
+    });
   });
 
   test('rejects OpenAI runtime without an API key or local endpoint', () => {

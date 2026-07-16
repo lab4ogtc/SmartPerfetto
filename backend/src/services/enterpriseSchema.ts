@@ -50,6 +50,10 @@ export const ENTERPRISE_CORE_SCHEMA_TABLES = [
   'report_artifacts',
   'memory_entries',
   'skill_registry_entries',
+  'batch_trace_runs',
+  'batch_trace_inputs',
+  'batch_trace_results',
+  'batch_trace_metrics',
   'tenant_tombstones',
   'audit_events',
 ] as const;
@@ -690,6 +694,96 @@ const MIGRATIONS: MigrationStep[] = [
       addColumnIfMissing(db, 'analysis_result_snapshots', 'claim_support_json', 'TEXT');
       addColumnIfMissing(db, 'analysis_result_snapshots', 'claim_verification_json', 'TEXT');
       addColumnIfMissing(db, 'analysis_result_snapshots', 'identity_resolutions_json', 'TEXT');
+    },
+  },
+  {
+    version: 12,
+    up: (db) => {
+      addColumnIfMissing(db, 'skill_registry_entries', 'metadata_json', 'TEXT');
+    },
+  },
+  {
+    version: 13,
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS batch_trace_runs (
+          id TEXT PRIMARY KEY,
+          tenant_id TEXT NOT NULL,
+          workspace_id TEXT NOT NULL,
+          created_by TEXT,
+          skill_id TEXT NOT NULL,
+          status TEXT NOT NULL,
+          schema_version TEXT NOT NULL,
+          params_json TEXT NOT NULL,
+          aggregate_json TEXT,
+          report_json TEXT,
+          comparison_id TEXT,
+          run_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          started_at INTEGER,
+          completed_at INTEGER,
+          FOREIGN KEY (tenant_id) REFERENCES organizations(id) ON DELETE CASCADE,
+          FOREIGN KEY (tenant_id, workspace_id) REFERENCES workspaces(tenant_id, id) ON DELETE CASCADE,
+          FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_batch_trace_runs_workspace
+          ON batch_trace_runs(tenant_id, workspace_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_batch_trace_runs_status
+          ON batch_trace_runs(tenant_id, workspace_id, status, created_at);
+
+        CREATE TABLE IF NOT EXISTS batch_trace_inputs (
+          run_id TEXT NOT NULL,
+          tenant_id TEXT NOT NULL,
+          workspace_id TEXT NOT NULL,
+          ordinal INTEGER NOT NULL,
+          source TEXT NOT NULL,
+          trace_id TEXT,
+          trace_path TEXT,
+          label TEXT,
+          size_bytes INTEGER,
+          PRIMARY KEY(run_id, ordinal),
+          FOREIGN KEY(run_id) REFERENCES batch_trace_runs(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_batch_trace_inputs_trace
+          ON batch_trace_inputs(tenant_id, workspace_id, trace_id);
+
+        CREATE TABLE IF NOT EXISTS batch_trace_results (
+          run_id TEXT NOT NULL,
+          tenant_id TEXT NOT NULL,
+          workspace_id TEXT NOT NULL,
+          ordinal INTEGER NOT NULL,
+          trace_id TEXT,
+          status TEXT NOT NULL,
+          diagnostics_json TEXT NOT NULL,
+          evidence_envelope_ids_json TEXT NOT NULL,
+          execution_time_ms INTEGER NOT NULL,
+          error TEXT,
+          promoted_snapshot_id TEXT,
+          PRIMARY KEY(run_id, ordinal),
+          FOREIGN KEY(run_id) REFERENCES batch_trace_runs(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_batch_trace_results_status
+          ON batch_trace_results(tenant_id, workspace_id, status);
+
+        CREATE TABLE IF NOT EXISTS batch_trace_metrics (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          tenant_id TEXT NOT NULL,
+          workspace_id TEXT NOT NULL,
+          ordinal INTEGER NOT NULL,
+          metric_key TEXT NOT NULL,
+          label TEXT NOT NULL,
+          value_json TEXT,
+          numeric_value REAL,
+          unit TEXT,
+          source_json TEXT NOT NULL,
+          promotable_metric_key TEXT,
+          missing_reason TEXT,
+          FOREIGN KEY(run_id) REFERENCES batch_trace_runs(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_batch_trace_metrics_run_key
+          ON batch_trace_metrics(run_id, metric_key);
+      `);
     },
   },
 ];

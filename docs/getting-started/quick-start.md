@@ -92,3 +92,13 @@
 发布、npm、Docker 或免安装包相关改动还需要读
 [发布手册](../reference/release.md) 和
 [发布规则](../../.claude/rules/release.md)。
+
+## 7. Trace 案例库
+
+仓库的 [Trace 案例库](../../Trace/README.md) 分为真实案例和可复现构造案例。真实案例按“一例一目录”保存 trace、分析结果、日志、来源和 Android/API 元数据；构造案例保存真实 base trace 上的确定性 overlay，并覆盖当前全部 Skill 与 Strategy。
+
+- 检查索引、哈希、发布审批和精确覆盖：`npm run trace:validate`
+- 构建所有组合 trace：`npm run trace:build`
+- 运行完整发布回归：`npm run trace:regression`
+
+新抓取的真实 trace 必须先用 `import-real` 进入被 Git 忽略的 `.private/` 暂存区。完成许可、同意记录、隐私和脱敏审查后，再显式执行 `promote-real`。完整命令、构造场景模板、覆盖质量分级和 Android 版本约定见 [Trace/README.md](../../Trace/README.md)。

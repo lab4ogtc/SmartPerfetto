@@ -1,0 +1,271 @@
+{
+  "schema_version": 1,
+  "id": "input-interaction-latency",
+  "kind": "constructed",
+  "title": "Input and interaction latency",
+  "description": "Deterministic input and interaction latency signals over the android-scroll-customer real base trace.",
+  "scene": "interaction",
+  "tags": [
+    "android",
+    "constructed",
+    "interaction"
+  ],
+  "aliases": [],
+  "trace": {
+    "file": "trace.overlay.pftrace",
+    "format": "perfetto-protobuf",
+    "sha256": "cf03df9f70c45b9e855da8915233c26d985bdb1e8d508d6fb5e1d7c6807968c9",
+    "materialization": "base-plus-overlay"
+  },
+  "android": {
+    "release": "16",
+    "api_level": 36,
+    "device": "OPPO PKH110 base",
+    "build_fingerprint": null,
+    "compatibility": {
+      "min_api": 35,
+      "max_api": 36
+    }
+  },
+  "source": {
+    "origin": "SmartPerfetto deterministic trace generator",
+    "captured_at": null,
+    "imported_at": "2026-07-13T00:00:00.000Z",
+    "license": "AGPL-3.0-or-later",
+    "consent": "generated",
+    "privacy_review": "not-applicable",
+    "sanitization_review": "not-applicable",
+    "publication": "public"
+  },
+  "analysis": {
+    "results": [
+      "analysis/expected.json"
+    ],
+    "logs": []
+  },
+  "construction": {
+    "base_case_id": "android-scroll-customer",
+    "scenario_file": "scenario.json",
+    "generator_version": 1,
+    "seed": "input-interaction-latency-v1",
+    "output": "Trace/.generated/constructed/input-interaction-latency/trace.pftrace"
+  },
+  "coverage": {
+    "skills": [
+      "app_lifecycle_in_range",
+      "battery_doze_state_timeline",
+      "click_response_analysis",
+      "click_response_detail",
+      "device_state_timeline",
+      "input_events_in_range",
+      "input_module",
+      "main_thread_handler_callback_slices",
+      "navigation_analysis",
+      "scene_reconstruction",
+      "state_timeline",
+      "touch_to_display_latency"
+    ],
+    "strategies": [
+      "interaction",
+      "touch_tracking"
+    ],
+    "expectations": [
+      {
+        "id": "definition-app_lifecycle_in_range",
+        "type": "skill",
+        "target": "app_lifecycle_in_range",
+        "mode": "definition",
+        "source_file": "backend/skills/atomic/app_lifecycle_in_range.skill.yaml",
+        "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+      },
+      {
+        "id": "execute-battery_doze_state_timeline",
+        "type": "skill",
+        "target": "battery_doze_state_timeline",
+        "mode": "semantic",
+        "source_file": "backend/skills/atomic/battery_doze_state_timeline.skill.yaml",
+        "parameters": {},
+        "required_steps": [
+          "deep_idle_intervals"
+        ],
+        "semantic_step": "deep_idle_intervals",
+        "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+      },
+      {
+        "id": "execute-click_response_analysis",
+        "type": "skill",
+        "target": "click_response_analysis",
+        "mode": "semantic",
+        "source_file": "backend/skills/composite/click_response_analysis.skill.yaml",
+        "parameters": {
+          "slow_event_threshold_ms": 100,
+          "avg_latency_critical_ms": 100,
+          "avg_handling_warning_ms": 50,
+          "avg_dispatch_warning_ms": 20,
+          "binder_blocking_threshold_ms": 30,
+          "critical_event_threshold_ms": 200,
+          "thread_state_min_dur_ms": 50,
+          "enable_per_event_detail": true
+        },
+        "required_steps": [
+          "check_input_data"
+        ],
+        "semantic_step": "check_input_data",
+        "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+      },
+      {
+        "id": "execute-click_response_detail",
+        "type": "skill",
+        "target": "click_response_detail",
+        "mode": "semantic",
+        "source_file": "backend/skills/composite/click_response_detail.skill.yaml",
+        "parameters": {
+          "event_ts": "${trace_start}",
+          "event_end_ts": "${trace_end}",
+          "total_ms": 1,
+          "process_name": "com.smartperfetto.fixture"
+        },
+        "required_steps": [
+          "init_cpu_topology",
+          "event_info"
+        ],
+        "semantic_step": "event_info",
+        "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+      },
+      {
+        "id": "execute-device_state_timeline",
+        "type": "skill",
+        "target": "device_state_timeline",
+        "mode": "semantic",
+        "source_file": "backend/skills/atomic/device_state_timeline.skill.yaml",
+        "parameters": {},
+        "required_steps": [
+          "cpu_freq_transitions"
+        ],
+        "semantic_step": "cpu_freq_transitions",
+        "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+      },
+      {
+        "id": "definition-input_events_in_range",
+        "type": "skill",
+        "target": "input_events_in_range",
+        "mode": "definition",
+        "source_file": "backend/skills/atomic/input_events_in_range.skill.yaml",
+        "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+      },
+      {
+        "id": "execute-input_module",
+        "type": "skill",
+        "target": "input_module",
+        "mode": "semantic",
+        "source_file": "backend/skills/modules/framework/input_module.skill.yaml",
+        "parameters": {},
+        "required_steps": [
+          "click_response_overview"
+        ],
+        "semantic_step": "click_response_overview",
+        "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+      },
+      {
+        "id": "execute-main_thread_handler_callback_slices",
+        "type": "skill",
+        "target": "main_thread_handler_callback_slices",
+        "mode": "semantic",
+        "source_file": "backend/skills/atomic/main_thread_handler_callback_slices.skill.yaml",
+        "parameters": {
+          "package": "",
+          "start_ts": "${trace_start}",
+          "end_ts": "${trace_end}",
+          "min_dur_ns": 100000,
+          "top_k": 20
+        },
+        "required_steps": [
+          "callback_slices"
+        ],
+        "semantic_step": "callback_slices",
+        "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+      },
+      {
+        "id": "execute-navigation_analysis",
+        "type": "skill",
+        "target": "navigation_analysis",
+        "mode": "semantic",
+        "source_file": "backend/skills/composite/navigation_analysis.skill.yaml",
+        "parameters": {
+          "slow_navigation_ms": 400,
+          "nav_rating_good_ms": 200,
+          "nav_rating_severe_ms": 700,
+          "slow_lifecycle_ms": 100,
+          "blocking_op_min_dur_ms": 5,
+          "inflate_critical_ms": 100,
+          "binder_blocking_ms": 16,
+          "oncreate_slow_ms": 200
+        },
+        "required_steps": [
+          "check_lifecycle_data",
+          "get_process",
+          "navigation_overview"
+        ],
+        "semantic_step": "navigation_overview",
+        "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+      },
+      {
+        "id": "execute-scene_reconstruction",
+        "type": "skill",
+        "target": "scene_reconstruction",
+        "mode": "semantic",
+        "source_file": "backend/skills/composite/scene_reconstruction.skill.yaml",
+        "parameters": {
+          "trace_id": 1
+        },
+        "required_steps": [
+          "trace_time_range"
+        ],
+        "semantic_step": "trace_time_range",
+        "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+      },
+      {
+        "id": "execute-state_timeline",
+        "type": "skill",
+        "target": "state_timeline",
+        "mode": "semantic",
+        "source_file": "backend/skills/composite/state_timeline.skill.yaml",
+        "parameters": {
+          "trace_id": 1
+        },
+        "required_steps": [
+          "timeline_bounds",
+          "device_state_lane"
+        ],
+        "semantic_step": "device_state_lane",
+        "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+      },
+      {
+        "id": "definition-touch_to_display_latency",
+        "type": "skill",
+        "target": "touch_to_display_latency",
+        "mode": "definition",
+        "source_file": "backend/skills/atomic/touch_to_display_latency.skill.yaml",
+        "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+      },
+      {
+        "id": "strategy-interaction",
+        "type": "strategy",
+        "target": "interaction",
+        "query": "点击",
+        "expected_strategy": "interaction",
+        "source_file": "backend/strategies/interaction.strategy.md",
+        "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+      },
+      {
+        "id": "strategy-touch_tracking",
+        "type": "strategy",
+        "target": "touch_tracking",
+        "query": "跟手度",
+        "expected_strategy": "touch_tracking",
+        "source_file": "backend/strategies/touch-tracking.strategy.md",
+        "required_marker": "SmartPerfetto::CASE::input-interaction-latency"
+      }
+    ]
+  }
+}

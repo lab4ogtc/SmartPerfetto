@@ -22,6 +22,12 @@ import {
 import { hasOpenAICredentials } from '../../agentOpenAI/openAiConfig';
 import { getTraceProcessorPath } from '../../services/workingTraceProcessor';
 import { getProviderService } from '../../services/providerManager';
+import {
+  assertAiFeatureEnabled,
+  getAiCapabilityPolicy,
+  type AiCapabilityFeature,
+  type AiCapabilityPolicyV1,
+} from '../../services/aiCapabilityPolicy';
 import { parseAdbDevices } from './androidCapture';
 import { resolveAdbTool, resolveTraceboxTool } from './captureTools';
 import type { CaptureToolResolution } from '../types';
@@ -34,6 +40,7 @@ export interface RuntimeGuardResult {
 export interface RuntimeGuardOptions {
   providerId?: string | null;
   runtimeOverride?: BackendAgentRuntimeKind;
+  aiFeature?: AiCapabilityFeature;
 }
 
 function providerIdFor(selection: RuntimeSelection): string | null {
@@ -47,6 +54,7 @@ function chosenSdkBinaryPath(sdkBinary: unknown): string | undefined {
 }
 
 export function assertAnalysisRuntimeReady(options: RuntimeGuardOptions = {}): RuntimeGuardResult {
+  assertAiFeatureEnabled(options.aiFeature ?? 'agent_analyze');
   const selection = resolveAgentRuntimeSelection(options.providerId, options.runtimeOverride);
   const providerId = providerIdFor(selection);
   const diagnostics = getRuntimeDiagnostics(selection);
@@ -111,6 +119,7 @@ export interface DoctorReport {
     ok: boolean;
   };
   cliHome: string;
+  aiPolicy: AiCapabilityPolicyV1;
   runtime: RuntimeSelection;
   runtimeDiagnostics: RuntimeDiagnosticsPayload;
   traceProcessor: {
@@ -139,6 +148,7 @@ export interface DoctorReport {
 }
 
 export function collectDoctorReport(cliHome: string): DoctorReport {
+  const aiPolicy = getAiCapabilityPolicy();
   const selection = resolveAgentRuntimeSelection();
   const runtimeDiagnostics = getRuntimeDiagnostics(selection);
   const traceProcessorPath = getTraceProcessorPath();
@@ -152,6 +162,29 @@ export function collectDoctorReport(cliHome: string): DoctorReport {
   const active = providers.find((p) => p.isActive);
   const nodeMajor = Number.parseInt(process.version.replace(/^v/, '').split('.')[0] || '0', 10);
 
+  const runtimeConfigured = runtimeDiagnostics.configured || selection.kind === 'claude-agent-sdk';
+  const runtimeStatus: DoctorCheck['status'] = aiPolicy.aiEnabled
+    ? runtimeConfigured
+      ? runtimeDiagnostics.configured
+        ? 'ok'
+        : 'warn'
+      : 'error'
+    : 'warn';
+  const runtimeOk = aiPolicy.aiEnabled ? runtimeConfigured : true;
+  const runtimeMessage = aiPolicy.aiEnabled
+    ? runtimeDiagnostics.configured
+      ? `${selection.kind} credentials/configuration detected`
+      : selection.kind === 'claude-agent-sdk'
+        ? 'Claude SDK has no explicit credentials; local Claude login fallback will be used if available'
+        : selection.kind === PI_AGENT_CORE_RUNTIME_KIND ||
+            selection.kind === EXPERIMENTAL_PI_AGENT_CORE_RUNTIME_KIND
+          ? 'Pi agent-core runtime needs SMARTPERFETTO_PI_AGENT_CORE_MODEL_JSON or a configured custom provider'
+          : selection.kind === EXPERIMENTAL_OPENCODE_RUNTIME_KIND ||
+            selection.kind === OPENCODE_RUNTIME_KIND
+            ? 'OpenCode runtime needs @opencode-ai/sdk and opencode-ai available, plus OpenAI-compatible model configuration'
+            : 'OpenAI runtime needs OPENAI_API_KEY or a localhost/OpenAI-compatible provider'
+    : 'AI is disabled; runtime credentials are not required for deterministic CLI flows';
+
   const checks: DoctorCheck[] = [
     {
       name: 'node',
@@ -160,32 +193,30 @@ export function collectDoctorReport(cliHome: string): DoctorReport {
       message: `Node.js ${process.version} (expected >=24 <25)`,
     },
     {
+      name: 'ai_policy',
+      ok: aiPolicy.aiEnabled || aiPolicy.env?.valid === true,
+      status: aiPolicy.aiEnabled ? 'ok' : aiPolicy.env?.valid === false ? 'error' : 'warn',
+      message: aiPolicy.aiEnabled
+        ? 'AI-backed analysis is enabled'
+        : aiPolicy.disabledReason ?? 'AI-backed analysis is disabled',
+      details: {
+        source: aiPolicy.source,
+        envValid: aiPolicy.env?.valid ?? null,
+      },
+    },
+    {
       name: 'runtime',
-      ok: runtimeDiagnostics.configured || selection.kind === 'claude-agent-sdk',
-      status: runtimeDiagnostics.configured
-        ? 'ok'
-        : selection.kind === 'claude-agent-sdk'
-          ? 'warn'
-          : 'error',
-      message: runtimeDiagnostics.configured
-        ? `${selection.kind} credentials/configuration detected`
-        : selection.kind === 'claude-agent-sdk'
-          ? 'Claude SDK has no explicit credentials; local Claude login fallback will be used if available'
-          : selection.kind === PI_AGENT_CORE_RUNTIME_KIND ||
-              selection.kind === EXPERIMENTAL_PI_AGENT_CORE_RUNTIME_KIND
-            ? 'Pi agent-core runtime needs SMARTPERFETTO_PI_AGENT_CORE_MODEL_JSON or a configured custom provider'
-            : selection.kind === EXPERIMENTAL_OPENCODE_RUNTIME_KIND ||
-              selection.kind === OPENCODE_RUNTIME_KIND
-              ? 'OpenCode runtime needs @opencode-ai/sdk and opencode-ai available, plus OpenAI-compatible model configuration'
-            : 'OpenAI runtime needs OPENAI_API_KEY or a localhost/OpenAI-compatible provider',
+      ok: runtimeOk,
+      status: runtimeStatus,
+      message: runtimeMessage,
       details: {
         source: selection.source,
         providerId: selection.providerId,
         providerName: selection.providerName,
       },
     },
-    ...(selection.kind === 'claude-agent-sdk'
-      ? [buildClaudeSdkBinaryCheck((runtimeDiagnostics as any).sdkBinary)]
+    ...(aiPolicy.aiEnabled && selection.kind === 'claude-agent-sdk'
+      ? [buildClaudeSdkBinaryCheck(runtimeDiagnostics.sdkBinary)]
       : []),
     {
       name: 'trace_processor_shell',
@@ -227,6 +258,7 @@ export function collectDoctorReport(cliHome: string): DoctorReport {
       ok: nodeMajor >= 24 && nodeMajor < 25,
     },
     cliHome,
+    aiPolicy,
     runtime: selection,
     runtimeDiagnostics,
     traceProcessor: {
@@ -276,12 +308,27 @@ function isExecutable(filePath: string): boolean {
   }
 }
 
-export function isClaudeSdkBinaryUsable(sdkBinary: any): boolean {
-  if (!sdkBinary?.chosenPath || sdkBinary.source === 'none') return false;
-  return isExecutable(sdkBinary.chosenPath);
+interface ClaudeSdkBinaryDiagnostic {
+  chosenPath?: unknown;
+  source?: unknown;
+  detectedPlatformKey?: unknown;
+  fallbackUsed?: unknown;
 }
 
-function buildClaudeSdkBinaryCheck(sdkBinary: any): DoctorCheck {
+function readClaudeSdkBinaryDiagnostic(sdkBinary: unknown): ClaudeSdkBinaryDiagnostic {
+  return sdkBinary && typeof sdkBinary === 'object'
+    ? sdkBinary as ClaudeSdkBinaryDiagnostic
+    : {};
+}
+
+export function isClaudeSdkBinaryUsable(sdkBinary: unknown): boolean {
+  const diagnostic = readClaudeSdkBinaryDiagnostic(sdkBinary);
+  if (typeof diagnostic.chosenPath !== 'string' || diagnostic.source === 'none') return false;
+  return isExecutable(diagnostic.chosenPath);
+}
+
+function buildClaudeSdkBinaryCheck(sdkBinary: unknown): DoctorCheck {
+  const diagnostic = readClaudeSdkBinaryDiagnostic(sdkBinary);
   const usable = isClaudeSdkBinaryUsable(sdkBinary);
   return {
     name: 'claude_sdk_binary',
@@ -291,10 +338,10 @@ function buildClaudeSdkBinaryCheck(sdkBinary: any): DoctorCheck {
       ? 'Claude Agent SDK native binary is present and executable'
       : 'Claude Agent SDK native binary is missing or not executable',
     details: {
-      path: sdkBinary?.chosenPath ?? null,
-      source: sdkBinary?.source ?? 'none',
-      detectedPlatformKey: sdkBinary?.detectedPlatformKey ?? null,
-      fallbackUsed: sdkBinary?.fallbackUsed ?? false,
+      path: typeof diagnostic.chosenPath === 'string' ? diagnostic.chosenPath : null,
+      source: typeof diagnostic.source === 'string' ? diagnostic.source : 'none',
+      detectedPlatformKey: typeof diagnostic.detectedPlatformKey === 'string' ? diagnostic.detectedPlatformKey : null,
+      fallbackUsed: diagnostic.fallbackUsed === true,
     },
   };
 }

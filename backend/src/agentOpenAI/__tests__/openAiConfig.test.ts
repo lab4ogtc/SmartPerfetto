@@ -160,7 +160,7 @@ describe('createOpenAIEnv', () => {
     expect(diagnostics.configured).toBe(false);
     expect(diagnostics.baseUrlConfigured).toBe(false);
     expect(diagnostics.credentialSources).toEqual([]);
-    expect(diagnostics.model).toBe('gpt-5.5');
+    expect(diagnostics.model).toBe('gpt-5.4-mini');
   });
 
   it('ignores placeholder OpenAI keys in diagnostics', () => {

@@ -10,8 +10,9 @@ import * as path from 'path';
 
 import type { TraceProcessorService } from '../services/traceProcessorService';
 import type { SkillExecutor } from '../services/skillEngine/skillExecutor';
-import { getSkillAnalysisAdapter } from '../services/skillEngine/skillAnalysisAdapter';
-import { skillRegistry } from '../services/skillEngine/skillLoader';
+import { createSkillAnalysisAdapter } from '../services/skillEngine/skillAnalysisAdapter';
+import { skillRegistry, type SkillRegistry } from '../services/skillEngine/skillLoader';
+import { getWorkspaceSkillRegistry } from '../services/skillPacks/workspaceSkillRegistryProvider';
 import { createArchitectureDetector } from '../agent/detectors/architectureDetector';
 import { createDataEnvelope, displayResultToEnvelope } from '../types/dataContract';
 import type { DisplayResult as SkillDisplayResult } from '../services/skillEngine/types';
@@ -35,6 +36,7 @@ import {
 } from '../services/perfettoSqlDocs';
 import {
   buildTraceProcessorQueryProvenance,
+  type TraceProcessorPaneSide,
   type TraceProcessorQueryProvenance,
   type TraceProcessorTraceSide,
 } from '../services/traceProcessorConnectionModel';
@@ -53,17 +55,22 @@ import { matchPhaseHintForNextPhase } from './phaseHintMatcher';
 import { buildActivePhaseReminder } from './activePhaseReminder';
 import { validatePlanAgainstSceneTemplate, MIN_WAIVER_REASON_CHARS } from './scenePlanTemplates';
 import { summarizeToolCallInput } from './toolCallSummary';
+import { buildQuickArtifactGuidance } from './quickAnswerContract';
 import {
   findBestPhaseForExpectedCallGap,
   findCompletedPhaseEvidenceGaps,
   findMissingExpectedCallsForPhase,
   formatPlanEvidenceGap,
+  replayPrePlanToolCalls,
 } from './planToolCallRecorder';
 import { isConclusionLikePlanPhase } from './planPhaseSemantics';
-import { formatToolCallNarration } from './toolNarration';
-import type { ArtifactStore } from './artifactStore';
+import { formatToolCallNarration, type ToolNarrationOptions } from './toolNarration';
+import type { ArtifactStore, CompactArtifactSummary } from './artifactStore';
 import { DEFAULT_OUTPUT_LANGUAGE, localize, type OutputLanguage } from './outputLanguage';
-import { RagStore } from '../services/ragStore';
+import { buildSqlQueryReview } from '../services/queryReview/queryReviewBuilder';
+import { buildSkillQueryReview } from '../services/queryReview/skillQueryReviewBuilder';
+import { compactQueryReviewForToolResponse, type QueryReviewV1 } from '../types/queryReviewContract';
+import { RagStore, getDefaultRagStore } from '../services/ragStore';
 import {
   BaselineStore,
   deriveBaselineId,
@@ -76,6 +83,17 @@ import {
 import {ProjectMemory} from './projectMemory';
 import {CaseLibrary} from '../services/caseLibrary';
 import { createCaseRetriever } from '../services/caseEvolution/caseRecommendationRetriever';
+import {
+  DEFAULT_DEV_USER_ID,
+  DEFAULT_TENANT_ID,
+  DEFAULT_WORKSPACE_ID,
+} from '../middleware/auth';
+import { openEnterpriseDb } from '../services/enterpriseDb';
+import { createAnalysisResultSnapshotRepository } from '../services/analysisResultSnapshotStore';
+import {
+  createTraceSimilarityService,
+  type TraceSimilaritySnapshotRepository,
+} from '../services/similarity/similarityService';
 import {
   enterpriseKnowledgeStoreEnabled,
   type KnowledgeScope,
@@ -93,6 +111,10 @@ import {CodeLookupLedger} from '../services/codebase/codeLookupLedger';
 import {PatchProposer} from '../services/codebase/patchProposer';
 import {normalizeCodeAwareMode, type CodeAwareMode} from '../services/codebase/codeAwareFeature';
 import {filterRagLookup} from '../services/rag/lookupResponseFilter';
+import {
+  ExternalKnowledgeSourceRegistry,
+  getDefaultExternalKnowledgeSourceRegistry,
+} from '../services/externalKnowledgeSourceRegistry';
 import {SymbolResolver} from '../services/symbol/symbolResolver';
 import type { RuntimeToolExtra } from '../agentRuntime/runtimeToolSpec';
 import {
@@ -108,12 +130,10 @@ import {
  * Storage path lives next to the existing analysis_*.json files so
  * operators can find every long-lived agent state in one directory.
  */
-const RAG_STORE_PATH = backendLogPath('rag_store.json');
-let cachedRagStore: RagStore | null = null;
 export function getRagStore(): RagStore {
-  if (!cachedRagStore) cachedRagStore = new RagStore(RAG_STORE_PATH);
-  return cachedRagStore;
+  return getDefaultRagStore();
 }
+
 
 function getRuntimeToolSignal(extra: unknown): AbortSignal | undefined {
   const runtimeExtra = extra && typeof extra === 'object' ? extra as RuntimeToolExtra : undefined;
@@ -401,6 +421,11 @@ const CORE_EXPECTED_CALL_TOOL_NAMES = new Set([
   'mark_uncertainty',
 ]);
 
+type SkillArtifactSummaryForModel = CompactArtifactSummary & {
+  evidenceRefId: string;
+  sourceToolCallId?: string;
+};
+
 function shortExpectedToolName(toolName: string): string {
   const MCP_PREFIX = 'mcp__smartperfetto__';
   return toolName.startsWith(MCP_PREFIX) ? toolName.slice(MCP_PREFIX.length) : toolName;
@@ -412,7 +437,11 @@ function normalizeExpectedCall(call: unknown): NonNullable<PlanPhase['expectedCa
   }
   if (!call || typeof call !== 'object') return undefined;
   const tool = coercePlanString(readAliasedField(call, ['tool', 'toolName', 'tool_name', 'name']));
-  const skillId = coercePlanString(readAliasedField(call, ['skillId', 'skill_id', 'skill', 'skillName', 'skill_name']));
+  const nestedParams = readAliasedField(call, ['params', 'arguments', 'args', 'input']);
+  const nestedSkillId = nestedParams && typeof nestedParams === 'object'
+    ? coercePlanString(readAliasedField(nestedParams, ['skillId', 'skill_id', 'skill', 'skillName', 'skill_name']))
+    : undefined;
+  const skillId = coercePlanString(readAliasedField(call, ['skillId', 'skill_id', 'skill', 'skillName', 'skill_name'])) || nestedSkillId;
   if (!tool) return undefined;
   const normalizedTool = shortExpectedToolName(tool.trim());
   const normalizedSkillId = skillId ? shortExpectedToolName(skillId.trim()) : undefined;
@@ -954,6 +983,19 @@ function normalizeSynthesizeDataForStorage(data: any): { columns: string[]; rows
   return { columns: ['value'], rows: [[data]] };
 }
 
+function previewFromColumnarData(data: any): Record<string, any> | undefined {
+  const columns: string[] = Array.isArray(data?.columns)
+    ? data.columns.filter((col: unknown): col is string => typeof col === 'string')
+    : [];
+  const firstRow = Array.isArray(data?.rows) ? data.rows[0] : undefined;
+  if (columns.length === 0 || !Array.isArray(firstRow)) return undefined;
+  const preview: Record<string, any> = {};
+  columns.forEach((column, index) => {
+    preview[column] = index < firstRow.length ? firstRow[index] : null;
+  });
+  return preview;
+}
+
 export interface ClaudeMcpServerOptions {
   traceId: string;
   traceProcessorService: TraceProcessorService;
@@ -974,7 +1016,7 @@ export interface ClaudeMcpServerOptions {
   /** Per-session SQL error-fix pairs for in-context learning */
   recentSqlErrors?: SqlErrorFixPair[];
   /** Mutable analysis plan — passed by reference from analyze() scope */
-  analysisPlan?: { current: AnalysisPlanV3 | null };
+  analysisPlan?: { current: AnalysisPlanV3 | null; prePlanToolCallLog?: ToolCallRecord[] };
   /** Mutable watchdog warning — set by runtime when repetitive failures detected, consumed by next tool call */
   watchdogWarning?: { current: string | null };
   /** Mutable hypotheses array for hypothesis-verify cycle (P0-G4) */
@@ -1008,6 +1050,10 @@ export interface ClaudeMcpServerOptions {
   codeAwareMode?: CodeAwareMode;
   /** Codebase ids whitelisted for this analysis session. */
   codebaseIds?: string[];
+  /** Private external-knowledge source ids whitelisted for this analysis session. */
+  knowledgeSourceIds?: string[];
+  /** Test hook / alternate private external-knowledge registry. */
+  externalKnowledgeRegistry?: ExternalKnowledgeSourceRegistry;
   /** Test hook / alternate registry. */
   codebaseRegistry?: CodebaseRegistry;
   /** Test hook / alternate code lookup ledger. */
@@ -1016,6 +1062,7 @@ export interface ClaudeMcpServerOptions {
   caseLibrary?: CaseLibrary;
   /** Test hook / alternate case RAG store. */
   ragStore?: RagStore;
+  analysisResultSnapshotRepository?: TraceSimilaritySnapshotRepository;
 }
 
 /**
@@ -1026,13 +1073,19 @@ export interface ClaudeMcpServerOptions {
 export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
   const { traceId, traceProcessorService, skillExecutor, packageName, emitUpdate, onSkillResult, analysisNotes, artifactStore } = options;
   const recentSqlErrors: SqlErrorFixPair[] = options.recentSqlErrors || [];
-  const skillAdapter = getSkillAnalysisAdapter(traceProcessorService);
+  const skillAdapter = createSkillAnalysisAdapter(traceProcessorService);
   const watchdogRef = options.watchdogWarning;
   const skillNotesBudget = options.skillNotesBudget;
   const outputLanguage = options.outputLanguage ?? DEFAULT_OUTPUT_LANGUAGE;
   const knowledgeScope = options.knowledgeScope;
   const codeAwareMode = normalizeCodeAwareMode(options.codeAwareMode);
   const codebaseIds = Array.from(new Set(options.codebaseIds ?? [])).filter(Boolean);
+  const knowledgeSourceIds = Array.from(new Set(options.knowledgeSourceIds ?? [])).filter(Boolean);
+  const knowledgeSourceCapabilityHint = knowledgeSourceIds.length > 0
+    ? ` Request-authorized knowledge source ids: ${knowledgeSourceIds.join(', ')}.`
+    : ' No private knowledge source is authorized for this request.';
+  const externalKnowledgeRegistry = options.externalKnowledgeRegistry ??
+    getDefaultExternalKnowledgeSourceRegistry();
   const codebaseRegistry = options.codebaseRegistry ?? getDefaultCodebaseRegistry();
   const codeLookupLedger = options.codeLookupLedger ?? (
     options.sessionId ? CodeLookupLedger.restore(options.sessionId, 12_000, 2) : undefined
@@ -1041,6 +1094,79 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
     sessionId: options.sessionId ?? traceId,
     hasCodebaseAccess: codeAwareMode !== 'off' && codebaseIds.length > 0,
   };
+  let boundSkillRegistryFingerprint: string | undefined;
+
+  function paneSideForTraceSide(traceSide: TraceProcessorTraceSide): TraceProcessorPaneSide | undefined {
+    return options.comparisonContext?.tracePairContext?.panes.find(pane => pane.traceSide === traceSide)?.side;
+  }
+
+  function toolNarrationOptions(): ToolNarrationOptions {
+    const tracePairContext = options.comparisonContext?.tracePairContext;
+    return tracePairContext ? { tracePairContext } : {};
+  }
+
+  function tracePaneDisplayLabel(paneSide: TraceProcessorPaneSide): string {
+    switch (paneSide) {
+      case 'left':
+        return localize(outputLanguage, '左侧', 'left pane');
+      case 'right':
+        return localize(outputLanguage, '右侧', 'right pane');
+      case 'top':
+        return localize(outputLanguage, '上方', 'top pane');
+      case 'bottom':
+        return localize(outputLanguage, '下方', 'bottom pane');
+    }
+  }
+
+  function traceRoleDisplayLabel(traceSide: TraceProcessorTraceSide): string {
+    return traceSide === 'reference'
+      ? localize(outputLanguage, '参考 Trace', 'reference trace')
+      : localize(outputLanguage, '当前 Trace', 'current trace');
+  }
+
+  function traceLocationDisplayLabel(traceSide: TraceProcessorTraceSide): string {
+    const paneSide = paneSideForTraceSide(traceSide);
+    const roleLabel = traceRoleDisplayLabel(traceSide);
+    return paneSide ? `${tracePaneDisplayLabel(paneSide)}/${roleLabel}` : roleLabel;
+  }
+
+  function comparisonSqlProducerReason(traceSide: TraceProcessorTraceSide): string {
+    const traceLabel = traceLocationDisplayLabel(traceSide);
+    return localize(
+      outputLanguage,
+      `执行${traceLabel} SQL，验证对比差异。`,
+      `Run SQL on the ${traceLabel} to verify comparison deltas.`,
+    );
+  }
+
+  function buildScopedTraceProvenance(
+    targetTraceId: string,
+    traceSide: TraceProcessorTraceSide,
+  ): TraceProcessorQueryProvenance {
+    return buildTraceProcessorQueryProvenance({
+      traceId: targetTraceId,
+      traceSide,
+      paneSide: paneSideForTraceSide(traceSide),
+    });
+  }
+
+  async function bindSkillRuntimeRegistry(): Promise<SkillRegistry> {
+    if (!knowledgeScope?.tenantId || !knowledgeScope.workspaceId) {
+      return skillRegistry;
+    }
+    const handle = await getWorkspaceSkillRegistry({
+      tenantId: knowledgeScope.tenantId,
+      workspaceId: knowledgeScope.workspaceId,
+      userId: knowledgeScope.userId,
+    });
+    if (boundSkillRegistryFingerprint !== handle.registryFingerprint) {
+      skillAdapter.setSkillRegistry(handle.registry, handle.registryFingerprint);
+      skillExecutor.replaceRegisteredSkills(handle.registry.getAllSkills());
+      skillExecutor.setFragmentRegistry(handle.registry.getFragmentCache());
+      boundSkillRegistryFingerprint = handle.registryFingerprint;
+    }
+    return handle.registry;
+  }
 
   function buildArchitectureTriggerContext(info: Partial<ArchitectureInfo> | undefined | null): string[] {
     if (!info) return [];
@@ -1169,6 +1295,36 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
     if (p.process_name && !p.package) p.package = p.process_name;
     if (p.package && !p.process_name) p.process_name = p.package;
     return p;
+  }
+
+  function referenceSharedParamsForComparison(
+    params: Record<string, any> | undefined,
+    currentDefaultPackage?: string,
+    referenceDefaultPackage?: string,
+  ): { params: Record<string, any>; identityRemapped: boolean } {
+    const p = { ...params };
+    const processName = typeof p.process_name === 'string' ? p.process_name : undefined;
+    const packageParam = typeof p.package === 'string' ? p.package : undefined;
+    const pointsAtCurrentPackage = Boolean(currentDefaultPackage && (
+      processName === currentDefaultPackage || packageParam === currentDefaultPackage
+    ));
+    const hasIdentityFilter = Boolean(processName || packageParam);
+
+    if (referenceDefaultPackage && (!hasIdentityFilter || pointsAtCurrentPackage)) {
+      if (processName !== referenceDefaultPackage || packageParam !== referenceDefaultPackage) {
+        p.process_name = referenceDefaultPackage;
+        p.package = referenceDefaultPackage;
+        return { params: p, identityRemapped: true };
+      }
+    }
+
+    if (!referenceDefaultPackage && pointsAtCurrentPackage) {
+      delete p.process_name;
+      delete p.package;
+      return { params: p, identityRemapped: true };
+    }
+
+    return { params: p, identityRemapped: false };
   }
 
   /**
@@ -1723,7 +1879,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
     phase.completedAt = undefined;
     phase.summary = undefined;
 
-    const narration = formatToolCallNarration(toolName, input, outputLanguage);
+    const narration = formatToolCallNarration(toolName, input, outputLanguage, toolNarrationOptions());
     const summary = localize(
       outputLanguage,
       `自动进入阶段：${narration}`,
@@ -1853,7 +2009,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
         };
       }
 
-      const narration = formatToolCallNarration(toolName, input, outputLanguage);
+      const narration = formatToolCallNarration(toolName, input, outputLanguage, toolNarrationOptions());
       const summary = localize(
         outputLanguage,
         `自动补记阶段：收到本阶段证据（${narration}），但当前已在后续阶段「${laterActive.name}」。该阶段直接标记完成，证据以推断方式绑定。`,
@@ -2178,7 +2334,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
       planPhaseGoal: phaseOverride?.phaseGoal ?? phase?.goal ?? lightweightPhase?.goal,
       planPhaseAttribution: phaseOverride?.attribution ?? (lightweightPhase ? 'active' : phaseResolution?.attribution),
       planPhaseWarning: phaseOverride?.warning ?? phaseResolution?.warning,
-      toolNarration: formatToolCallNarration(toolName, input, outputLanguage),
+      toolNarration: formatToolCallNarration(toolName, input, outputLanguage, toolNarrationOptions()),
       producerReason,
     };
   }
@@ -2231,10 +2387,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
     throwIfTraceProcessorQueryCancelled(signal);
     const normalized = normalizeRawSql(sql);
     const { sql: finalSql, injected } = injectStdlibIncludes(normalized.sql);
-    const traceProvenance = buildTraceProcessorQueryProvenance({
-      traceId: targetTraceId,
-      traceSide,
-    });
+    const traceProvenance = buildScopedTraceProvenance(targetTraceId, traceSide);
     if (emitUpdate && injected.length > 0) {
       emitUpdate({
         type: 'progress',
@@ -2339,7 +2492,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
           });
         }
 
-        let emittedEvidence: { evidenceRefId: string; queryHash: string } | undefined;
+        let emittedEvidence: { evidenceRefId: string; queryHash: string; queryReview?: QueryReviewV1 } | undefined;
 
         if (emitUpdate && !success && result.error) {
           emitUpdate({
@@ -2406,7 +2559,14 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
               producer,
               processIdentityWarning,
               sqlArtifact?.artifactId,
+              {
+                durationMs: result.durationMs,
+                truncated: false,
+                sqlRewrites,
+                toolName: 'execute_sql',
+              },
             );
+            updateSqlArtifactQueryReview(artifactStore, sqlArtifact, emittedEvidence.queryReview);
           }
           return {
             content: [{
@@ -2431,6 +2591,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
                 traceId: traceProvenance.traceId,
                 traceProvenance,
                 evidenceRefId: emittedEvidence?.evidenceRefId,
+                ...(emittedEvidence?.queryReview ? { queryReview: compactQueryReviewForToolResponse(emittedEvidence.queryReview) } : {}),
                 sourceToolCallId: producer.sourceToolCallId,
                 paramsHash: producer.paramsHash,
                 planPhaseId: producer.planPhaseId,
@@ -2444,7 +2605,24 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
         }
 
         if (emitUpdate && success && result.columns.length > 0) {
-          emittedEvidence = emitSqlDataEnvelope(emitUpdate, result.columns, rows, finalSql, injected, traceProvenance, producer, processIdentityWarning);
+          emittedEvidence = emitSqlDataEnvelope(
+            emitUpdate,
+            result.columns,
+            rows,
+            finalSql,
+            injected,
+            traceProvenance,
+            producer,
+            processIdentityWarning,
+            undefined,
+            {
+              durationMs: result.durationMs,
+              truncated,
+              sqlRewrites,
+              toolName: 'execute_sql',
+              rowCount: result.rows.length,
+            },
+          );
         }
 
         return {
@@ -2461,6 +2639,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
               traceId: traceProvenance.traceId,
               traceProvenance,
               evidenceRefId: emittedEvidence?.evidenceRefId,
+              ...(emittedEvidence?.queryReview ? { queryReview: compactQueryReviewForToolResponse(emittedEvidence.queryReview) } : {}),
               sourceToolCallId: producer.sourceToolCallId,
               paramsHash: producer.paramsHash,
               planPhaseId: producer.planPhaseId,
@@ -2488,10 +2667,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
       } catch (err) {
         rethrowIfTraceProcessorQueryCancelled(err);
         const errMsg = (err as Error).message;
-        const traceProvenance = buildTraceProcessorQueryProvenance({
-          traceId,
-          traceSide: 'current',
-        });
+        const traceProvenance = buildScopedTraceProvenance(traceId, 'current');
         emitUpdate?.({
           type: 'progress',
           content: {
@@ -2612,34 +2788,31 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
         }
       }
 
-      // Guard: metadata-only skills are not executable single-trace analysis skills
-      const skillDef = skillRegistry.getSkill(skillId);
-      if (skillDef?.type === 'pipeline_definition' || skillDef?.type === 'comparison') {
-        const useHint = skillDef.type === 'comparison'
-          ? 'It describes analysis result comparison. Use the multi-trace comparison API/tools instead.'
-          : 'Use `detect_architecture` to detect the rendering pipeline, or call a composite analysis skill like `scrolling_analysis`, `gpu_analysis`, etc.';
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({
-              success: false,
-              error: `Skill "${skillId}" is metadata-only and cannot be used for single-trace analysis. ${useHint}`,
-            }),
-          }],
-        };
-      }
-
       try {
+        const effectiveSkillRegistry = await bindSkillRuntimeRegistry();
+        const skillDef = effectiveSkillRegistry.getSkill(skillId);
+        if (skillDef?.type === 'pipeline_definition' || skillDef?.type === 'comparison') {
+          const useHint = skillDef.type === 'comparison'
+            ? 'It describes analysis result comparison. Use the multi-trace comparison API/tools instead.'
+            : 'Use `detect_architecture` to detect the rendering pipeline, or call a composite analysis skill like `scrolling_analysis`, `gpu_analysis`, etc.';
+          return {
+            content: [{
+              type: 'text' as const,
+              text: JSON.stringify({
+                success: false,
+                error: `Skill "${skillId}" is metadata-only and cannot be used for single-trace analysis. ${useHint}`,
+              }),
+            }],
+          };
+        }
+
         const effectiveParams = normalizeSkillParams(params, packageName);
         const producer = createEvidenceProducerContext(
           'invoke_skill',
           { skillId, params: effectiveParams },
           localize(outputLanguage, `调用 Skill ${skillId}，收集本阶段结构化证据。`, `Run Skill ${skillId} to collect structured evidence for this phase.`),
         );
-        const skillTraceProvenance = buildTraceProcessorQueryProvenance({
-          traceId,
-          traceSide: 'current',
-        });
+        const skillTraceProvenance = buildScopedTraceProvenance(traceId, 'current');
 
         emitUpdate?.({
           type: 'progress',
@@ -2651,7 +2824,11 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
         });
 
         const skillStart = Date.now();
-        const result = await skillExecutor.execute(skillId, traceId, effectiveParams, { signal });
+        const currentPaneSide = paneSideForTraceSide('current');
+        const result = await skillExecutor.execute(skillId, traceId, effectiveParams, {
+          ...(currentPaneSide ? { __paneSide: currentPaneSide } : {}),
+          signal,
+        });
         const skillDuration = Date.now() - skillStart;
 
         emitUpdate?.({
@@ -2684,18 +2861,30 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
 
         // Artifact mode stores displayResults before emitting DataEnvelopes so
         // evidence meta can carry the same artifact ids that the model sees.
-        let artifacts: NonNullable<ReturnType<ArtifactStore['generateCompactSummary']>>[] | undefined;
+        let artifacts: SkillArtifactSummaryForModel[] | undefined;
         let diagnosticsArtifactId: string | undefined;
         let synthesizeArtifacts: Array<{ artifactId: string; stepId: string; rowCount: number; columns: string[] }> | undefined;
         const artifactIdsByStepId = new Map<string, string>();
+        const queryReviewsByStepId = new Map<string, QueryReviewV1>();
         if (artifactStore && result.displayResults?.length) {
           artifacts = result.displayResults.map(dr => {
+            const evidenceRefId = stableSkillEvidenceRefId(
+              result.skillId || skillId,
+              dr.stepId,
+              dr.title,
+              dr.data,
+              skillTraceProvenance,
+              producer,
+            );
             const artId = artifactStore.store({
               skillId: result.skillId || skillId,
               stepId: dr.stepId,
               layer: dr.layer,
               title: dr.title,
               data: dr.data,
+              executionStatus: dr.executionStatus,
+              executionMessage: dr.executionMessage,
+              executionError: dr.executionError,
               diagnostics: undefined,
               planPhaseId: producer.planPhaseId,
               planPhaseTitle: producer.planPhaseTitle,
@@ -2704,10 +2893,28 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
               paramsHash: producer.paramsHash,
               identityResolution: result.identityResolution,
             });
+            const queryReview = buildSkillQueryReview({
+              skillId: result.skillId || skillId,
+              displayResult: dr as SkillDisplayResult,
+              traceProvenance: skillTraceProvenance,
+              producer,
+              artifactId: artId,
+              evidenceRefId,
+            });
+            if (queryReview) {
+              artifactStore.updateQueryReview(artId, queryReview);
+              if (dr.stepId) queryReviewsByStepId.set(dr.stepId, queryReview);
+            }
             if (dr.stepId) artifactIdsByStepId.set(dr.stepId, artId);
             const summary = artifactStore.generateCompactSummary(artId);
-            return summary;
-          }).filter((summary): summary is NonNullable<ReturnType<ArtifactStore['generateCompactSummary']>> => Boolean(summary));
+            const preview = summary?.preview ?? previewFromColumnarData(dr.data);
+            return summary ? {
+              ...summary,
+              ...(preview ? { preview } : {}),
+              evidenceRefId,
+              ...(producer.sourceToolCallId ? { sourceToolCallId: producer.sourceToolCallId } : {}),
+            } : undefined;
+          }).filter((summary): summary is SkillArtifactSummaryForModel => Boolean(summary));
         }
 
         // Store diagnostics as a separate artifact if present, even for
@@ -2767,6 +2974,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
             producer,
             result.identityResolution,
             artifactIdsByStepId,
+            queryReviewsByStepId,
           );
         }
 
@@ -2795,7 +3003,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
         let vendorOverrideHint: { vendor: string; displayName?: string; additionalStepIds: string[] } | undefined;
         const detectedVendor = options.cachedVendor;
         if (detectedVendor && detectedVendor !== 'aosp' && result.success) {
-          const vendorOverride = skillRegistry.getVendorOverride(skillId, detectedVendor);
+          const vendorOverride = effectiveSkillRegistry.getVendorOverride(skillId, detectedVendor);
           if (vendorOverride && vendorOverride.additionalSteps.length > 0) {
             vendorOverrideHint = {
               vendor: vendorOverride.vendor,
@@ -2810,6 +3018,9 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
         // Artifact mode: return compact references whenever any fetchable
         // artifact was created.
         if (artifactStore && (artifacts?.length || diagnosticsArtifactId || synthesizeArtifacts?.length)) {
+          const lightweightArtifacts = options.lightweight
+            ? artifacts?.filter(summary => summary.rowCount > 0 || summary.preview).slice(0, 10)
+            : artifacts;
           return {
             content: [{
               type: 'text' as const,
@@ -2818,14 +3029,36 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
                 skillId: result.skillId,
                 skillName: result.skillName,
                 ...(result.error ? { error: result.error } : {}),
-                ...(result.identityResolution ? { identityResolution: result.identityResolution } : {}),
-                artifacts,
+                ...(options.lightweight
+                  ? {
+                      quickMode: {
+                        answerNow: true,
+                        guidance: buildQuickArtifactGuidance(),
+                      },
+                    }
+                  : {}),
+                ...(result.identityResolution
+                  ? options.lightweight
+                    ? {
+                        identity: {
+                          identityRefId: result.identityResolution.identityRefId,
+                          status: result.identityResolution.status,
+                          packageName: result.identityResolution.target?.packageName,
+                          processName: result.identityResolution.target?.processName,
+                          warnings: result.identityResolution.warnings,
+                        },
+                      }
+                    : { identityResolution: result.identityResolution }
+                  : {}),
+                artifacts: lightweightArtifacts,
                 ...(diagnosticsArtifactId ? { diagnosticsArtifactId } : {}),
-                ...(synthesizeArtifacts && synthesizeArtifacts.length > 0
+                ...((!options.lightweight || !artifacts?.length) && synthesizeArtifacts && synthesizeArtifacts.length > 0
                   ? { synthesizeArtifacts }
                   : {}),
                 ...(vendorOverrideHint ? { vendorOverride: vendorOverrideHint } : {}),
-                hint: 'Use fetch_artifact(artifactId=<id>, detail="rows", offset=0, limit=50) to page through large datasets. All data is accessible — use offset/limit to paginate.',
+                hint: options.lightweight
+                  ? 'Quick mode: answer from previews/evidenceRefId now; fetch artifacts only for explicit row-level follow-up.'
+                  : 'Use fetch_artifact(artifactId=<id>, detail="rows", offset=0, limit=50) to page through large datasets. All data is accessible — use offset/limit to paginate.',
               })) + (result.success ? getReasoningNudge() : ''),
             }],
           };
@@ -2847,6 +3080,9 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
                 title: dr.title,
                 layer: dr.layer,
                 data: dr.data,
+                executionStatus: dr.executionStatus,
+                executionMessage: dr.executionMessage,
+                executionError: dr.executionError,
               })),
               diagnostics: result.diagnostics,
               synthesizeData: result.synthesizeData,
@@ -2885,6 +3121,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
     },
     async ({ category }) => {
       try {
+        await bindSkillRuntimeRegistry();
         const allSkills = await skillAdapter.listSkills();
         const filtered = category
           ? allSkills.filter(s =>
@@ -2903,6 +3140,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
                 description: s.description,
                 type: s.type,
                 keywords: s.keywords.slice(0, 5),
+                origin: s.origin,
               }))
             ),
           }],
@@ -3351,24 +3589,85 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
     { annotations: { readOnlyHint: true } },
   );
 
-  // lookup_blog_knowledge (Plan 55): retrieve indexed chunks from
-  // androidperformance.com (and, once Plan 44 lands, world memory).
+  // lookup_blog_knowledge (Plan 55): retrieve indexed public blog chunks or,
+  // only with an explicit request-scoped source capability, private Android
+  // Internals Wiki chunks.
   // Read-only — calls ragStore.search() which never writes. The index
   // is populated by the M2 admin route + ingester; until then the
   // search returns `unsupportedReason='index empty'` so the agent
   // never invents content.
   const lookupBlogKnowledge = tool(
     'lookup_blog_knowledge',
-    'Retrieve indexed knowledge chunks from androidperformance.com to ground analysis claims in published material. ' +
-    'Returns ranked snippets matching the query plus provenance (chunkId, uri, title, author) so the agent can cite. ' +
-    'When the result carries an `unsupportedReason` (e.g. "index empty", "all chunks blocked by unsupportedReason"), ' +
-    'the agent must say the source is unavailable and must NOT summarize, paraphrase, or invent content from this source.',
+    'Retrieve Android performance blog knowledge or request-authorized private Wiki background. ' +
+    `Wiki is explanatory, not trace evidence.${knowledgeSourceCapabilityHint} ` +
+    'If unsupportedReason is present, report unavailable and never invent or paraphrase unavailable content.',
     {
       query: z.string().describe('Search query — natural language is fine; tokens are lowercased and matched against snippet + title.'),
       top_k: z.number().int().min(1).max(20).optional().describe('Maximum hits returned (1-20, default 5).'),
+      source: z.enum(['androidperformance.com', 'android_internals_wiki']).optional()
+        .describe('Knowledge source. Defaults to androidperformance.com for compatibility.'),
+      knowledge_source_id: z.string().optional()
+        .describe(`Request-whitelisted source id for Android Internals Wiki.${knowledgeSourceCapabilityHint}`),
     },
-    async ({ query, top_k }) => {
-      const store = getRagStore();
+    async ({ query, top_k, source, knowledge_source_id }) => {
+      const store = options.ragStore ?? getRagStore();
+      if (source === 'android_internals_wiki') {
+        const sourceId = normalizeOptionalToolString(knowledge_source_id) ??
+          (knowledgeSourceIds.length === 1 ? knowledgeSourceIds[0] : undefined);
+        if (!sourceId || !knowledgeSourceIds.includes(sourceId) || !knowledgeScope) {
+          return {
+            content: [{
+              type: 'text' as const,
+              text: JSON.stringify({
+                success: false,
+                unsupportedReason: 'private_knowledge_source_not_whitelisted',
+                authorizedKnowledgeSourceIds: knowledgeSourceIds,
+              }),
+            }],
+          };
+        }
+        const access = externalKnowledgeRegistry.evaluateAccess(
+          sourceId,
+          knowledgeScope,
+          knowledgeSourceIds,
+        );
+        if (!access.allowed || !access.source.activeGeneration) {
+          return {
+            content: [{
+              type: 'text' as const,
+              text: JSON.stringify({
+                success: false,
+                unsupportedReason: access.allowed
+                  ? 'private_knowledge_index_not_active'
+                  : access.reason,
+              }),
+            }],
+          };
+        }
+        const raw = store.search(query, {
+          topK: top_k ?? 5,
+          kinds: ['android_internals_wiki'],
+          knowledgeSourceIds: [sourceId],
+          activeSourceGenerations: {[sourceId]: access.source.activeGeneration},
+          scope: knowledgeScope,
+        });
+        const filtered = await filterRagLookup(raw, {
+          toolName: 'lookup_blog_knowledge',
+          turn: 0,
+          ledger: codeLookupLedger,
+          sessionId: options.sessionId,
+          externalKnowledgeRegistry,
+          knowledgeSourceIds,
+          knowledgeScope,
+        });
+        await codeLookupLedger?.flush();
+        return {
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify({success: true, result: filtered}),
+          }],
+        };
+      }
       const result = store.search(query, {
         topK: top_k ?? 5,
         kinds: ['androidperformance.com'],
@@ -4016,6 +4315,90 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
     { annotations: { readOnlyHint: true } },
   );
 
+  const recallSimilarResult = tool(
+    'recall_similar_result',
+    'Recall similar persisted analysis-result snapshots for navigation. Read-only. Returns navigation_hint_only hints; not diagnostic evidence.',
+    {
+      snapshot_id: z.string().describe('Current analysis result snapshot id.'),
+      include_cases: z.boolean().optional().describe('Also include published case-library hints when structured evidence is available (default false).'),
+      top_k: z.number().int().min(1).max(20).optional().describe('Maximum hints returned, default 5.'),
+    },
+    async ({ snapshot_id, include_cases, top_k }) => {
+      const snapshotId = snapshot_id.trim();
+      if (!snapshotId) {
+        return {
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify({
+              success: false,
+              allowedUse: 'navigation_hint_only',
+              error: 'snapshot_id is required',
+            }),
+          }],
+          isError: true,
+        };
+      }
+
+      const scope = {
+        tenantId: knowledgeScope?.tenantId || DEFAULT_TENANT_ID,
+        workspaceId: knowledgeScope?.workspaceId || DEFAULT_WORKSPACE_ID,
+        userId: knowledgeScope?.userId || DEFAULT_DEV_USER_ID,
+      };
+      let closeDb: (() => void) | undefined;
+      let snapshotRepository = options.analysisResultSnapshotRepository;
+      if (!snapshotRepository) {
+        const db = openEnterpriseDb();
+        closeDb = () => db.close();
+        snapshotRepository = createAnalysisResultSnapshotRepository(db);
+      }
+
+      try {
+        const service = createTraceSimilarityService({
+          snapshotRepository,
+          ...(include_cases
+            ? {
+              caseLibrary: options.caseLibrary ?? getCaseLibrary(),
+              ragStore: options.ragStore ?? getRagStore(),
+            }
+            : {}),
+        });
+        const result = service.findSimilarAnalysisResult({
+          scope,
+          knowledgeScope: scope,
+          snapshotId,
+          includeCases: include_cases ?? false,
+          limit: top_k,
+        });
+        if (!result) {
+          return {
+            content: [{
+              type: 'text' as const,
+              text: JSON.stringify({
+                success: false,
+                allowedUse: 'navigation_hint_only',
+                error: 'Analysis result snapshot not found',
+              }),
+            }],
+            isError: true,
+          };
+        }
+        return {
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify({
+              success: true,
+              allowedUse: 'navigation_hint_only',
+              ...result,
+            }),
+          }],
+        };
+      } finally {
+        closeDb?.();
+      }
+    },
+    { annotations: { readOnlyHint: true } },
+  );
+
   // query_perfetto_source: Search the Perfetto stdlib for SQL patterns and usage examples.
   // Enables Claude to self-learn by finding how official code uses tables/functions.
   const queryPerfettoSource = tool(
@@ -4321,6 +4704,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
         ...(forcedAccept ? { unresolvedAspects: missingAspectIds } : {}),
       };
       analysisPlanRef.current = plan;
+      replayPrePlanToolCalls(analysisPlanRef);
       clearPendingPlanRevisionGate(plan);
       planReviseAttempts = 0;
       if (!forcedAccept) planSubmitAttempts = 0;
@@ -5290,15 +5674,11 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
         };
       }
       const targetTraceId = trace === 'reference' ? referenceTraceId : traceId;
-      const traceLabel = trace === 'reference'
-        ? localize(outputLanguage, '[参考 Trace]', '[reference trace]')
-        : localize(outputLanguage, '[当前 Trace]', '[current trace]');
+      const traceLabel = `[${traceLocationDisplayLabel(trace)}]`;
       const producer = createEvidenceProducerContext(
         'execute_sql_on',
         { trace, sql, summary },
-        trace === 'reference'
-          ? localize(outputLanguage, '执行参考 Trace SQL，验证对比差异。', 'Run SQL on the reference trace to verify comparison deltas.')
-          : localize(outputLanguage, '执行当前 Trace SQL，验证对比差异。', 'Run SQL on the current trace to verify comparison deltas.'),
+        comparisonSqlProducerReason(trace),
         trace,
       );
       try {
@@ -5325,7 +5705,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
             })
           : undefined;
         const shouldReturnSqlSummary = success && result.rows.length > 0 && (summary || !!sqlArtifact);
-        let emittedEvidence: { evidenceRefId: string; queryHash: string } | undefined;
+        let emittedEvidence: { evidenceRefId: string; queryHash: string; queryReview?: QueryReviewV1 } | undefined;
 
         if (shouldReturnSqlSummary) {
           const summaryResult = summarizeSqlResult(result.columns, result.rows);
@@ -5340,7 +5720,14 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
               producer,
               processIdentityWarning,
               sqlArtifact?.artifactId,
+              {
+                durationMs,
+                truncated: false,
+                sqlRewrites,
+                toolName: 'execute_sql_on',
+              },
             );
+            updateSqlArtifactQueryReview(artifactStore, sqlArtifact, emittedEvidence.queryReview);
           }
           const text = JSON.stringify({
             success: true,
@@ -5361,6 +5748,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
             } : {}),
             durationMs,
             evidenceRefId: emittedEvidence?.evidenceRefId,
+            ...(emittedEvidence?.queryReview ? { queryReview: compactQueryReviewForToolResponse(emittedEvidence.queryReview) } : {}),
             sourceToolCallId: producer.sourceToolCallId,
             paramsHash: producer.paramsHash,
             planPhaseId: producer.planPhaseId,
@@ -5383,6 +5771,14 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
             traceProvenance,
             producer,
             processIdentityWarning,
+            undefined,
+            {
+              durationMs,
+              truncated,
+              sqlRewrites,
+              toolName: 'execute_sql_on',
+              rowCount: result.rows.length,
+            },
           );
         }
 
@@ -5398,6 +5794,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
           truncated,
           durationMs,
           evidenceRefId: emittedEvidence?.evidenceRefId,
+          ...(emittedEvidence?.queryReview ? { queryReview: compactQueryReviewForToolResponse(emittedEvidence.queryReview) } : {}),
           sourceToolCallId: producer.sourceToolCallId,
           paramsHash: producer.paramsHash,
           planPhaseId: producer.planPhaseId,
@@ -5424,10 +5821,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
         return { content: [{ type: 'text' as const, text: consumeWatchdogWarning(success ? text + getReasoningNudge() : text) }] };
       } catch (e: any) {
         rethrowIfTraceProcessorQueryCancelled(e);
-        const traceProvenance = buildTraceProcessorQueryProvenance({
-          traceId: targetTraceId,
-          traceSide: trace,
-        });
+        const traceProvenance = buildScopedTraceProvenance(targetTraceId, trace);
         return {
           content: [{
             type: 'text' as const,
@@ -5454,17 +5848,31 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
     'compare_skill',
     'Run the same skill on both current and reference traces in parallel, returning side-by-side results with schema alignment info.\n\n' +
     'Use when: you want to compare the same analysis dimension across both traces (e.g., scrolling_analysis, cpu_analysis).\n' +
+    'When the two traces need different package names, startup IDs, or time windows, use currentParams/referenceParams for side-specific values.\n' +
     'Don\'t use when: you need different skills on each trace, or ad-hoc SQL queries (use execute_sql_on instead).\n\n' +
     'Examples:\n' +
     '1. Compare scrolling: skillId="scrolling_analysis", params={process_name: "com.example.app"}\n' +
-    '2. Compare CPU: skillId="cpu_analysis"',
+    '2. Compare startup detail with different windows: skillId="startup_detail", currentParams={startup_id:1,start_ts:100,end_ts:200}, referenceParams={startup_id:1,start_ts:500,end_ts:650}\n' +
+    '3. Compare CPU: skillId="cpu_analysis"',
     {
       skillId: z.string().describe('Skill identifier to run on both traces'),
       params: z.record(z.string(), z.any()).optional().describe(
-        'Parameters passed to both skill executions. Common: { process_name, start_ts, end_ts }'
+        'Shared parameters passed to both skill executions. Common: { process_name, start_ts, end_ts }'
+      ),
+      currentParams: z.record(z.string(), z.any()).optional().describe(
+        'Parameters for the current trace only. Overrides shared params for the current side.'
+      ),
+      referenceParams: z.record(z.string(), z.any()).optional().describe(
+        'Parameters for the reference trace only. Overrides shared params for the reference side.'
+      ),
+      current_params: z.record(z.string(), z.any()).optional().describe(
+        'Alias for currentParams for OpenAI-compatible callers.'
+      ),
+      reference_params: z.record(z.string(), z.any()).optional().describe(
+        'Alias for referenceParams for OpenAI-compatible callers.'
       ),
     },
-    async ({ skillId, params }, extra) => {
+    async ({ skillId, params, currentParams, referenceParams, current_params, reference_params }, extra) => {
       const signal = getRuntimeToolSignal(extra);
       throwIfTraceProcessorQueryCancelled(signal);
       const planError = requirePlan('compare_skill');
@@ -5472,16 +5880,35 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
         return { content: [{ type: 'text' as const, text: planError }] };
       }
       try {
-        const effectiveParams = normalizeSkillParams(params, packageName);
-        // For reference trace: use its own package name if detected, otherwise
-        // omit process_name filter entirely (safer than silently using current's package)
-        const refParams = comparisonContext?.referencePackageName
-          ? normalizeSkillParams(params, comparisonContext.referencePackageName)
-          : normalizeSkillParams(params); // No default package — skill runs unfiltered
+        const currentSideParams = currentParams ?? current_params;
+        const referenceSideParams = referenceParams ?? reference_params;
+        const referenceSharedParams = referenceSharedParamsForComparison(
+          params,
+          packageName,
+          comparisonContext?.referencePackageName,
+        );
+        const effectiveParams = normalizeSkillParams(
+          { ...(params ?? {}), ...(currentSideParams ?? {}) },
+          packageName,
+        );
+        const refParams = normalizeSkillParams(
+          { ...referenceSharedParams.params, ...(referenceSideParams ?? {}) },
+          comparisonContext?.referencePackageName,
+        );
+        const producerInput = {
+          skillId,
+          params,
+          currentParams: currentSideParams,
+          referenceParams: referenceSideParams,
+        };
         const baseProducer = createEvidenceProducerContext(
           'compare_skill',
-          { skillId, params },
-          localize(outputLanguage, `对比 Skill ${skillId}，在当前和参考 Trace 上收集同构证据。`, `Compare Skill ${skillId} to collect aligned evidence on current and reference traces.`),
+          producerInput,
+          localize(
+            outputLanguage,
+            `对比 Skill ${skillId}，在${traceLocationDisplayLabel('current')}和${traceLocationDisplayLabel('reference')}上收集同构证据。`,
+            `Compare Skill ${skillId} to collect aligned evidence on ${traceLocationDisplayLabel('current')} and ${traceLocationDisplayLabel('reference')}.`,
+          ),
         );
 
         emitUpdate?.({
@@ -5490,25 +5917,27 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
             phase: 'analyzing',
             message: localize(
               outputLanguage,
-              `对比技能 ${skillId}：在两个 Trace 上并行执行...`,
-              `Comparing skill ${skillId}: running on both traces in parallel...`,
+              `对比技能 ${skillId}：在${traceLocationDisplayLabel('current')}和${traceLocationDisplayLabel('reference')}上并行执行...`,
+              `Comparing skill ${skillId}: running on ${traceLocationDisplayLabel('current')} and ${traceLocationDisplayLabel('reference')} in parallel...`,
             ),
           },
           timestamp: Date.now(),
         });
 
         const compareStart = Date.now();
-        const currentTraceProvenance = buildTraceProcessorQueryProvenance({
-          traceId,
-          traceSide: 'current',
-        });
-        const referenceTraceProvenance = buildTraceProcessorQueryProvenance({
-          traceId: referenceTraceId,
-          traceSide: 'reference',
-        });
+        const currentTraceProvenance = buildScopedTraceProvenance(traceId, 'current');
+        const referenceTraceProvenance = buildScopedTraceProvenance(referenceTraceId, 'reference');
         const [currentResult, refResult] = await Promise.all([
-          skillExecutor.execute(skillId, traceId, effectiveParams, { __traceSide: 'current', signal }),
-          skillExecutor.execute(skillId, referenceTraceId, refParams, { __traceSide: 'reference', signal }),
+          skillExecutor.execute(skillId, traceId, effectiveParams, {
+            __traceSide: 'current',
+            ...(currentTraceProvenance.paneSide ? { __paneSide: currentTraceProvenance.paneSide } : {}),
+            signal,
+          }),
+          skillExecutor.execute(skillId, referenceTraceId, refParams, {
+            __traceSide: 'reference',
+            ...(referenceTraceProvenance.paneSide ? { __paneSide: referenceTraceProvenance.paneSide } : {}),
+            signal,
+          }),
         ]);
         const compareDuration = Date.now() - compareStart;
 
@@ -5535,7 +5964,11 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
             {
               ...baseProducer,
               sourceToolCallId: `${baseProducer.sourceToolCallId}:current`,
-              producerReason: localize(outputLanguage, `当前 Trace 对比 Skill ${skillId} 结果。`, `Current trace result for comparison Skill ${skillId}.`),
+              producerReason: localize(
+                outputLanguage,
+                `${traceLocationDisplayLabel('current')}对比 Skill ${skillId} 结果。`,
+                `${traceLocationDisplayLabel('current')} result for comparison Skill ${skillId}.`,
+              ),
             },
             currentResult.identityResolution,
           );
@@ -5549,7 +5982,11 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
             {
               ...baseProducer,
               sourceToolCallId: `${baseProducer.sourceToolCallId}:reference`,
-              producerReason: localize(outputLanguage, `参考 Trace 对比 Skill ${skillId} 结果。`, `Reference trace result for comparison Skill ${skillId}.`),
+              producerReason: localize(
+                outputLanguage,
+                `${traceLocationDisplayLabel('reference')}对比 Skill ${skillId} 结果。`,
+                `${traceLocationDisplayLabel('reference')} result for comparison Skill ${skillId}.`,
+              ),
             },
             refResult.identityResolution,
           );
@@ -5567,10 +6004,17 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
         const text = JSON.stringify({
           success: true,
           durationMs: compareDuration,
+          parameterMapping: {
+            referenceIdentityRemapped: referenceSharedParams.identityRemapped,
+            currentOverrideKeys: Object.keys(currentSideParams ?? {}),
+            referenceOverrideKeys: Object.keys(referenceSideParams ?? {}),
+          },
           current: {
             traceSide: 'current',
+            paneSide: currentTraceProvenance.paneSide,
             traceId,
             traceProvenance: currentTraceProvenance,
+            effectiveParams,
             success: currentResult.success,
             stepCount: currentResult.displayResults?.length || 0,
             steps: buildStepSummary(currentResult.displayResults || []),
@@ -5580,8 +6024,10 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
           },
           reference: {
             traceSide: 'reference',
+            paneSide: referenceTraceProvenance.paneSide,
             traceId: referenceTraceId,
             traceProvenance: referenceTraceProvenance,
+            effectiveParams: refParams,
             success: refResult.success,
             stepCount: refResult.displayResults?.length || 0,
             steps: buildStepSummary(refResult.displayResults || []),
@@ -5611,25 +6057,34 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
   const getComparisonContext = (referenceTraceId && comparisonContext) ? tool(
     'get_comparison_context',
     'Get metadata comparison between the current trace and the reference trace. ' +
-    'Returns device info, focus app, architecture, and capability alignment for both traces.\n\n' +
+    'Returns device info, focus app, architecture, capability alignment, and any UI pane mapping for both traces.\n\n' +
     'ALWAYS call this first in comparison mode to understand what you are comparing ' +
     'and confirm the traces are comparable (same app, compatible capabilities).',
     {},
     async () => {
       const ctx = comparisonContext!;
+      const currentPane = ctx.tracePairContext?.panes.find(pane => pane.traceSide === 'current');
+      const referencePane = ctx.tracePairContext?.panes.find(pane => pane.traceSide === 'reference');
       const text = JSON.stringify({
         success: true,
         current: {
           traceId,
+          paneSide: currentPane?.side,
+          visualState: currentPane?.visualState,
+          traceName: currentPane?.traceName,
           packageName: packageName || 'unknown',
           architecture: options.cachedArchitecture?.type || 'unknown',
           focusApps: options.cachedArchitecture ? undefined : 'detect with detect_architecture',
         },
         reference: {
           traceId: referenceTraceId,
+          paneSide: referencePane?.side,
+          visualState: referencePane?.visualState,
+          traceName: referencePane?.traceName,
           packageName: ctx.referencePackageName || 'unknown',
           architecture: ctx.referenceArchitecture?.type || 'unknown',
         },
+        tracePairContext: ctx.tracePairContext,
         packageAlignment: packageName && ctx.referencePackageName
           ? (packageName === ctx.referencePackageName ? 'same' : 'different')
           : 'unknown',
@@ -5681,6 +6136,7 @@ export function createClaudeMcpServer(options: ClaudeMcpServerOptions) {
     registry.registerSdk(compareBaselines, 'compare_baselines', 'public');
     registry.registerSdk(recallProjectMemory, 'recall_project_memory', 'public');
     registry.registerSdk(recallSimilarCase, 'recall_similar_case', 'public');
+    registry.registerSdk(recallSimilarResult, 'recall_similar_result', 'public');
     if (writeAnalysisNote) registry.registerSdk(writeAnalysisNote, 'write_analysis_note', 'internal');
     if (fetchArtifact) registry.registerSdk(fetchArtifact, 'fetch_artifact', 'public');
     if (submitPlan) registry.registerSdk(submitPlan, 'submit_plan', 'internal');
@@ -5786,6 +6242,16 @@ function storeSqlResultArtifact(
   };
 }
 
+function updateSqlArtifactQueryReview(
+  artifactStore: ArtifactStore | undefined,
+  sqlArtifact: { artifactId: string; artifactSummary?: CompactArtifactSummary | undefined } | undefined,
+  queryReview: QueryReviewV1 | undefined,
+): void {
+  if (!artifactStore || !sqlArtifact || !queryReview) return;
+  artifactStore.updateQueryReview(sqlArtifact.artifactId, queryReview);
+  sqlArtifact.artifactSummary = artifactStore.generateCompactSummary(sqlArtifact.artifactId);
+}
+
 function stableSqlEvidenceRefId(
   sql: string | undefined,
   columns: string[],
@@ -5885,13 +6351,37 @@ function emitSqlDataEnvelope(
   producer?: EvidenceProducerContext,
   processIdentityWarning?: string,
   artifactId?: string,
-): { evidenceRefId: string; queryHash: string } {
+  options?: {
+    durationMs?: number;
+    truncated?: boolean;
+    sqlRewrites?: string[];
+    toolName?: 'execute_sql' | 'execute_sql_on';
+    rowCount?: number;
+  },
+): { evidenceRefId: string; queryHash: string; queryReview?: QueryReviewV1 } {
   const { evidenceRefId, queryHash } = stableSqlEvidenceRefId(sql, columns, rows, traceProvenance, producer);
+  const toolName = options?.toolName ?? 'execute_sql';
+  const queryReview = buildSqlQueryReview({
+    producerKind: toolName,
+    executableSql: sql,
+    outputColumns: columns.map((col: string) => ({ name: col, type: inferSqlColumnType(col) })),
+    traceProvenance,
+    producer,
+    evidenceRefId,
+    queryHash,
+    artifactId,
+    durationMs: options?.durationMs,
+    rowCount: options?.rowCount ?? rows.length,
+    truncated: options?.truncated,
+    sqlRewrites: options?.sqlRewrites,
+    stdlibInjectedModules,
+    processIdentityWarning,
+  });
   const envelope = createDataEnvelope(
     { columns, rows },
     {
       type: 'sql_result',
-      source: 'execute_sql',
+      source: toolName,
       title: `SQL Query (${rows.length} rows)`,
       layer: 'list',
       format: 'table',
@@ -5901,8 +6391,10 @@ function emitSqlDataEnvelope(
       })),
       evidenceRefId,
       traceSide: traceProvenance?.traceSide,
+      paneSide: traceProvenance?.paneSide,
       traceId: traceProvenance?.traceId,
       queryHash,
+      queryReview,
       ...producerEnvelopeOptions(producer),
       artifactId,
       sourceArtifactId: artifactId,
@@ -5919,13 +6411,14 @@ function emitSqlDataEnvelope(
       ...(stdlibInjectedModules?.length ? { stdlibInjectedModules } : {}),
       ...(traceProvenance ? {
         traceSide: traceProvenance.traceSide,
+        paneSide: traceProvenance.paneSide,
         traceId: traceProvenance.traceId,
         traceProvenance,
       } : {}),
     }],
     timestamp: Date.now(),
   });
-  return { evidenceRefId, queryHash };
+  return { evidenceRefId, queryHash, queryReview };
 }
 
 /** Emit a DataEnvelope for SQL summary-mode results. */
@@ -5938,7 +6431,13 @@ function emitSqlSummaryDataEnvelope(
   producer?: EvidenceProducerContext,
   processIdentityWarning?: string,
   artifactId?: string,
-): { evidenceRefId: string; queryHash: string } {
+  options?: {
+    durationMs?: number;
+    truncated?: boolean;
+    sqlRewrites?: string[];
+    toolName?: 'execute_sql' | 'execute_sql_on';
+  },
+): { evidenceRefId: string; queryHash: string; queryReview?: QueryReviewV1 } {
   const { evidenceRefId, queryHash } = stableSqlEvidenceRefId(
     sql,
     summary.columns,
@@ -5947,6 +6446,24 @@ function emitSqlSummaryDataEnvelope(
     producer,
     'summary',
   );
+  const toolName = options?.toolName ?? 'execute_sql';
+  const queryReview = buildSqlQueryReview({
+    producerKind: toolName,
+    executableSql: sql,
+    outputColumns: summary.columns,
+    traceProvenance,
+    producer,
+    evidenceRefId,
+    queryHash,
+    artifactId,
+    durationMs: options?.durationMs,
+    rowCount: summary.totalRows,
+    truncated: options?.truncated,
+    sqlRewrites: options?.sqlRewrites,
+    stdlibInjectedModules,
+    processIdentityWarning,
+    title: `SQL Summary Review (${summary.totalRows} rows)`,
+  });
   const envelope = createDataEnvelope(
     {
       summary: {
@@ -5957,14 +6474,16 @@ function emitSqlSummaryDataEnvelope(
     },
     {
       type: 'sql_result',
-      source: 'execute_sql',
+      source: toolName,
       title: `SQL Summary (${summary.totalRows} rows)`,
       layer: 'overview',
       format: 'summary',
       evidenceRefId,
       traceSide: traceProvenance?.traceSide,
+      paneSide: traceProvenance?.paneSide,
       traceId: traceProvenance?.traceId,
       queryHash,
+      queryReview,
       ...producerEnvelopeOptions(producer),
       artifactId,
       sourceArtifactId: artifactId,
@@ -5981,19 +6500,21 @@ function emitSqlSummaryDataEnvelope(
       ...(stdlibInjectedModules?.length ? { stdlibInjectedModules } : {}),
       ...(traceProvenance ? {
         traceSide: traceProvenance.traceSide,
+        paneSide: traceProvenance.paneSide,
         traceId: traceProvenance.traceId,
         traceProvenance,
       } : {}),
     }],
     timestamp: Date.now(),
   });
-  return { evidenceRefId, queryHash };
+  return { evidenceRefId, queryHash, queryReview };
 }
 
 interface SqlFailureToolPayloadInput {
   error: string;
   trace?: string;
   traceSide?: TraceProcessorTraceSide;
+  paneSide?: TraceProcessorPaneSide;
   traceId?: string;
   traceProvenance: TraceProcessorQueryProvenance;
   sourceToolCallId?: string;
@@ -6009,10 +6530,32 @@ interface SqlFailureToolPayloadInput {
 
 function buildSqlFailureToolPayload(input: SqlFailureToolPayloadInput): Record<string, unknown> {
   const outputLanguage = input.outputLanguage ?? DEFAULT_OUTPUT_LANGUAGE;
+  const queryReview = input.executableSql
+    ? buildSqlQueryReview({
+        producerKind: input.sourceToolCallId?.startsWith('execute_sql_on') ? 'execute_sql_on' : 'execute_sql',
+        executableSql: input.executableSql,
+        outputColumns: [],
+        traceProvenance: input.traceProvenance,
+        producer: {
+          sourceToolCallId: input.sourceToolCallId,
+          paramsHash: input.paramsHash,
+          planPhaseId: input.planPhaseId,
+        },
+        durationMs: input.durationMs,
+        rowCount: 0,
+        truncated: false,
+        sqlRewrites: input.sqlRewrites,
+        stdlibInjectedModules: input.stdlibInjectedModules,
+        processIdentityWarning: input.processIdentityWarning,
+        title: 'Failed SQL review',
+        purpose: `Review attempted SQL after execution failure: ${input.error}`,
+      })
+    : undefined;
   return {
     success: false,
     ...(input.trace ? { trace: input.trace } : {}),
     traceSide: input.traceSide,
+    paneSide: input.paneSide ?? input.traceProvenance.paneSide,
     traceId: input.traceId,
     traceProvenance: input.traceProvenance,
     columns: [],
@@ -6024,6 +6567,7 @@ function buildSqlFailureToolPayload(input: SqlFailureToolPayloadInput): Record<s
     paramsHash: input.paramsHash,
     planPhaseId: input.planPhaseId,
     executableSql: input.executableSql,
+    ...(queryReview ? { queryReview: compactQueryReviewForToolResponse(queryReview) } : {}),
     ...(input.sqlRewrites && input.sqlRewrites.length > 0 ? { sqlRewrites: input.sqlRewrites } : {}),
     stdlibInjectedModules: input.stdlibInjectedModules || [],
     ...(input.processIdentityWarning ? { processIdentityWarning: input.processIdentityWarning } : {}),
@@ -6064,6 +6608,7 @@ function emitSkillDataEnvelopes(
   producer?: EvidenceProducerContext,
   identityResolution?: IdentityResolutionV1,
   artifactIdsByStepId?: Map<string, string>,
+  queryReviewsByStepId?: Map<string, QueryReviewV1>,
 ): void {
   const envelopes = displayResults
     .filter(dr => Boolean(dr.data))
@@ -6087,14 +6632,26 @@ function emitSkillDataEnvelopes(
       const artifactId = envelope.meta.stepId
         ? artifactIdsByStepId?.get(envelope.meta.stepId)
         : undefined;
+      const queryReview = envelope.meta.stepId
+        ? queryReviewsByStepId?.get(envelope.meta.stepId) ?? buildSkillQueryReview({
+            skillId,
+            displayResult: dr,
+            traceProvenance,
+            producer,
+            artifactId,
+            evidenceRefId,
+          })
+        : undefined;
       const withEvidence = {
         ...envelope,
         meta: {
           ...envelope.meta,
           evidenceRefId,
           traceSide: traceProvenance?.traceSide,
+          paneSide: traceProvenance?.paneSide,
           traceId: traceProvenance?.traceId,
           ...(artifactId ? { artifactId, sourceArtifactId: artifactId } : {}),
+          ...(queryReview ? { queryReview } : {}),
           ...(identityResolution ? {
             identityRefId: identityResolution.identityRefId,
             identityStatus: identityResolution.status,
@@ -6109,6 +6666,7 @@ function emitSkillDataEnvelopes(
         ? {
           ...withEvidence,
           traceSide: traceProvenance.traceSide,
+          paneSide: traceProvenance.paneSide,
           traceId: traceProvenance.traceId,
           traceProvenance,
         }

@@ -8,7 +8,7 @@ import { spawnSync } from 'child_process';
 export interface ProcessRssSample {
   pid: number;
   rssBytes: number | null;
-  source: 'procfs' | 'ps' | 'unavailable';
+  source: 'procfs' | 'ps' | 'powershell' | 'unavailable';
   error?: string;
 }
 
@@ -55,6 +55,25 @@ export function readProcessRssBytes(pid: number): ProcessRssSample {
         error: error.message,
       };
     }
+  }
+
+  if (process.platform === 'win32') {
+    const result = spawnSync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${pid} -ErrorAction Stop).WorkingSet64`],
+      { encoding: 'utf8', timeout: 2000 },
+    );
+    const rssBytes = Number.parseInt(`${result.stdout ?? ''}`.trim(), 10);
+    if (Number.isSafeInteger(rssBytes) && rssBytes > 0) {
+      return { pid, rssBytes, source: 'powershell' };
+    }
+    const stderr = `${result.stderr ?? ''}`.trim();
+    return {
+      pid,
+      rssBytes: null,
+      source: 'unavailable',
+      ...(stderr ? { error: stderr } : {}),
+    };
   }
 
   const result = spawnSync('ps', ['-o', 'rss=', '-p', String(pid)], {

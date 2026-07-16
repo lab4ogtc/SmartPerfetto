@@ -270,7 +270,7 @@ export class ProviderService {
       logger.warn(
         'ProviderManager',
         `Bedrock provider "${providerName}": model "${model}" is not a valid Bedrock ID; ` +
-          `normalizing to "${normalized}". Set a Bedrock model ID (e.g. us.anthropic.claude-sonnet-4-5-20250929-v1:0) to silence this.`,
+          `normalizing to "${normalized}". Set a Bedrock model ID (e.g. us.anthropic.claude-sonnet-5) to silence this.`,
       );
     }
     return normalized;

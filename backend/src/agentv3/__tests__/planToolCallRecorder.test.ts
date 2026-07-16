@@ -7,6 +7,8 @@ import type { AnalysisPlanV3 } from '../types';
 import {
   findCompletedPhaseEvidenceGaps,
   recordPlanToolCall,
+  recordPlanOrPrePlanToolCall,
+  replayPrePlanToolCalls,
 } from '../planToolCallRecorder';
 
 function createPlan(): AnalysisPlanV3 {
@@ -106,6 +108,126 @@ describe('recordPlanToolCall', () => {
 
     expect(record?.matchedPhaseId).toBe('p4');
     expect(findCompletedPhaseEvidenceGaps(plan)).toHaveLength(1);
+  });
+
+  it('matches compare_skill expectedCalls by skillId for raw trace pair comparison', () => {
+    const plan: AnalysisPlanV3 = {
+      phases: [{
+        id: 'p1',
+        name: '启动对比',
+        goal: '对比左右两个 Trace 的启动指标',
+        expectedTools: ['compare_skill', 'invoke_skill'],
+        expectedCalls: [{ tool: 'compare_skill', skillId: 'startup_analysis' }],
+        status: 'completed',
+        completedAt: 100,
+        summary: '已执行启动对比，准备汇总左右 Trace 的差异。',
+      }],
+      successCriteria: '解释左右 Trace 启动速度差异',
+      submittedAt: 1,
+      toolCallLog: [],
+    };
+
+    const record = recordPlanToolCall(plan, {
+      toolName: 'compare_skill',
+      input: {
+        skillId: 'startup_analysis',
+        params: {
+          currentTraceId: 'left-trace',
+          referenceTraceId: 'right-trace',
+        },
+      },
+      timestamp: 10,
+    });
+
+    expect(record).toMatchObject({
+      toolName: 'compare_skill',
+      skillId: 'startup_analysis',
+      matchedPhaseId: 'p1',
+    });
+    expect(findCompletedPhaseEvidenceGaps(plan)).toEqual([]);
+  });
+
+  it('replays pre-plan comparison context calls into the accepted raw trace pair plan', () => {
+    const tracker: { current: AnalysisPlanV3 | null; prePlanToolCallLog?: AnalysisPlanV3['toolCallLog'] } = {
+      current: null,
+    };
+
+    recordPlanOrPrePlanToolCall(tracker, {
+      toolName: 'get_comparison_context',
+      input: {},
+      resultText: '{"success":true}',
+      timestamp: 10,
+    });
+
+    const plan: AnalysisPlanV3 = {
+      phases: [{
+        id: 'p1',
+        name: '窗口映射确认',
+        goal: '读取左右双 Trace 窗口映射和包名',
+        expectedTools: ['get_comparison_context'],
+        expectedCalls: [{ tool: 'get_comparison_context' }],
+        status: 'completed',
+        completedAt: 100,
+        summary: '已确认左侧和右侧 Trace 的窗口映射。补充说明确保摘要足够长。',
+      }],
+      successCriteria: '确认双 Trace 窗口映射',
+      submittedAt: 20,
+      toolCallLog: [],
+    };
+    tracker.current = plan;
+
+    expect(replayPrePlanToolCalls(tracker)).toBe(1);
+    expect(plan.toolCallLog).toEqual([
+      expect.objectContaining({
+        toolName: 'get_comparison_context',
+        matchedPhaseId: 'p1',
+      }),
+    ]);
+    expect(tracker.prePlanToolCallLog).toEqual([]);
+    expect(findCompletedPhaseEvidenceGaps(plan)).toEqual([]);
+  });
+
+  it('replays pre-plan compare_skill calls with the requested skillId', () => {
+    const tracker: { current: AnalysisPlanV3 | null; prePlanToolCallLog?: AnalysisPlanV3['toolCallLog'] } = {
+      current: null,
+    };
+
+    recordPlanOrPrePlanToolCall(tracker, {
+      toolName: 'compare_skill',
+      input: {
+        skillId: 'startup_analysis',
+        currentParams: { process_name: 'left.app' },
+        referenceParams: { process_name: 'right.app' },
+      },
+      timestamp: 10,
+    });
+
+    const plan: AnalysisPlanV3 = {
+      phases: [{
+        id: 'p2',
+        name: '启动概览对比',
+        goal: '对比左右两个 Trace 的启动指标',
+        expectedTools: ['compare_skill'],
+        expectedCalls: [{ tool: 'compare_skill', skillId: 'startup_analysis' }],
+        status: 'completed',
+        completedAt: 100,
+        summary: '已完成启动概览对比，包含左右 Trace 的启动指标差异。',
+      }],
+      successCriteria: '解释左右 Trace 启动速度差异',
+      submittedAt: 20,
+      toolCallLog: [],
+    };
+    tracker.current = plan;
+
+    expect(replayPrePlanToolCalls(tracker)).toBe(1);
+    expect(plan.toolCallLog).toEqual([
+      expect.objectContaining({
+        toolName: 'compare_skill',
+        skillId: 'startup_analysis',
+        matchedPhaseId: 'p2',
+      }),
+    ]);
+    expect(findCompletedPhaseEvidenceGaps(plan)).toEqual([]);
   });
 
   it('does not let informational strategy detail lookups satisfy evidence gaps', () => {

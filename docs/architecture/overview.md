@@ -55,6 +55,7 @@ Feature/Bug 设计要同时判断 Web UI、CLI、API、报告、Docker、免安�
 | Skills | `backend/skills/` | 原子、组合、深度、渲染管线分析 |
 | Strategies | `backend/strategies/` | 场景策略、Prompt 模板、知识模板 |
 | Code-aware analysis | `backend/src/services/codebase/`, `backend/src/services/rag/`, `backend/src/services/symbol/` | 本地代码库注册、源码索引、符号解析、lookup 过滤、patch 三态校验 |
+| External Android knowledge | `backend/src/services/androidInternalsWiki/`, `externalKnowledgeSourceRegistry.ts`, `ragStore.ts` | 外部 Wiki 全库审计、版本/指纹、分代索引、许可/同意/scope 和私有内容投影 |
 | Trace processor | `backend/src/services/traceProcessorService.ts` | trace 加载、RPC 管理、SQL 查询 |
 | Reports | `backend/src/services/htmlReportGenerator.ts` | HTML 报告生成 |
 | Result quality pipeline | `backend/src/services/agentResultNormalizer.ts`, `finalReportContractGate.ts`, `evidence/`, `verifier/`, `analysisResultSnapshotPipeline.ts` | final report contract、evidence/claim verification、identity resolution、snapshot |
@@ -78,6 +79,9 @@ Feature/Bug 设计要同时判断 Web UI、CLI、API、报告、Docker、免安�
       -> execute_sql -> trace_processor_shell
       -> invoke_skill -> SkillExecutor -> SQL / DataEnvelope
       -> lookup_knowledge / lookup_sql_schema / fetch_artifact
+      -> lookup_blog_knowledge(source=android_internals_wiki)
+         -> request source allowlist + live registry consent/scope check
+         -> active RAG generation -> bounded attributed background context
       -> resolve_symbol / lookup_app_source / lookup_aosp_source / lookup_kernel_source
          -> LookupResponseFilter -> CodeRef metadata
       -> propose_patch -> PatchProposer -> verified / sketch / unverified
@@ -100,6 +104,10 @@ Feature/Bug 设计要同时判断 Web UI、CLI、API、报告、Docker、免安�
 CLI `smp run` / `smp ask` / `smp compare` 复用同一 session、runtime、Skill、report
 和 trace_processor 路径；区别只是本地存储在 `~/.smartperfetto/`，输出可以是
 `text`、`json` 或 `ndjson`。
+
+外部 Wiki 与 trace 证据是两条独立数据流。正文只在显式请求 capability 下进入当前
+provider 的 tool result；运行时桥接到 SSE、日志、报告或 snapshot 时统一投影为
+chunk 引用/哈希/许可/出处。Wiki 背景不能被 claim verifier 当作当前 trace 的测量值。
 
 ## Runtime 与 Provider 边界
 
@@ -133,6 +141,9 @@ SmartPerfetto 的最终回答不是单一 Markdown 字符串，而是一组共�
 | Raw Trace Compare | 前端 reference trace、CLI `smp compare` | current trace + reference trace 实时查询 | 共享 comparison identity、evidence pack、session snapshot 和 report section |
 | Analysis Result Compare | 前端多结果对比 API | 已完成分析结果 snapshot | 保留 workspace/RBAC/matrix 能力，并复用共享 report section |
 
+Web UI 的双 Trace 工作区操作状态机见
+[双 Trace 工作区操作模型](dual-trace-workspace.md)。
+
 ## 文档与策略分工
 
 SmartPerfetto 有两类“内容”：
@@ -141,9 +152,15 @@ SmartPerfetto 有两类“内容”：
 |---|---|---|
 | Strategy / Prompt template | `backend/strategies/*.strategy.md`, `*.template.md` | 进入系统 Prompt，约束 agent 思考方式 |
 | YAML Skill | `backend/skills/**/*.skill.yaml` | 被 MCP `invoke_skill` 调用，确定性执行 SQL 分析 |
-| Rendering pipeline docs | `docs/rendering_pipelines/*.md` | 教学模式和管线结果的知识来源 |
+| Rendering pipeline catalog | `backend/skills/pipelines/index.yaml` | 固定上游 commit、14 篇文档哈希，并把 31 个检测条目区分为主类型 variant 或附加 feature |
+| Rendering pipeline docs | `docs/rendering_pipelines/S01-S14*.md` | 从 `Gracker/rendering_pipelines` 同步的 Android 17 权威教学来源；构建时复制到 `backend/dist/rendering_pipelines/` |
 | 普通 docs | `docs/` 其他目录 | 面向用户和贡献者 |
 
 不要在 TypeScript 中硬编码 Prompt 内容。TypeScript 只负责加载、变量替换和结构性编排。
 不要在文档或代码中写死 MCP 工具总数、Skill 总数或 scene 总数；这些分别由
 tool registry、`backend/skills/` 文件树和 strategy frontmatter 决定。
+
+渲染管线输出需要同时保留两层身份：S02-S14 的 `rendering type` 是教学主类型，
+31 个 pipeline 条目是 trace 检测子路径或 feature。只有 catalog 中
+`classification_role: variant` 且 `primary_eligible: true` 的条目能成为主判定；
+同步、哈希和引用完整性由 `npm run check:rendering-pipelines` 校验。

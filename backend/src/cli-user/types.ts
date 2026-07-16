@@ -12,31 +12,19 @@
 import type { BackendAgentRuntimeKind } from '../agentRuntime/runtimeSelection';
 import type { SessionLineage } from '../agentv3/sessionStateSnapshot';
 import type { CodeAwareMode } from '../services/codebase/codeAwareFeature';
-
-export type CapturePresetId =
-  | 'startup'
-  | 'scrolling'
-  | 'anr'
-  | 'game'
-  | 'memory'
-  | 'cpu'
-  | 'power'
-  | 'overview'
-  | 'full';
-
-export type CaptureTarget = 'android' | 'linux';
+import type {
+  CaptureConfigRenderOptions,
+  CapturePresetId,
+  CaptureTarget,
+} from '../services/traceCaptureConfig';
 
 export type CliAnalysisMode = 'fast' | 'full' | 'auto';
 
-export interface CaptureConfigRenderOptions {
-  target: CaptureTarget;
-  preset: CapturePresetId;
-  app?: string;
-  durationSeconds: number;
-  bufferSizeKb?: number;
-  extraAtraceCategories?: string[];
-  cuj?: string;
-}
+export type {
+  CaptureConfigRenderOptions,
+  CapturePresetId,
+  CaptureTarget,
+};
 
 export interface CaptureToolResolution {
   name: 'adb' | 'tracebox';

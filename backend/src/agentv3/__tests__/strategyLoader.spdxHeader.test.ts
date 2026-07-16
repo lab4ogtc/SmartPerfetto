@@ -389,4 +389,13 @@ describe('strategyLoader tolerates leading SPDX HTML comments', () => {
     expect(content).toContain('__intrinsic_artifact_rows');
     expect(content).toContain('这些都不是 SQL 表');
   });
+
+  it('keeps the quick prompt routed through scrolling_analysis for scroll/jank overviews', () => {
+    const content = loadPromptTemplate('prompt-quick');
+    expect(content).toContain('## 快速工具路由');
+    expect(content).toContain('invoke_skill("scrolling_analysis", ...)');
+    expect(content).toContain('enable_frame_details');
+    expect(content).toContain('不要把 FrameTimeline 原始 SQL 作为滑动概览的第一步');
+    expect(content).toContain('不是 `dur_ns`');
+  });
 });

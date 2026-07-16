@@ -44,6 +44,8 @@ const DEFAULT_EXTENSIONS = new Set([
 
 export interface PathSecurityGateOptions {
   allowlistRoots?: string[];
+  /** Environment variable read lazily when allowlistRoots is not provided. */
+  allowlistEnvironmentVariable?: string;
   excludeNames?: string[];
   allowedExtensions?: readonly string[];
   maxFileBytes?: number;
@@ -72,9 +74,11 @@ function parsePathList(value: string | undefined): string[] {
     .filter(Boolean);
 }
 
-function configuredAllowlistRoots(): string[] {
-  const roots = parsePathList(process.env.SMARTPERFETTO_CODEBASE_ROOTS);
-  const unsafeDevRoot = process.env.SMARTPERFETTO_DEV_UNSAFE_CODEBASE_ROOT;
+function configuredAllowlistRoots(environmentVariable: string): string[] {
+  const roots = parsePathList(process.env[environmentVariable]);
+  const unsafeDevRoot = environmentVariable === 'SMARTPERFETTO_CODEBASE_ROOTS'
+    ? process.env.SMARTPERFETTO_DEV_UNSAFE_CODEBASE_ROOT
+    : undefined;
   if (unsafeDevRoot && process.env.NODE_ENV !== 'production') {
     roots.push(unsafeDevRoot);
   }
@@ -119,6 +123,7 @@ function shouldExclude(relativePath: string, basename: string, excludeNames: str
 export class PathSecurityGate {
   // null means "read from env at call time" (supports dotenv loaded after module init)
   private readonly allowlistRootsOverride: string[] | null;
+  private readonly allowlistEnvironmentVariable: string;
   private readonly excludeNames: string[];
   private readonly allowedExtensions: Set<string>;
   private readonly maxFileBytes: number;
@@ -126,6 +131,8 @@ export class PathSecurityGate {
 
   constructor(options: PathSecurityGateOptions = {}) {
     this.allowlistRootsOverride = options.allowlistRoots ?? null;
+    this.allowlistEnvironmentVariable = options.allowlistEnvironmentVariable ??
+      'SMARTPERFETTO_CODEBASE_ROOTS';
     this.excludeNames = options.excludeNames ?? DEFAULT_EXCLUDES;
     this.allowedExtensions = new Set(options.allowedExtensions ?? DEFAULT_EXTENSIONS);
     this.maxFileBytes = options.maxFileBytes ?? 200 * 1024;
@@ -135,7 +142,8 @@ export class PathSecurityGate {
   async preview(rootPath: string): Promise<PathPreviewResult> {
     // Read env lazily so SMARTPERFETTO_CODEBASE_ROOTS set via dotenv (loaded after
     // module init in ESM) is visible on the first real request.
-    const allowlistRoots = this.allowlistRootsOverride ?? configuredAllowlistRoots();
+    const allowlistRoots = this.allowlistRootsOverride ??
+      configuredAllowlistRoots(this.allowlistEnvironmentVariable);
     const rootRealpath = await safeRealpathAsync(rootPath);
     if (!rootRealpath) {
       return {
@@ -230,4 +238,3 @@ export class PathSecurityGate {
     };
   }
 }
-

@@ -54,15 +54,19 @@ import {
   resolveRuntimeConfig,
   type ClaudeAgentConfig,
 } from './claudeConfig';
-import { detectFocusApps } from '../../../agentv3/focusAppDetector';
+import { detectFocusApps, focusAppTimeRangeFromSelection } from '../../../agentv3/focusAppDetector';
 import { classifyScene, type SceneType } from '../../../agentv3/sceneClassifier';
-import { classifyQueryComplexity } from '../../../agentv3/queryComplexityClassifier';
+import {
+  classifyQueryComplexity,
+  classifyQueryComplexityLocal,
+  isAcknowledgementFollowupReason,
+} from '../../../agentv3/queryComplexityClassifier';
 import { buildComplexityClassifierInput } from '../../../agentv3/queryComplexityContext';
 import { buildAgentDefinitions } from './claudeAgentDefinitions';
 import { getExtendedKnowledgeBase } from '../../../services/sqlKnowledgeBase';
 import type { AnalysisNote, AnalysisPlanV3, ClaudeAnalysisContext, ComplexityClassifierInput, FailedApproach, Hypothesis, QueryComplexity, TraceCompleteness, UncertaintyFlag, VerificationIssue } from '../../../agentv3/types';
 import { ArtifactStore } from '../../../agentv3/artifactStore';
-import { recordPlanToolCall } from '../../../agentv3/planToolCallRecorder';
+import { recordPlanOrPrePlanToolCall } from '../../../agentv3/planToolCallRecorder';
 import { buildRecoveryNote } from '../../../agentv3/recoveryNoteBuilder';
 import { evaluateThreshold as evaluateContextThreshold } from '../../../agentv3/contextTokenMeter';
 import {
@@ -83,6 +87,7 @@ import {
   buildNegativePatternSection,
 } from '../../../agentv3/analysisPatternMemory';
 import {sanitizeCodeAwareText} from '../../../services/security/codeAwareOutputRegistry';
+import {projectPrivateKnowledgeToolResult} from '../../../services/rag/toolResultProjectionFilter';
 import { runSnapshots } from '../../../agentv3/selfImprove/strategyFingerprint';
 import { verifyConclusion, generateCorrectionPrompt, isConclusionIncomplete } from './claudeVerifier';
 import { backendLogPath } from '../../../runtimePaths';
@@ -95,6 +100,35 @@ import {
 import { buildCaseBackgroundContext } from '../../../services/caseEvolution/caseBackgroundContext';
 import { getProductionEngineCapabilities } from '../../runtimeDescriptors';
 import type { EngineCapabilities } from '../../runtimeDescriptorTypes';
+import { buildFocusAppEvidencePayload } from '../../focusAppEvidence';
+import {
+  buildRuntimeQuickEvidenceDirectAnswer,
+  combineRuntimeQuickEvidenceDirectAnswers,
+  countRuntimeQuickEvidenceCitedRefs,
+} from '../../quickEvidenceDirectAnswer';
+import {
+  buildQuickDirectAcknowledgementAnalysisResult,
+  buildQuickDirectEvidenceAnalysisResult,
+  emitQuickDirectAnswerEvents,
+  emitQuickDirectQualityGateIssue,
+} from '../../quickDirectResult';
+import {
+  buildQuickFocusAppDirectAnswer,
+} from '../../quickFocusAppDirectAnswer';
+import { buildQuickProcessIdentityDirectAnswer } from '../../quickProcessIdentityDirectAnswer';
+import {
+  buildQuickProcessIdentityEvidence,
+  createQuickProcessIdentitySkillExecutor,
+  shouldUseEvidenceOnlyQuickAnalysis,
+} from '../../quickProcessIdentityEvidence';
+import { buildQuickTraceFactDirectAnswer } from '../../quickTraceFactDirectAnswer';
+import {
+  buildQuickTraceFactEvidence,
+  joinRuntimeEvidenceContexts,
+  shouldSkipFocusDetectionForQuickTraceFactEvidence,
+  shouldUseTraceFactEvidenceOnlyQuickAnalysis,
+} from '../../quickTraceFactEvidence';
+import { deriveRuntimeQuickPreEvidenceFlags } from '../../quickModeResolution';
 
 function looksLikeProcessNarration(text: string): boolean {
   return /(?:我来|我需要|我将|接下来|先重新|重新读取|继续调用|首先.*提交|计划已提交|工具|tool|let me|i need to|i will|next i)/i
@@ -582,6 +616,10 @@ function buildClaudeSdkSystemPrompt(
   return blocks;
 }
 
+function projectClaudeToolResultForPlan(toolName: string, result: unknown): string {
+  return stringifySdkToolResult(projectPrivateKnowledgeToolResult(toolName, result) ?? result);
+}
+
 export const __testing = {
   getSdkResultErrorMessage,
   isMissingSdkConversationError,
@@ -597,6 +635,7 @@ export const __testing = {
   normalizeClaudeBridgeConclusionUpdate,
   sanitizeClaudeConclusionText,
   shouldMarkCorrectionTimeoutPartial,
+  projectClaudeToolResultForPlan,
 };
 
 /** Sleep for the given milliseconds. */
@@ -943,30 +982,99 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
 
       const cachedArch = getLruCacheEntry(this.architectureCache, traceId);
 
-      // Focus detection runs for every path — kick it off once and let the classifier
-      // (if needed) share the wait. Explicit 'fast'/'full' skips the classifier entirely.
       const explicitMode = options.analysisMode;
-      const focusPromise = detectFocusApps(this.traceProcessorService, traceId).catch((err) => {
-        console.warn('[ClaudeRuntime] Focus app detection failed (graceful):', (err as Error).message);
-        return { apps: [], primaryApp: undefined, method: 'none' as const };
-      });
-
       const providerScope = providerScopeFromAnalysisOptions(options);
       const runtimeConfig = resolveRuntimeConfig(this.config, options.providerId, providerScope);
+      const emptyFocusResult = { apps: [], primaryApp: undefined, method: 'none' as const };
+      let focusPromise: Promise<Awaited<ReturnType<typeof detectFocusApps>>> | undefined;
+      const startFocusDetection = () => {
+        focusPromise ??= detectFocusApps(this.traceProcessorService, traceId, {
+          timeRange: focusAppTimeRangeFromSelection(options.selectionContext),
+        }).catch((err) => {
+          console.warn('[ClaudeRuntime] Focus app detection failed (graceful):', (err as Error).message);
+          return emptyFocusResult;
+        });
+        return focusPromise;
+      };
+
+      const localClassifierResult = explicitMode === 'full'
+        ? null
+        : classifyQueryComplexityLocal(classifierInput);
+      const localQuickAcknowledgementDirectAnswer = localClassifierResult?.complexity === 'quick'
+        && isAcknowledgementFollowupReason(localClassifierResult.reason);
+      const localDirectEvidenceEligibleQuickMode = !options.referenceTraceId && (
+        explicitMode === 'fast' || localClassifierResult?.complexity === 'quick'
+      );
+      const localQuickPreEvidenceFlags = deriveRuntimeQuickPreEvidenceFlags({
+        query,
+        selectionContext: options.selectionContext,
+        packageName: options.packageName,
+        hasReferenceTrace: !!options.referenceTraceId,
+        directEvidenceEligibleQuickMode: localDirectEvidenceEligibleQuickMode,
+        complexity: localClassifierResult?.complexity,
+        reason: localClassifierResult?.reason,
+      });
+      const localQuickProcessIdentityPreEvidence = localQuickPreEvidenceFlags.quickProcessIdentityPreEvidence;
+      const localQuickTraceFactPreEvidence = localQuickPreEvidenceFlags.quickTraceFactPreEvidence;
+      const localCanSkipFocusDetection = localQuickPreEvidenceFlags.skipFocusDetection;
+      if (!localCanSkipFocusDetection) {
+        if (!localQuickAcknowledgementDirectAnswer) {
+          startFocusDetection();
+        }
+      }
 
       let queryComplexity: QueryComplexity;
       let classifierSource: 'user_explicit' | 'hard_rule' | 'ai';
       let classifierReason: string;
+      let skipQuickTracePreflightDetection = false;
+      let quickAcknowledgementDirectAnswer = false;
+      let quickFocusAppPreEvidence = false;
+      let quickProcessIdentityPreEvidence = false;
+      let quickTraceFactPreEvidence = false;
+      let quickScrollingTriagePreEvidence = false;
+      let quickSkipFocusDetection = false;
 
       if (explicitMode === 'fast' || explicitMode === 'full') {
         queryComplexity = explicitMode === 'fast' ? 'quick' : 'full';
         classifierSource = 'user_explicit';
         classifierReason = `user requested ${explicitMode}`;
+        if (explicitMode === 'fast') {
+          quickAcknowledgementDirectAnswer = localQuickAcknowledgementDirectAnswer;
+          quickFocusAppPreEvidence = localQuickPreEvidenceFlags.quickFocusAppPreEvidence;
+          quickProcessIdentityPreEvidence = localQuickPreEvidenceFlags.quickProcessIdentityPreEvidence;
+          quickTraceFactPreEvidence = localQuickPreEvidenceFlags.quickTraceFactPreEvidence;
+          quickScrollingTriagePreEvidence = localQuickPreEvidenceFlags.quickScrollingTriagePreEvidence;
+          quickSkipFocusDetection = localQuickPreEvidenceFlags.skipFocusDetection;
+          skipQuickTracePreflightDetection = (
+            quickProcessIdentityPreEvidence || quickTraceFactPreEvidence
+          );
+        }
       } else {
-        const classifierResult = await classifyQueryComplexity(classifierInput, runtimeConfig);
+        const classifierResult = localClassifierResult
+          ?? await classifyQueryComplexity(classifierInput, runtimeConfig);
         queryComplexity = classifierResult.complexity;
         classifierSource = classifierResult.source;
         classifierReason = classifierResult.reason;
+        quickAcknowledgementDirectAnswer = queryComplexity === 'quick' &&
+          isAcknowledgementFollowupReason(classifierReason);
+        const directEvidenceEligibleQuickMode = !options.referenceTraceId && queryComplexity === 'quick';
+        const quickPreEvidenceFlags = deriveRuntimeQuickPreEvidenceFlags({
+          query,
+          selectionContext: options.selectionContext,
+          packageName: options.packageName,
+          hasReferenceTrace: !!options.referenceTraceId,
+          directEvidenceEligibleQuickMode,
+          complexity: queryComplexity,
+          reason: classifierReason,
+        });
+        quickFocusAppPreEvidence = quickPreEvidenceFlags.quickFocusAppPreEvidence;
+        quickProcessIdentityPreEvidence = quickPreEvidenceFlags.quickProcessIdentityPreEvidence;
+        quickTraceFactPreEvidence = quickPreEvidenceFlags.quickTraceFactPreEvidence;
+        quickScrollingTriagePreEvidence = quickPreEvidenceFlags.quickScrollingTriagePreEvidence;
+        quickSkipFocusDetection = quickPreEvidenceFlags.skipFocusDetection;
+        skipQuickTracePreflightDetection = (
+          quickProcessIdentityPreEvidence || quickTraceFactPreEvidence
+        );
       }
 
       const analysisRunSpec = createAnalysisRunSpec({
@@ -991,13 +1099,73 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
         },
       });
 
-      const focusResult = await focusPromise;
       const displayMode: 'fast' | 'full' | 'auto' = explicitMode ?? 'auto';
       console.log(
         `[ClaudeRuntime] Query complexity: ${queryComplexity} ` +
         `(mode: ${displayMode}, source: ${classifierSource}, reason: ${classifierReason})`,
       );
       metricsCollector.recordAnalysisMode(displayMode, classifierSource);
+
+      if (queryComplexity === 'quick' && quickAcknowledgementDirectAnswer) {
+        const sdkEnv = createSdkEnv(options.providerId, providerScope);
+        const quickConfig = createQuickConfig(runtimeConfig, sdkEnv);
+        const quickBudget = resolveQuickTurnBudget({
+          env: sdkEnv,
+          hardCapTurns: quickConfig.maxTurns,
+          targetEnvKeys: ['AGENT_QUICK_TARGET_TURNS', 'CLAUDE_QUICK_TARGET_TURNS'],
+          hardCapEnvKeys: ['AGENT_QUICK_MAX_TURNS', 'CLAUDE_QUICK_MAX_TURNS'],
+          enforcement: 'turn_cap',
+        });
+        const quickResult = buildQuickDirectAcknowledgementAnalysisResult({
+          sessionId,
+          options,
+          outputLanguage: runtimeConfig.outputLanguage,
+          startedAt: startTime,
+          analysisRunSpec,
+          budget: quickBudget,
+          previousTurns,
+        });
+        emitQuickDirectQualityGateIssue({
+          emitUpdate: update => this.emitUpdate(update),
+          module: 'claudeRuntime',
+          result: quickResult,
+          query,
+          sceneType,
+        });
+        sessionContext.addTurn(
+          query,
+          {
+            primaryGoal: query,
+            aspects: [],
+            expectedOutputType: 'summary',
+            complexity: 'simple',
+            followUpType: previousTurns.length > 0 ? 'extend' : 'initial',
+          },
+          {
+            agentId: 'claude-agent',
+            success: quickResult.success,
+            findings: quickResult.findings,
+            confidence: quickResult.confidence,
+            message: quickResult.conclusion,
+          },
+          quickResult.findings,
+        );
+        emitQuickDirectAnswerEvents({
+          emitUpdate: update => this.emitUpdate(update),
+          result: quickResult,
+          startedAt: startTime,
+          outputLanguage: runtimeConfig.outputLanguage,
+          runtime: 'claude-agent-sdk',
+          model: 'runtime-acknowledgement',
+        });
+        console.log(`[ClaudeRuntime] Quick acknowledgement direct answer completed: 0 rounds, ${Date.now() - startTime}ms, ${quickResult.conclusion.length} chars`);
+        return quickResult;
+      }
+
+      const skipFocusDetection = quickSkipFocusDetection;
+      const focusResult = skipFocusDetection
+        ? emptyFocusResult
+        : await startFocusDetection();
 
       // Quick path: lightweight analysis for simple factual queries
       if (queryComplexity === 'quick') {
@@ -1010,6 +1178,11 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
           metricsCollector,
           startTime,
           analysisRunSpec,
+          skipQuickTracePreflightDetection,
+          quickFocusAppPreEvidence,
+          quickProcessIdentityPreEvidence,
+          quickTraceFactPreEvidence,
+          quickScrollingTriagePreEvidence,
         });
       }
 
@@ -1045,7 +1218,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
             // Not a skill result — ignore
           }
         }
-      }, this.config.outputLanguage);
+      }, this.config.outputLanguage, { tracePairContext: ctx.analysisContextForRebuild.comparison?.tracePairContext });
 
       this.emitUpdate({
         type: 'progress',
@@ -1431,11 +1604,11 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
               }
               // Track tool call for plan adherence with phase matching (P0-1 + P1-1)
               // P1-G5: Best-fit phase-tool matching — search all eligible phases, not just first
-              if (ctx.analysisPlan.current && matchedTool) {
-                recordPlanToolCall(ctx.analysisPlan.current, {
+              if (matchedTool) {
+                recordPlanOrPrePlanToolCall(ctx.analysisPlan, {
                   toolName: matchedTool.name,
                   input: matchedTool.input,
-                  resultText: resultStr,
+                  resultText: projectClaudeToolResultForPlan(matchedTool.name, observed.result),
                 });
               }
 
@@ -2217,6 +2390,11 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       metricsCollector: AgentMetricsCollector;
       startTime: number;
       analysisRunSpec: AnalysisRunSpec;
+      skipQuickTracePreflightDetection: boolean;
+      quickFocusAppPreEvidence: boolean;
+      quickProcessIdentityPreEvidence: boolean;
+      quickTraceFactPreEvidence: boolean;
+      quickScrollingTriagePreEvidence: boolean;
     },
   ): Promise<AnalysisResult> {
     const {
@@ -2228,6 +2406,11 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       metricsCollector,
       startTime,
       analysisRunSpec,
+      skipQuickTracePreflightDetection,
+      quickFocusAppPreEvidence,
+      quickProcessIdentityPreEvidence,
+      quickTraceFactPreEvidence,
+      quickScrollingTriagePreEvidence,
     } = precomputed;
     let delegatedRetry = false;
 
@@ -2236,86 +2419,6 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       if (!effectivePackageName && focusResult.primaryApp) {
         effectivePackageName = focusResult.primaryApp;
       }
-
-      // Architecture detection + skill registry init in parallel
-      const [architecture, _skillRegistryReady] = await Promise.all([
-        cachedArch ? Promise.resolve(cachedArch) : (async () => {
-          try {
-            const detector = createArchitectureDetector();
-            const arch = await detector.detect({
-              traceId,
-              traceProcessorService: this.traceProcessorService,
-              packageName: effectivePackageName,
-            });
-            if (arch) {
-              setLruCacheEntry(this.architectureCache, traceId, arch);
-            }
-            return arch;
-          } catch (err) {
-            console.warn('[ClaudeRuntime] Quick: architecture detection failed:', (err as Error).message);
-            return undefined;
-          }
-        })(),
-        ensureSkillRegistryInitialized(),
-      ]);
-
-      const skillExecutor = createSkillExecutor(this.traceProcessorService);
-      skillExecutor.registerSkills(skillRegistry.getAllSkills());
-      skillExecutor.setFragmentRegistry(skillRegistry.getFragmentCache());
-
-      const knowledgeScope = analysisRunSpec.scopes.knowledge;
-      let sqlErrors = this.sessionSqlErrors.get(sessionId);
-      if (!sqlErrors) {
-        sqlErrors = loadLearnedSqlFixPairs(5, knowledgeScope);
-        this.sessionSqlErrors.set(sessionId, sqlErrors);
-      }
-      const traceFeatures = extractTraceFeatures({
-        architectureType: architecture?.type,
-        sceneType,
-        packageName: effectivePackageName,
-      });
-      const quickMemoryPayload = buildQuickMemoryContextPayload({
-        patternContext: buildPatternContextSection(traceFeatures, knowledgeScope),
-        negativePatternContext: buildNegativePatternSection(traceFeatures, knowledgeScope),
-        caseBackgroundContext: buildCaseBackgroundContext(sceneType, architecture?.type, knowledgeScope),
-        sqlErrorFixPairs: sqlErrors,
-        recentSqlResultsContext: sessionContext.generateRecentSqlResultPromptContext(3),
-        outputLanguage: this.config.outputLanguage,
-      });
-      const quickMemoryContext = quickMemoryPayload.text;
-
-      const watchdogWarning: { current: string | null } = { current: null };
-      // Quick path defaults to no skill-notes injection per §8 of the
-      // self-improving design. Operators can opt-in via the env override.
-      const quickNotesBudget = createRuntimeSkillNotesBudget(true);
-      const { server: mcpServer, allowedTools } = createClaudeMcpServer({
-        sessionId,
-        traceId,
-        userQuery: query,
-        traceProcessorService: this.traceProcessorService,
-        skillExecutor,
-        packageName: effectivePackageName,
-        emitUpdate: (update) => this.emitUpdate(update),
-        watchdogWarning,
-        sceneType,
-        lightweight: true,
-        recentSqlErrors: sqlErrors,
-        skillNotesBudget: quickNotesBudget,
-        outputLanguage: this.config.outputLanguage,
-        knowledgeScope,
-        codeAwareMode: options.codeAwareMode,
-        codebaseIds: options.codebaseIds,
-      });
-
-      const systemPrompt = buildQuickSystemPrompt({
-        architecture,
-        packageName: effectivePackageName,
-        focusApps: focusResult.apps.length > 0 ? focusResult.apps : undefined,
-        focusMethod: focusResult.method,
-        selectionContext: options.selectionContext,
-        quickMemoryContext,
-        outputLanguage: this.config.outputLanguage,
-      });
 
       const providerScope = analysisRunSpec.scopes.provider;
       const sdkEnv = createSdkEnv(options.providerId, providerScope);
@@ -2331,9 +2434,375 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
         enforcement: 'turn_cap',
       });
 
+      const runtimeDirectEvidenceAnswer = (
+        quickFocusAppPreEvidence ||
+        quickProcessIdentityPreEvidence ||
+        quickTraceFactPreEvidence ||
+        quickScrollingTriagePreEvidence
+      )
+        ? await buildRuntimeQuickEvidenceDirectAnswer({
+            query,
+            traceId,
+            packageName: options.packageName,
+            selectionContext: options.selectionContext,
+            traceProcessorService: this.traceProcessorService,
+            outputLanguage: this.config.outputLanguage,
+            quickFocusAppPreEvidence,
+            quickProcessIdentityPreEvidence,
+            quickTraceFactPreEvidence,
+            quickScrollingTriagePreEvidence,
+            focusResult,
+            emitUpdate: update => this.emitUpdate(update),
+          })
+        : undefined;
+      if (runtimeDirectEvidenceAnswer) {
+        const quickResult = buildQuickDirectEvidenceAnalysisResult({
+          query,
+          sessionId,
+          options,
+          startedAt: startTime,
+          analysisRunSpec,
+          budget: quickBudget,
+          directAnswer: runtimeDirectEvidenceAnswer.directAnswer,
+          evidenceCounts: runtimeDirectEvidenceAnswer.evidenceCounts,
+          previousTurns,
+        });
+        emitQuickDirectQualityGateIssue({
+          emitUpdate: update => this.emitUpdate(update),
+          module: 'claudeRuntime',
+          result: quickResult,
+          query,
+          sceneType,
+        });
+        sessionContext.addTurn(
+          query,
+          {
+            primaryGoal: query,
+            aspects: [],
+            expectedOutputType: 'summary',
+            complexity: 'simple',
+            followUpType: previousTurns.length > 0 ? 'extend' : 'initial',
+          },
+          {
+            agentId: 'claude-agent',
+            success: quickResult.success,
+            findings: quickResult.findings,
+            confidence: quickResult.confidence,
+            message: quickResult.conclusion,
+          },
+          quickResult.findings,
+        );
+        emitQuickDirectAnswerEvents({
+          emitUpdate: update => this.emitUpdate(update),
+          result: quickResult,
+          startedAt: startTime,
+          outputLanguage: this.config.outputLanguage,
+          runtime: 'claude-agent-sdk',
+          model: 'runtime-pre-evidence',
+        });
+        console.log(`[ClaudeRuntime] Quick direct pre-evidence completed: 0 rounds, ${Date.now() - startTime}ms, ${quickResult.conclusion.length} chars`);
+        return quickResult;
+      }
+
+      const skipFocusEvidence = !quickFocusAppPreEvidence && (
+        !!options.packageName
+          ? (
+            quickProcessIdentityPreEvidence ||
+            quickTraceFactPreEvidence ||
+            quickScrollingTriagePreEvidence
+          )
+          : quickTraceFactPreEvidence
+            && !quickProcessIdentityPreEvidence
+            && shouldSkipFocusDetectionForQuickTraceFactEvidence(query)
+      );
+      const focusEvidencePayload = skipFocusEvidence
+        ? undefined
+        : buildFocusAppEvidencePayload(focusResult, traceId, 'current', this.config.outputLanguage);
+      if (focusEvidencePayload?.envelope) {
+        this.emitUpdate({
+          type: 'data',
+          content: [focusEvidencePayload.envelope],
+          timestamp: Date.now(),
+        });
+      }
+
+      const promptFocusResult = focusEvidencePayload?.focusResult ?? focusResult;
+      const quickProcessIdentityExecutor = quickProcessIdentityPreEvidence
+        ? createQuickProcessIdentitySkillExecutor(this.traceProcessorService)
+        : undefined;
+      const processIdentityEvidencePromise: Promise<
+        Awaited<ReturnType<typeof buildQuickProcessIdentityEvidence>>
+      > = quickProcessIdentityExecutor
+        ? buildQuickProcessIdentityEvidence({
+            skillExecutor: quickProcessIdentityExecutor,
+            traceId,
+            focusResult: promptFocusResult,
+            packageName: effectivePackageName,
+            outputLanguage: this.config.outputLanguage,
+        })
+        : Promise.resolve({ envelopes: [] });
+      const traceFactEvidencePromise: Promise<
+        Awaited<ReturnType<typeof buildQuickTraceFactEvidence>>
+      > = quickTraceFactPreEvidence
+        ? buildQuickTraceFactEvidence({
+            traceProcessor: this.traceProcessorService,
+            traceId,
+            query,
+            focusResult: promptFocusResult,
+            packageName: effectivePackageName,
+            timeRange: focusAppTimeRangeFromSelection(options.selectionContext),
+            outputLanguage: this.config.outputLanguage,
+          })
+        : Promise.resolve({ envelopes: [] });
+
+      const detectQuickArchitecture = async (): Promise<ArchitectureInfo | undefined> => {
+        if (cachedArch) return cachedArch;
+        try {
+          const detector = createArchitectureDetector();
+          const arch = await detector.detect({
+            traceId,
+            traceProcessorService: this.traceProcessorService,
+            packageName: effectivePackageName,
+          });
+          if (arch) {
+            setLruCacheEntry(this.architectureCache, traceId, arch);
+          }
+          return arch;
+        } catch (err) {
+          console.warn('[ClaudeRuntime] Quick: architecture detection failed:', (err as Error).message);
+          return undefined;
+        }
+      };
+
+      const skipQuickPreflightForEvidence = skipQuickTracePreflightDetection || quickFocusAppPreEvidence;
+      const skipQuickPreflight = skipQuickPreflightForEvidence;
+      const architecturePromise = skipQuickPreflight
+        ? Promise.resolve(undefined)
+        : detectQuickArchitecture();
+
+      const skillRegistryReady = skipQuickPreflight
+        ? undefined
+        : ensureSkillRegistryInitialized();
+
+      let [architecture, processIdentityEvidence, traceFactEvidence] = await Promise.all([
+        architecturePromise,
+        processIdentityEvidencePromise,
+        traceFactEvidencePromise,
+      ]);
+
+      const knowledgeScope = analysisRunSpec.scopes.knowledge;
+      let sqlErrors = this.sessionSqlErrors.get(sessionId);
+      const ensureSqlErrorsLoaded = () => {
+        if (!this.sessionSqlErrors.has(sessionId)) {
+          sqlErrors = loadLearnedSqlFixPairs(5, knowledgeScope);
+          this.sessionSqlErrors.set(sessionId, sqlErrors);
+        }
+        sqlErrors = this.sessionSqlErrors.get(sessionId) ?? [];
+        return sqlErrors;
+      };
+      if (!skipQuickPreflight) {
+        ensureSqlErrorsLoaded();
+      }
+      sqlErrors ??= [];
+
+      if (processIdentityEvidence.envelopes.length > 0) {
+        this.emitUpdate({
+          type: 'data',
+          content: processIdentityEvidence.envelopes,
+          timestamp: Date.now(),
+        });
+      }
+      if (traceFactEvidence.envelopes.length > 0) {
+        this.emitUpdate({
+          type: 'data',
+          content: traceFactEvidence.envelopes,
+          timestamp: Date.now(),
+        });
+      }
+      const useProcessIdentityEvidenceOnlyQuick = shouldUseEvidenceOnlyQuickAnalysis({
+        skipQuickTracePreflightDetection,
+        processIdentityEvidence,
+      });
+      const useTraceFactEvidenceOnlyQuick = shouldUseTraceFactEvidenceOnlyQuickAnalysis({
+        quickTraceFactPreEvidence,
+        traceFactEvidence,
+      });
+      const directProcessIdentityAnswer = quickProcessIdentityPreEvidence
+        ? buildQuickProcessIdentityDirectAnswer({
+            evidence: processIdentityEvidence,
+            outputLanguage: this.config.outputLanguage,
+          })
+        : undefined;
+      const directTraceFactAnswer = quickTraceFactPreEvidence
+        ? buildQuickTraceFactDirectAnswer({
+            evidence: traceFactEvidence,
+            outputLanguage: this.config.outputLanguage,
+          })
+        : undefined;
+      const directFocusAppAnswer = quickFocusAppPreEvidence
+        ? buildQuickFocusAppDirectAnswer({
+            query,
+            evidence: focusEvidencePayload,
+            selectionContext: options.selectionContext,
+            outputLanguage: this.config.outputLanguage,
+          })
+        : undefined;
+      const useFocusAppEvidenceOnlyQuick = quickFocusAppPreEvidence && Boolean(directFocusAppAnswer);
+      const useEvidenceOnlyQuick = !quickScrollingTriagePreEvidence && (
+        quickFocusAppPreEvidence || quickProcessIdentityPreEvidence || quickTraceFactPreEvidence
+      )
+        && (!quickFocusAppPreEvidence || useFocusAppEvidenceOnlyQuick)
+        && (!quickProcessIdentityPreEvidence || useProcessIdentityEvidenceOnlyQuick)
+        && (!quickTraceFactPreEvidence || useTraceFactEvidenceOnlyQuick);
+
+      if (skipQuickPreflightForEvidence && !useEvidenceOnlyQuick) {
+        architecture = await detectQuickArchitecture();
+        sqlErrors = ensureSqlErrorsLoaded();
+      }
+
+      const quickTraceFeatures = useEvidenceOnlyQuick
+        ? undefined
+        : extractTraceFeatures({
+            architectureType: architecture?.type,
+            sceneType,
+            packageName: effectivePackageName,
+          });
+      const quickMemoryPayload = quickTraceFeatures
+        ? buildQuickMemoryContextPayload({
+            patternContext: buildPatternContextSection(quickTraceFeatures, knowledgeScope),
+            negativePatternContext: buildNegativePatternSection(quickTraceFeatures, knowledgeScope),
+            caseBackgroundContext: buildCaseBackgroundContext(sceneType, architecture?.type, knowledgeScope),
+            sqlErrorFixPairs: sqlErrors,
+            recentSqlResultsContext: sessionContext.generateRecentSqlResultPromptContext(3),
+            outputLanguage: this.config.outputLanguage,
+          })
+        : undefined;
+      const quickMemoryContext = quickMemoryPayload?.text;
+      const quickConversationTurns = previousTurns.filter(turn => turn?.completed).slice(-3).length;
+
+      const directQuickAnswer = useEvidenceOnlyQuick
+        ? combineRuntimeQuickEvidenceDirectAnswers({
+            focusAppAnswer: directFocusAppAnswer,
+            processIdentityAnswer: directProcessIdentityAnswer,
+            traceFactAnswer: directTraceFactAnswer,
+            outputLanguage: this.config.outputLanguage,
+          })
+        : undefined;
+      if (directQuickAnswer) {
+        const quickResult = buildQuickDirectEvidenceAnalysisResult({
+          query,
+          sessionId,
+          options,
+          startedAt: startTime,
+          analysisRunSpec,
+          budget: quickBudget,
+          directAnswer: directQuickAnswer,
+          evidenceCounts: {
+            currentRunDataEnvelopes: (
+              (focusEvidencePayload?.envelope ? 1 : 0) +
+              processIdentityEvidence.envelopes.length +
+              traceFactEvidence.envelopes.length
+            ),
+            citedEvidenceRefs: countRuntimeQuickEvidenceCitedRefs(directQuickAnswer),
+          },
+          previousTurns,
+          contextInjected: quickMemoryPayload?.counts,
+        });
+        emitQuickDirectQualityGateIssue({
+          emitUpdate: update => this.emitUpdate(update),
+          module: 'claudeRuntime',
+          result: quickResult,
+          query,
+          sceneType,
+        });
+        sessionContext.addTurn(
+          query,
+          {
+            primaryGoal: query,
+            aspects: [],
+            expectedOutputType: 'summary',
+            complexity: 'simple',
+            followUpType: previousTurns.length > 0 ? 'extend' : 'initial',
+          },
+          {
+            agentId: 'claude-agent',
+            success: quickResult.success,
+            findings: quickResult.findings,
+            confidence: quickResult.confidence,
+            message: quickResult.conclusion,
+          },
+          quickResult.findings,
+        );
+        emitQuickDirectAnswerEvents({
+          emitUpdate: update => this.emitUpdate(update),
+          result: quickResult,
+          startedAt: startTime,
+          outputLanguage: this.config.outputLanguage,
+          runtime: 'claude-agent-sdk',
+          model: 'runtime-pre-evidence',
+        });
+        console.log(`[ClaudeRuntime] Quick direct pre-evidence completed: 0 rounds, ${Date.now() - startTime}ms, ${quickResult.conclusion.length} chars`);
+        return quickResult;
+      }
+
+      let mcpServer: ReturnType<typeof createClaudeMcpServer>['server'] | undefined;
+      let allowedTools: string[] = [];
+      if (!useEvidenceOnlyQuick) {
+        await (skillRegistryReady ?? ensureSkillRegistryInitialized());
+        const skillExecutor = createSkillExecutor(this.traceProcessorService);
+        skillExecutor.registerSkills(skillRegistry.getAllSkills());
+        skillExecutor.setFragmentRegistry(skillRegistry.getFragmentCache());
+        if (!this.artifactStores.has(sessionId)) {
+          this.artifactStores.set(sessionId, new ArtifactStore());
+        }
+        const quickArtifactStore = this.artifactStores.get(sessionId)!;
+
+        const watchdogWarning: { current: string | null } = { current: null };
+        // Quick path defaults to no skill-notes injection per §8 of the
+        // self-improving design. Operators can opt-in via the env override.
+        const quickNotesBudget = createRuntimeSkillNotesBudget(true);
+        const mcp = createClaudeMcpServer({
+          sessionId,
+          traceId,
+          userQuery: query,
+          traceProcessorService: this.traceProcessorService,
+          skillExecutor,
+          packageName: effectivePackageName,
+          emitUpdate: (update) => this.emitUpdate(update),
+          watchdogWarning,
+          sceneType,
+          lightweight: true,
+          artifactStore: quickArtifactStore,
+          recentSqlErrors: sqlErrors,
+          skillNotesBudget: quickNotesBudget,
+          outputLanguage: this.config.outputLanguage,
+          knowledgeScope,
+          codeAwareMode: options.codeAwareMode,
+          codebaseIds: options.codebaseIds,
+          knowledgeSourceIds: options.knowledgeSourceIds,
+        });
+        mcpServer = mcp.server;
+        allowedTools = mcp.allowedTools;
+      }
+
+      const systemPrompt = buildQuickSystemPrompt({
+        architecture,
+        packageName: effectivePackageName,
+        focusApps: promptFocusResult.apps.length > 0 ? promptFocusResult.apps : undefined,
+        focusMethod: promptFocusResult.method,
+        selectionContext: options.selectionContext,
+        runtimeEvidenceContext: joinRuntimeEvidenceContexts(
+          processIdentityEvidence.promptContext,
+          traceFactEvidence.promptContext,
+        ),
+        quickMemoryContext,
+        outputLanguage: this.config.outputLanguage,
+      });
+      const quickConversationContext = buildQuickConversationContext(previousTurns, this.config.outputLanguage);
+
       const { handleMessage: bridge, getAccumulatedAnswer } = createSseBridge((update: StreamingUpdate) => {
         this.emitUpdate(update);
-      }, this.config.outputLanguage);
+      }, this.config.outputLanguage, { tracePairContext: options.tracePairContext });
 
       this.emitUpdate({
         type: 'progress',
@@ -2354,8 +2823,6 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       // cross-turn context local and compact so quick cannot exhaust or overwrite
       // the full-mode SDK conversation.
       let quickPrompt = query;
-      const quickConversationContext = buildQuickConversationContext(previousTurns, this.config.outputLanguage);
-      const quickConversationTurns = previousTurns.filter((turn: any) => turn?.completed).slice(-3).length;
       if (quickConversationContext) {
         quickPrompt = `${quickConversationContext}\n\n${quickPrompt}`;
       }
@@ -2370,7 +2837,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
           model: quickConfig.model,
           maxTurns: quickConfig.maxTurns,
           systemPrompt,
-          mcpServers: { smartperfetto: mcpServer },
+          ...(mcpServer ? { mcpServers: { smartperfetto: mcpServer } } : {}),
           includePartialMessages: true,
           settingSources: [],
           tools: [],
@@ -2545,7 +3012,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
           },
           contextInjected: {
             conversationTurns: quickConversationTurns,
-            ...quickMemoryPayload.counts,
+            ...(quickMemoryPayload?.counts ?? {}),
           },
         }),
       };
@@ -2599,13 +3066,13 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       if (quickResult.partial !== true && quickResult.findings.length > 0) {
         const insights = extractKeyInsights(quickResult.findings, quickResult.conclusion);
         const quickFeatures = extractTraceFeatures({
-          architectureType: cachedArch?.type,
+          architectureType: architecture?.type,
           sceneType,
           packageName: effectivePackageName,
           findingTitles: quickResult.findings.map(f => f.title),
           findingCategories: quickResult.findings.map(f => f.category).filter(Boolean) as string[],
         });
-        saveQuickPathPattern(quickFeatures, insights, sceneType, cachedArch?.type, {
+        saveQuickPathPattern(quickFeatures, insights, sceneType, architecture?.type, {
           status: 'provisional',
           provenance: { sessionId, turnIndex: previousTurns.length },
           knowledgeScope: knowledgeScopeFromAnalysisOptions(options),
@@ -2939,7 +3406,9 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
 
     // Phase 0.5: Detect focus apps from trace data (reuse precomputed if available)
     let effectivePackageName = options.packageName;
-    const focusResult = precomputed?.focusResult ?? await detectFocusApps(this.traceProcessorService, traceId);
+    const focusResult = precomputed?.focusResult ?? await detectFocusApps(this.traceProcessorService, traceId, {
+      timeRange: focusAppTimeRangeFromSelection(options.selectionContext),
+    });
 
     if (focusResult.primaryApp) {
       if (!effectivePackageName) {
@@ -3063,6 +3532,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
 
       comparisonContext = {
         referenceTraceId,
+        ...(options.tracePairContext ? { tracePairContext: options.tracePairContext } : {}),
         referencePackageName: refFocusResult.primaryApp,
         referenceFocusApps: refFocusResult.apps.length > 0 ? refFocusResult.apps : undefined,
         referenceArchitecture: refArchitecture,
@@ -3226,6 +3696,7 @@ export class ClaudeRuntime extends EventEmitter implements IOrchestrator {
       knowledgeScope,
       codeAwareMode: options.codeAwareMode,
       codebaseIds: options.codebaseIds,
+      knowledgeSourceIds: options.knowledgeSourceIds,
     });
 
     // Phase 9: (removed — skillCatalog was populated but never used in prompt;

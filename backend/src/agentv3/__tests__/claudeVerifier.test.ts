@@ -453,6 +453,120 @@ describe('verifyPlanAdherence', () => {
     )).toBe(false);
   });
 
+  it('allows a comparison synthesis phase to reuse prior matching evidence calls', () => {
+    const plan = makePlan({
+      phases: [
+        {
+          id: 'p2',
+          name: '启动详情对比',
+          goal: '通过 SQL 深钻两侧 bindApplication 和主线程热点',
+          expectedTools: ['execute_sql_on'],
+          status: 'completed',
+          summary: '已用 execute_sql_on 对比两侧 bindApplication 子阶段和热点函数。',
+        },
+        {
+          id: 'p5',
+          name: '差异深钻与根因定位',
+          goal: '对前序阶段中差异显著的指标做综合归因',
+          expectedTools: ['execute_sql_on', 'fetch_artifact', 'lookup_knowledge'],
+          status: 'completed',
+          summary: '差异深钻完成：bindApplication 子分解、主线程热点 self_ms、四象限均已通过 execute_sql_on 对比。',
+        },
+      ],
+      toolCallLog: [
+        {
+          toolName: 'execute_sql_on',
+          timestamp: Date.now(),
+          matchedPhaseId: 'p2',
+        },
+      ],
+    });
+
+    const issues = verifyPlanAdherence(plan);
+    expect(issues.some(i =>
+      i.type === 'plan_deviation' &&
+      i.severity === 'error' &&
+      i.message.includes('差异深钻与根因定位'),
+    )).toBe(false);
+  });
+
+  it('does not let unrelated prior evidence satisfy a comparison synthesis phase', () => {
+    const plan = makePlan({
+      phases: [
+        {
+          id: 'p1',
+          name: '启动概览对比',
+          goal: '运行 compare_skill 获取概览',
+          expectedTools: ['compare_skill'],
+          status: 'completed',
+          summary: '已完成概览对比。',
+        },
+        {
+          id: 'p5',
+          name: '差异深钻与根因定位',
+          goal: '对前序阶段中差异显著的指标做综合归因',
+          expectedTools: ['execute_sql_on'],
+          status: 'completed',
+          summary: '声称完成差异深钻，但没有执行 SQL 深钻。',
+        },
+      ],
+      toolCallLog: [
+        {
+          toolName: 'compare_skill',
+          skillId: 'startup_analysis',
+          timestamp: Date.now(),
+          matchedPhaseId: 'p1',
+        },
+      ],
+    });
+
+    const issues = verifyPlanAdherence(plan);
+    expect(issues.some(i =>
+      i.type === 'plan_deviation' &&
+      i.severity === 'error' &&
+      i.message.includes('无匹配的工具调用'),
+    )).toBe(true);
+  });
+
+  it('still requires structured expectedCalls on comparison synthesis phases', () => {
+    const plan = makePlan({
+      phases: [
+        {
+          id: 'p1',
+          name: '启动概览对比',
+          goal: '运行 startup_analysis 获取概览',
+          expectedTools: ['compare_skill'],
+          status: 'completed',
+          summary: '已完成概览对比。',
+        },
+        {
+          id: 'p5',
+          name: '差异深钻与根因定位',
+          goal: '对前序阶段中差异显著的指标做综合归因',
+          expectedTools: ['compare_skill'],
+          expectedCalls: [{ tool: 'compare_skill', skillId: 'startup_detail' }],
+          status: 'completed',
+          summary: '声称包含 startup_detail 深钻，但只运行过 startup_analysis。',
+        },
+      ],
+      toolCallLog: [
+        {
+          toolName: 'compare_skill',
+          skillId: 'startup_analysis',
+          timestamp: Date.now(),
+          matchedPhaseId: 'p1',
+        },
+      ],
+    });
+
+    const issues = verifyPlanAdherence(plan);
+    expect(issues.some(i =>
+      i.type === 'plan_deviation' &&
+      i.severity === 'error' &&
+      i.message.includes('缺失: compare_skill(startup_detail)'),
+    )).toBe(true);
+  });
+
   it('allows a final conclusion expectedCall when the required call ran in an evidence phase', () => {
     const plan = makePlan({
       phases: [

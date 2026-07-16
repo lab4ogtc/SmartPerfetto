@@ -8,8 +8,8 @@ import { execFileSync } from 'child_process';
 import { RUNTIME_ISOLATION_CHECKLIST } from '../enterpriseRuntimeIsolationChecklist';
 
 const REPO_ROOT = path.resolve(__dirname, '../../../..');
-const README_PATH = 'docs/features/enterprise-multi-tenant/README.md';
-const CHECKLIST_DOC_PATH = 'docs/features/enterprise-multi-tenant/runtime-isolation-checklist.md';
+const README_PATH = 'docs/archive/features/enterprise-multi-tenant/README.md';
+const CHECKLIST_DOC_PATH = 'docs/archive/features/enterprise-multi-tenant/runtime-isolation-checklist.md';
 
 const EXPECTED_IDS = [
   'proxy-status-websocket-query',

@@ -136,6 +136,38 @@ describe('validatePlanAgainstSceneTemplate', () => {
     expect(result.missingAspectIds).toEqual(['root_cause_diagnosis']);
   });
 
+  it('accepts raw trace pair startup plans that use compare_skill instead of single-trace invoke_skill', () => {
+    const result = validatePlanAgainstSceneTemplate(
+      [
+        minimalPhase({
+          name: 'startup_timing',
+          goal: '使用 compare_skill startup_analysis 对比左右 Trace 的 TTID/TTFD 和启动类型',
+          expectedTools: ['compare_skill'],
+          expectedCalls: [{ tool: 'compare_skill', skillId: 'startup_analysis' }],
+        }),
+        minimalPhase({
+          name: 'phase_breakdown',
+          goal: '使用 compare_skill startup_detail 对比两侧启动阶段分解差异',
+          expectedTools: ['compare_skill', 'fetch_artifact'],
+          expectedCalls: [
+            { tool: 'compare_skill', skillId: 'startup_detail' },
+            { tool: 'fetch_artifact' },
+          ],
+        }),
+        minimalPhase({
+          name: 'launch_type_verdict',
+          goal: '基于 startup_analysis 证据验证两侧启动类型判定',
+          expectedTools: ['compare_skill'],
+          expectedCalls: [{ tool: 'compare_skill', skillId: 'startup_analysis' }],
+        }),
+      ],
+      'startup',
+    );
+
+    expect(result.warnings).toEqual([]);
+    expect(result.missingAspectIds).toEqual([]);
+  });
+
   it('enforces conditional aspects only when their trigger keywords appear in the plan', () => {
     const basePhases = [
       minimalPhase({

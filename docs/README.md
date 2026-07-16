@@ -12,14 +12,15 @@ SmartPerfetto 是基于 Perfetto 的 Android 性能分析平台。本文档中�
 | 想了解 SmartPerfetto 能做什么 | [功能总览](getting-started/features.md) | [基本使用](getting-started/usage.md), [配置指南](getting-started/configuration.md) |
 | 想对比多个 Trace 的分析结果 | [多 Trace 分析结果对比](getting-started/multi-trace-result-comparison.md) | [基本使用](getting-started/usage.md), [API 参考](reference/api.md) |
 | 想让 AI 分析引用本机源码 | [Code-Aware Analysis](getting-started/code-aware-analysis.md) | [CLI 参考](reference/cli.md), [MCP 工具参考](reference/mcp-tools.md) |
+| 想接入 Android Internals 私有知识库 | [Android Internals 外部知识库](getting-started/android-internals-knowledge.md) | [API 参考](reference/api.md), [MCP 工具参考](reference/mcp-tools.md) |
 | 想接入后端 API | [API 参考](reference/api.md) | [MCP 工具参考](reference/mcp-tools.md) |
 | 想用命令行或脚本分析 trace | [CLI 参考](reference/cli.md) | [API 参考](reference/api.md) |
 | 想贡献代码 | [根目录 AGENTS.md](../AGENTS.md) | [产品面规则](../.claude/rules/product-surface.md), [测试规则](../.claude/rules/testing.md), [贡献指南](../CONTRIBUTING.md) |
 | 想新增 Skill | [Skill 系统指南](reference/skill-system.md) | [MCP 工具参考](reference/mcp-tools.md), [测试规则](../.claude/rules/testing.md) |
 | 想理解架构 | [架构总览](architecture/overview.md) | [Agent Runtime](architecture/agent-runtime.md), [技术架构深潜](architecture/technical-architecture.md) |
 | 想发布新版本 | [发布手册](reference/release.md) | [免安装包打包](reference/portable-packaging.md), [发布规则](../.claude/rules/release.md) |
-| 想看独立 feature 计划 | [多 Trace 分析结果对比开发计划](features/multi-trace-result-comparison/README.md) | [出图教学重构计划](features/rendering-pipeline-teaching-refactor/README.md), [企业级多用户与多租户](features/enterprise-multi-tenant/README.md) |
 | 想排查部署问题 | [故障排查](operations/troubleshooting.md) | [配置指南](getting-started/configuration.md) |
+| 想查历史开发计划或 review | [历史档案](archive/README.md) | 归档内容只作背景，不代表当前推荐实现 |
 
 ## 文档结构
 
@@ -28,12 +29,12 @@ docs/
 ├── README.md                         # 文档入口
 ├── getting-started/                  # 安装、配置、使用
 ├── architecture/                     # 当前架构与权威设计
-├── features/                         # 独立 feature 开发文档
 ├── reference/                        # API、CLI、MCP、Skill DSL
 ├── operations/                       # 运行与故障排查
 ├── rendering_pipelines/              # Android 渲染管线知识库，运行时会读取
 ├── product/                          # 项目定位与外部介绍
-├── archive/                          # 历史方案、spike、决策记录
+├── presentations/                    # 对外分享材料
+├── archive/                          # 历史方案、spike、review、开发计划
 └── images/                           # 文档图片资源
 ```
 
@@ -49,7 +50,7 @@ docs/
 - DataEnvelope 与前后端数据 contract 以 [Data Contract](../backend/docs/DATA_CONTRACT_DESIGN.md) 为准。
 - final report、evidence/claim verification、identity resolution、chat-vs-report 边界以 [架构总览](architecture/overview.md) 和 [Agent Runtime](architecture/agent-runtime.md) 为准。
 - 自改进系统以 [Self-Improving 设计](architecture/self-improving-design.md) 为准。
-- `archive/` 下文档只保留历史背景，不代表当前推荐实现。
+- `archive/` 下文档只保留历史背景，不代表当前推荐实现；开发任务、feature 计划、review、spike 和 scratch 记录都不再作为主文档入口。
 
 ## 运行时依赖的文档
 
@@ -57,13 +58,15 @@ docs/
 
 - `backend/skills/pipelines/*.skill.yaml`
 - `backend/skills/atomic/rendering_pipeline_detection.skill.yaml`
-- `backend/src/services/pipelineDocService.ts`
-- `backend/src/config/teaching.config.ts`
+- `backend/skills/pipelines/index.yaml`
+
+这里的 S01-S14 是从固定 commit 同步的 Android 17 权威内容，禁止手工修改。
+更新时运行 `npm run sync:rendering-pipelines -- --source <checkout> --apply`；构建会把
+目录复制到 `backend/dist/rendering_pipelines/`，供所有发布形态读取。
 
 改动后至少运行：
 
 ```bash
-cd backend
-npm run validate:skills
-npm run test:scene-trace-regression
+npm run check:rendering-pipelines
+cd backend && npm run validate:skills
 ```

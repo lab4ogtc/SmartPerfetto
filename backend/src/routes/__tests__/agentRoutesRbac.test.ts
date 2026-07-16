@@ -25,7 +25,14 @@ import {
   setTraceProcessorLeaseStoreForTests,
 } from '../../services/traceProcessorLeaseStore';
 import { SessionPersistenceService } from '../../services/sessionPersistenceService';
-import { setTraceProcessorServiceForTests } from '../../services/traceProcessorService';
+import {
+  TraceProcessorService,
+  setTraceProcessorServiceForTests,
+  type TraceProcessor,
+} from '../../services/traceProcessorService';
+import { ClaudeRuntime } from '../../agentRuntime/engines/claude';
+import type { AnalysisOptions, AnalysisResult } from '../../agent/core/orchestratorTypes';
+import type { TracePairContext } from '../../agentv3/types';
 import agentRoutes from '../agentRoutes';
 
 const originalApiKey = process.env.SMARTPERFETTO_API_KEY;
@@ -34,6 +41,14 @@ const originalEnterprise = process.env[ENTERPRISE_FEATURE_FLAG_ENV];
 const originalEnterpriseDbPath = process.env[ENTERPRISE_DB_PATH_ENV];
 const originalEnterpriseDataDir = process.env[ENTERPRISE_DATA_DIR_ENV];
 const originalUploadDir = process.env.UPLOAD_DIR;
+const originalAgentRuntime = process.env.SMARTPERFETTO_AGENT_RUNTIME;
+const originalAiEnabled = process.env.SMARTPERFETTO_AI_ENABLED;
+
+type DeferredRuntime = {
+  promise: Promise<unknown>;
+  reject: (error: unknown) => void;
+  settled: boolean;
+};
 
 function makeApp(): express.Express {
   const app = express();
@@ -80,6 +95,36 @@ function restoreEnvValue(key: string, value: string | undefined): void {
     delete process.env[key];
   } else {
     process.env[key] = value;
+  }
+}
+
+function createDeferredRuntime(deferreds: DeferredRuntime[]): DeferredRuntime {
+  let rejectRuntime!: (error: unknown) => void;
+  const promise = new Promise<unknown>((_resolve, reject) => {
+    rejectRuntime = reject;
+  });
+  const deferred: DeferredRuntime = {
+    promise,
+    reject: (error: unknown) => {
+      if (deferred.settled) return;
+      deferred.settled = true;
+      rejectRuntime(error);
+    },
+    settled: false,
+  };
+  deferreds.push(deferred);
+  return deferred;
+}
+
+async function rejectPendingDeferredRuntimes(
+  deferreds: DeferredRuntime[],
+  label: string,
+): Promise<void> {
+  for (const [index, deferred] of deferreds.entries()) {
+    deferred.reject(new Error(`${label} ${index}`));
+  }
+  if (deferreds.length > 0) {
+    await new Promise(resolve => setTimeout(resolve, 0));
   }
 }
 
@@ -145,6 +190,8 @@ afterEach(async () => {
   restoreEnvValue(ENTERPRISE_DB_PATH_ENV, originalEnterpriseDbPath);
   restoreEnvValue(ENTERPRISE_DATA_DIR_ENV, originalEnterpriseDataDir);
   restoreEnvValue('UPLOAD_DIR', originalUploadDir);
+  restoreEnvValue('SMARTPERFETTO_AGENT_RUNTIME', originalAgentRuntime);
+  restoreEnvValue('SMARTPERFETTO_AI_ENABLED', originalAiEnabled);
   sessionContextManager.remove('session-resume-integration');
 });
 
@@ -202,6 +249,79 @@ describe('agent route RBAC', () => {
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it('rejects analyze requests while AI is disabled before trace access is evaluated', async () => {
+    delete process.env.SMARTPERFETTO_API_KEY;
+    process.env.SMARTPERFETTO_SSO_TRUSTED_HEADERS = 'true';
+    process.env.SMARTPERFETTO_AI_ENABLED = 'false';
+    const traceService = { getOrLoadTrace: jest.fn() };
+    setTraceProcessorServiceForTests(traceService as unknown as TraceProcessorService);
+
+    const res = await analystHeaders(request(makeApp()).post('/api/agent/v1/analyze'))
+      .send({ traceId: 'trace-a', query: 'analyze this trace' });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({
+      success: false,
+      code: 'AI_DISABLED',
+      feature: 'agent_analyze',
+    });
+    expect(traceService.getOrLoadTrace).not.toHaveBeenCalled();
+  });
+
+  it('rejects session run requests while AI is disabled before trace access is evaluated', async () => {
+    delete process.env.SMARTPERFETTO_API_KEY;
+    process.env.SMARTPERFETTO_SSO_TRUSTED_HEADERS = 'true';
+    process.env.SMARTPERFETTO_AI_ENABLED = 'false';
+    const traceService = { getOrLoadTrace: jest.fn() };
+    setTraceProcessorServiceForTests(traceService as unknown as TraceProcessorService);
+
+    const res = await analystHeaders(request(makeApp()).post('/api/agent/v1/sessions/session-a/runs'))
+      .send({ traceId: 'trace-a', query: 'continue analysis' });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({
+      success: false,
+      code: 'AI_DISABLED',
+      feature: 'agent_analyze',
+    });
+    expect(traceService.getOrLoadTrace).not.toHaveBeenCalled();
+  });
+
+  it('rejects scene reconstruction start while AI is disabled before trace access is evaluated', async () => {
+    delete process.env.SMARTPERFETTO_API_KEY;
+    process.env.SMARTPERFETTO_SSO_TRUSTED_HEADERS = 'true';
+    process.env.SMARTPERFETTO_AI_ENABLED = 'false';
+    const traceService = { getOrLoadTrace: jest.fn() };
+    setTraceProcessorServiceForTests(traceService as unknown as TraceProcessorService);
+
+    const res = await analystHeaders(request(makeApp()).post('/api/agent/v1/scene-reconstruct'))
+      .send({ traceId: 'trace-a' });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({
+      success: false,
+      code: 'AI_DISABLED',
+      feature: 'scene_reconstruct_start',
+    });
+    expect(traceService.getOrLoadTrace).not.toHaveBeenCalled();
+  });
+
+  it('rejects resume requests while AI is disabled before persistence restore is evaluated', async () => {
+    delete process.env.SMARTPERFETTO_API_KEY;
+    process.env.SMARTPERFETTO_SSO_TRUSTED_HEADERS = 'true';
+    process.env.SMARTPERFETTO_AI_ENABLED = 'false';
+
+    const res = await analystHeaders(request(makeApp()).post('/api/agent/v1/resume'))
+      .send({ sessionId: 'session-disabled' });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({
+      success: false,
+      code: 'AI_DISABLED',
+      feature: 'agent_resume',
+    });
   });
 
   it('rejects analyze when the scoped trace processor lease is draining', async () => {
@@ -341,6 +461,7 @@ describe('agent route RBAC', () => {
   it('replays persisted terminal SSE events before falling back to the in-memory buffer', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'smartperfetto-agent-event-replay-'));
     let leaseStore: ReturnType<typeof getTraceProcessorLeaseStore> | null = null;
+    const deferreds: DeferredRuntime[] = [];
     try {
       const traceId = 'trace-agent-event-replay';
       const tracePath = path.join(tmpDir, `${traceId}.trace`);
@@ -381,7 +502,7 @@ describe('agent route RBAC', () => {
           status: 'ready',
         })),
         ensureProcessorForLease: jest.fn(async () => undefined),
-        runWithLease: jest.fn(() => new Promise<unknown>(() => undefined)),
+        runWithLease: jest.fn(() => createDeferredRuntime(deferreds).promise),
         query: jest.fn(async () => ({ columns: [], rows: [], durationMs: 1 })),
       } as any);
 
@@ -424,6 +545,54 @@ describe('agent route RBAC', () => {
             confidence: 0.9,
             findings: [],
             reportUrl: '/api/reports/report-from-db',
+            analysisReceipt: {
+              schemaVersion: 1,
+              runId,
+              sessionId,
+              traceId,
+              mode: 'full',
+              resolvedMode: 'full',
+              providerId: 'provider-a',
+              generatedAt: 1_777_000_002_000,
+              traceEvidence: {
+                sqlCount: 2,
+                skillCount: 1,
+                dataEnvelopeCount: 3,
+                artifactCount: 1,
+                evidenceRefCount: 4,
+              },
+              nonEvidenceContext: {
+                frontendPrequeryCount: 0,
+                memoryHintCount: 0,
+                conversationContextCount: 2,
+                strategyHintCount: 1,
+              },
+              claimAudit: {
+                totalClaims: 2,
+                verifiedClaims: 2,
+                unsupportedClaims: 0,
+                uncertainClaims: 0,
+              },
+              qualityGates: {
+                finalReportContract: 'passed',
+                claimVerification: 'passed',
+                identityResolution: 'passed',
+              },
+              outputs: {
+                reportId: 'report-from-db',
+                reportUrl: '/api/reports/report-from-db',
+              },
+            },
+            uiActionProposals: [{
+              schemaVersion: 1,
+              id: 'ui-pin_evidence-db',
+              kind: 'pin_evidence',
+              title: '固定启动证据',
+              reason: '用于后续追问',
+              source: { evidenceRefId: 'data:startup:summary:123' },
+              payload: { evidenceRefId: 'data:startup:summary:123' },
+              requiresConfirmation: true,
+            }],
           },
         }),
         createdAt: 1_777_000_002_000,
@@ -440,6 +609,12 @@ describe('agent route RBAC', () => {
       expect(streamRes.text).toContain('id: 99');
       expect(streamRes.text).toContain('event: analysis_completed');
       expect(streamRes.text).toContain('/api/reports/report-from-db');
+      expect(streamRes.text).toContain('"analysisReceipt"');
+      expect(streamRes.text).toContain('"uiActionProposals"');
+      expect(streamRes.text).toContain('ui-pin_evidence-db');
+      expect(streamRes.text).toContain('"schemaVersion":1');
+      expect(streamRes.text).toContain(`"runId":"${runId}"`);
+      expect(streamRes.text).toContain('"claimVerification":"passed"');
       expect(streamRes.text).toContain('"partial":true');
       expect(streamRes.text).toContain('最终结果质量闸门');
 
@@ -453,6 +628,12 @@ describe('agent route RBAC', () => {
       expect(legacyQueryStreamRes.text).toContain('id: 99');
       expect(legacyQueryStreamRes.text).toContain('event: analysis_completed');
       expect(legacyQueryStreamRes.text).toContain('/api/reports/report-from-db');
+      expect(legacyQueryStreamRes.text).toContain('"analysisReceipt"');
+      expect(legacyQueryStreamRes.text).toContain('"uiActionProposals"');
+      expect(legacyQueryStreamRes.text).toContain('ui-pin_evidence-db');
+      expect(legacyQueryStreamRes.text).toContain('"schemaVersion":1');
+      expect(legacyQueryStreamRes.text).toContain(`"runId":"${runId}"`);
+      expect(legacyQueryStreamRes.text).toContain('"claimVerification":"passed"');
       expect(legacyQueryStreamRes.text).toContain('"partial":true');
       expect(legacyQueryStreamRes.text).toContain('最终结果质量闸门');
       leaseStore = getTraceProcessorLeaseStore();
@@ -462,6 +643,7 @@ describe('agent route RBAC', () => {
         userId: 'analyst-user',
       }, { traceId })).toHaveLength(1);
     } finally {
+      await rejectPendingDeferredRuntimes(deferreds, 'event replay cleanup');
       leaseStore?.close();
       setTraceProcessorLeaseStoreForTests(null);
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -471,6 +653,7 @@ describe('agent route RBAC', () => {
   it('replays buffered frontend traceContext data on first session stream connect', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'smartperfetto-agent-trace-context-replay-'));
     let leaseStore: ReturnType<typeof getTraceProcessorLeaseStore> | null = null;
+    const deferreds: DeferredRuntime[] = [];
     try {
       const traceId = 'trace-context-replay';
       const tracePath = path.join(tmpDir, `${traceId}.trace`);
@@ -511,7 +694,7 @@ describe('agent route RBAC', () => {
           status: 'ready',
         })),
         ensureProcessorForLease: jest.fn(async () => undefined),
-        runWithLease: jest.fn(() => new Promise<unknown>(() => undefined)),
+        runWithLease: jest.fn(() => createDeferredRuntime(deferreds).promise),
         query: jest.fn(async () => ({ columns: [], rows: [], durationMs: 1 })),
       } as any);
 
@@ -533,7 +716,7 @@ describe('agent route RBAC', () => {
 
       const cancelRes = await analystHeaders(
         request(app).post(`/api/agent/v1/${analyzeRes.body.sessionId}/cancel`),
-      );
+      ).send({ runId: analyzeRes.body.runId });
       expect(cancelRes.status).toBe(200);
 
       const streamRes = await analystHeaders(
@@ -554,7 +737,321 @@ describe('agent route RBAC', () => {
         userId: 'analyst-user',
       }, { traceId })).toHaveLength(1);
     } finally {
+      await rejectPendingDeferredRuntimes(deferreds, 'trace context replay cleanup');
       leaseStore?.close();
+      setTraceProcessorLeaseStoreForTests(null);
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('passes dual-trace pane context through continued comparison session runs', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'smartperfetto-agent-dual-pane-'));
+    const capturedOptions: AnalysisOptions[] = [];
+    const analyzeResult = (sessionId: string): AnalysisResult => ({
+      sessionId,
+      success: true,
+      findings: [],
+      hypotheses: [],
+      conclusion: 'ok',
+      confidence: 0.8,
+      rounds: 1,
+      totalDurationMs: 1,
+    });
+    const waitForAnalyzeCallCount = async (count: number): Promise<void> => {
+      for (let attempt = 0; attempt < 20 && capturedOptions.length < count; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      expect(capturedOptions).toHaveLength(count);
+    };
+
+    try {
+      const traceId = 'trace-dual-pane-current';
+      const referenceTraceId = 'trace-dual-pane-reference';
+      const tracePath = path.join(tmpDir, `${traceId}.trace`);
+      const referenceTracePath = path.join(tmpDir, `${referenceTraceId}.trace`);
+      await fs.writeFile(tracePath, 'current trace bytes');
+      await fs.writeFile(referenceTracePath, 'reference trace bytes');
+      delete process.env.SMARTPERFETTO_API_KEY;
+      process.env.SMARTPERFETTO_SSO_TRUSTED_HEADERS = 'true';
+      process.env[ENTERPRISE_FEATURE_FLAG_ENV] = 'true';
+      process.env[ENTERPRISE_DB_PATH_ENV] = path.join(tmpDir, 'enterprise.sqlite');
+      process.env[ENTERPRISE_DATA_DIR_ENV] = path.join(tmpDir, 'data');
+      process.env.UPLOAD_DIR = path.join(tmpDir, 'uploads');
+      process.env.SMARTPERFETTO_AGENT_RUNTIME = 'claude-agent-sdk';
+
+      await writeTraceMetadata({
+        id: traceId,
+        filename: `${traceId}.trace`,
+        size: 19,
+        uploadedAt: new Date().toISOString(),
+        status: 'ready',
+        path: tracePath,
+        tenantId: 'tenant-a',
+        workspaceId: 'workspace-a',
+        userId: 'analyst-user',
+      });
+      await writeTraceMetadata({
+        id: referenceTraceId,
+        filename: `${referenceTraceId}.trace`,
+        size: 21,
+        uploadedAt: new Date().toISOString(),
+        status: 'ready',
+        path: referenceTracePath,
+        tenantId: 'tenant-a',
+        workspaceId: 'workspace-a',
+        userId: 'analyst-user',
+      });
+
+      const traceProcessorService = new TraceProcessorService(process.env.UPLOAD_DIR);
+      jest.spyOn(traceProcessorService, 'getOrLoadTrace').mockImplementation(async (id: string) => ({
+        id,
+        filename: `${id}.trace`,
+        size: id === referenceTraceId ? 21 : 19,
+        filePath: id === referenceTraceId ? referenceTracePath : tracePath,
+        uploadTime: new Date(),
+        status: 'ready',
+      }));
+      jest.spyOn(traceProcessorService, 'ensureProcessorForLease').mockResolvedValue({
+        id: 'processor-dual-pane',
+        traceId,
+        status: 'ready',
+        activeQueries: 0,
+        query: jest.fn(async () => ({ columns: [], rows: [], durationMs: 1 })),
+        queryRaw: jest.fn(async () => Buffer.alloc(0)),
+        destroy: jest.fn(),
+      });
+      jest.spyOn(traceProcessorService, 'runWithLease').mockImplementation(async (_context, callback) => callback());
+      jest.spyOn(traceProcessorService, 'runWithLeases').mockImplementation(async (_contexts, callback) => callback());
+      jest.spyOn(traceProcessorService, 'query').mockResolvedValue({
+        columns: [],
+        rows: [],
+        durationMs: 1,
+      });
+      setTraceProcessorServiceForTests(traceProcessorService);
+      jest.spyOn(ClaudeRuntime.prototype, 'analyze').mockImplementation(async (
+        _query,
+        sessionId,
+        _traceId,
+        options = {},
+      ) => {
+        capturedOptions.push(options);
+        return analyzeResult(sessionId);
+      });
+
+      const initialTracePairContext: TracePairContext = {
+        schemaVersion: 1,
+        layout: 'horizontal',
+        primarySide: 'left',
+        referenceSide: 'right',
+        activeSide: 'left',
+        workspaceOpen: true,
+        splitPercent: 55,
+        aliases: { left: 'current', right: 'reference', main: 'current', baseline: 'reference' },
+        panes: [
+          {
+            side: 'left',
+            traceSide: 'current',
+            traceId,
+            traceName: 'current.trace',
+            active: true,
+            visualState: 'live',
+          },
+          {
+            side: 'right',
+            traceSide: 'reference',
+            traceId: referenceTraceId,
+            traceName: 'reference.trace',
+            visualState: 'live',
+          },
+        ],
+      };
+      const continuedTracePairContext: TracePairContext = {
+        schemaVersion: 1,
+        layout: 'vertical',
+        primarySide: 'top',
+        referenceSide: 'bottom',
+        activeSide: 'bottom',
+        workspaceOpen: true,
+        splitPercent: 42,
+        maximizedTraceSide: 'reference',
+        minimizedTraceSides: ['current'],
+        aliases: { top: 'current', bottom: 'reference', current: 'current', reference: 'reference' },
+        panes: [
+          {
+            side: 'top',
+            traceSide: 'current',
+            traceId,
+            traceName: 'current.trace',
+            visualState: 'context_only',
+          },
+          {
+            side: 'bottom',
+            traceSide: 'reference',
+            traceId: referenceTraceId,
+            traceName: 'reference.trace',
+            active: true,
+            visualState: 'live',
+          },
+        ],
+      };
+
+      const app = makeApp();
+      const firstRun = await analystHeaders(request(app).post('/api/agent/v1/analyze'))
+        .send({
+          traceId,
+          referenceTraceId,
+          query: '对比左右两个 trace',
+          options: {
+            analysisMode: 'auto',
+            tracePairContext: initialTracePairContext,
+          },
+        });
+      expect(firstRun.status).toBe(200);
+      await waitForAnalyzeCallCount(1);
+
+      const continuedRun = await analystHeaders(
+        request(app).post(`/api/agent/v1/sessions/${firstRun.body.sessionId}/runs`),
+      ).send({
+        traceId,
+        query: '现在对比上面和下面的启动耗时',
+        options: {
+          analysisMode: 'auto',
+          tracePairContext: continuedTracePairContext,
+        },
+      });
+      expect(continuedRun.status).toBe(200);
+      await waitForAnalyzeCallCount(2);
+
+      expect(capturedOptions[0]).toEqual(expect.objectContaining({
+        referenceTraceId,
+        tracePairContext: initialTracePairContext,
+      }));
+      expect(capturedOptions[1]).toEqual(expect.objectContaining({
+        referenceTraceId,
+        tracePairContext: continuedTracePairContext,
+      }));
+    } finally {
+      delete process.env.SMARTPERFETTO_AGENT_RUNTIME;
+      setTraceProcessorLeaseStoreForTests(null);
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('replays buffered quick pre-evidence data when the first session stream connects after completion', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'smartperfetto-agent-completed-data-replay-'));
+    let leaseStore: ReturnType<typeof getTraceProcessorLeaseStore> | null = null;
+    try {
+      const traceId = 'completed-data-replay';
+      const tracePath = path.join(tmpDir, `${traceId}.trace`);
+      await fs.writeFile(tracePath, 'trace bytes');
+      delete process.env.SMARTPERFETTO_API_KEY;
+      process.env.SMARTPERFETTO_SSO_TRUSTED_HEADERS = 'true';
+      process.env[ENTERPRISE_FEATURE_FLAG_ENV] = 'true';
+      process.env[ENTERPRISE_DB_PATH_ENV] = path.join(tmpDir, 'enterprise.sqlite');
+      process.env[ENTERPRISE_DATA_DIR_ENV] = path.join(tmpDir, 'data');
+      process.env.UPLOAD_DIR = path.join(tmpDir, 'uploads');
+      process.env.SMARTPERFETTO_AGENT_RUNTIME = 'openai-agents-sdk';
+
+      await writeTraceMetadata({
+        id: traceId,
+        filename: `${traceId}.trace`,
+        size: 11,
+        uploadedAt: new Date().toISOString(),
+        status: 'ready',
+        path: tracePath,
+        tenantId: 'tenant-a',
+        workspaceId: 'workspace-a',
+        userId: 'analyst-user',
+      });
+      const traceProcessorService = new TraceProcessorService(process.env.UPLOAD_DIR);
+      jest.spyOn(traceProcessorService, 'getOrLoadTrace').mockResolvedValue({
+        id: traceId,
+        filename: `${traceId}.trace`,
+        size: 11,
+        filePath: tracePath,
+        uploadTime: new Date(),
+        status: 'ready',
+      });
+      jest.spyOn(traceProcessorService, 'getTrace').mockReturnValue({
+        id: traceId,
+        filename: `${traceId}.trace`,
+        size: 11,
+        filePath: tracePath,
+        uploadTime: new Date(),
+        status: 'ready',
+      });
+      const readyProcessor: TraceProcessor = {
+        id: `processor-${traceId}`,
+        traceId,
+        status: 'ready',
+        activeQueries: 0,
+        query: jest.fn(async () => ({
+          columns: [],
+          rows: [],
+          durationMs: 1,
+        })),
+        queryRaw: jest.fn(async () => Buffer.alloc(0)),
+        destroy: jest.fn(),
+      };
+      jest.spyOn(traceProcessorService, 'ensureProcessorForLease').mockResolvedValue(readyProcessor);
+      jest.spyOn(traceProcessorService, 'runWithLease').mockImplementation(async (_context, callback) => callback());
+      jest.spyOn(traceProcessorService, 'query').mockResolvedValue({
+        columns: [
+          'android_device_manufacturer',
+          'android_build_fingerprint',
+          'android_sdk_version',
+          'android_soc_model',
+          'system_name',
+          'system_release',
+          'system_machine',
+          'source_table',
+        ],
+        rows: [[
+          'OPPO',
+          'OPPO/PKH110/OP5DC1L1:16/AP3A.240617.008/V.2a01376:user/release-keys',
+          36,
+          'SM8750',
+          'Linux',
+          '6.6.89-android15',
+          'aarch64',
+          'metadata',
+        ]],
+        durationMs: 1,
+      });
+      setTraceProcessorServiceForTests(traceProcessorService);
+
+      const app = makeApp();
+      const analyzeRes = await analystHeaders(request(app).post('/api/agent/v1/analyze'))
+        .send({
+          traceId,
+          query: '设备型号是什么？',
+          options: { analysisMode: 'auto', maxRounds: 1 },
+        });
+
+      expect(analyzeRes.status).toBe(200);
+      await new Promise(resolve => setTimeout(resolve, 25));
+
+      const streamRes = await analystHeaders(
+        request(app)
+          .get(`/api/agent/v1/${analyzeRes.body.sessionId}/stream`)
+          .set('Accept', 'text/event-stream'),
+      );
+
+      expect(streamRes.status).toBe(200);
+      expect(streamRes.text).toContain('event: data');
+      expect(streamRes.text).toContain('runtime_trace_fact:device_info');
+      expect(streamRes.text).toContain('data:runtime_trace_fact:device_info:current:');
+      expect(streamRes.text).toContain('event: analysis_completed');
+      expect(streamRes.text).toContain('"actualTurns":0');
+      leaseStore = getTraceProcessorLeaseStore();
+      expect(leaseStore.listLeases({
+        tenantId: 'tenant-a',
+        workspaceId: 'workspace-a',
+        userId: 'analyst-user',
+      }, { traceId }).length).toBeGreaterThanOrEqual(1);
+    } finally {
+      leaseStore?.close();
+      delete process.env.SMARTPERFETTO_AGENT_RUNTIME;
       setTraceProcessorLeaseStoreForTests(null);
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
@@ -564,6 +1061,7 @@ describe('agent route RBAC', () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'smartperfetto-agent-concurrency-'));
     let leaseStore: ReturnType<typeof getTraceProcessorLeaseStore> | null = null;
     const sessionIds: string[] = [];
+    const deferreds: DeferredRuntime[] = [];
     try {
       const traces = new Map<string, { traceId: string; workspaceId: string; userId: string; tracePath: string }>();
       for (const item of [
@@ -622,7 +1120,7 @@ describe('agent route RBAC', () => {
           };
         }),
         ensureProcessorForLease: jest.fn(async () => undefined),
-        runWithLease: jest.fn(() => new Promise<unknown>(() => undefined)),
+        runWithLease: jest.fn(() => createDeferredRuntime(deferreds).promise),
         query: jest.fn(async () => ({ columns: [], rows: [], durationMs: 1 })),
       } as any);
 
@@ -667,7 +1165,7 @@ describe('agent route RBAC', () => {
         scopedAnalystHeaders(
           request(app).post(`/api/agent/v1/${analyzeA.body.sessionId}/cancel`),
           { userId: 'analyst-a', workspaceId: 'workspace-a' },
-        ),
+        ).send({ runId: analyzeA.body.runId }),
         scopedAnalystHeaders(
           request(app).get(`/api/agent/v1/${analyzeB.body.sessionId}/status`),
           { userId: 'analyst-b', workspaceId: 'workspace-b' },
@@ -750,7 +1248,7 @@ describe('agent route RBAC', () => {
       const cancelB = await scopedAnalystHeaders(
         request(app).post(`/api/agent/v1/${analyzeB.body.sessionId}/cancel`),
         { userId: 'analyst-b', workspaceId: 'workspace-b' },
-      );
+      ).send({ runId: analyzeB.body.runId });
       expect(cancelB.status).toBe(200);
 
       leaseStore = getTraceProcessorLeaseStore();
@@ -765,6 +1263,7 @@ describe('agent route RBAC', () => {
         userId: 'analyst-b',
       }, { traceId: 'trace-concurrent-b' })).toHaveLength(1);
     } finally {
+      await rejectPendingDeferredRuntimes(deferreds, 'concurrency cleanup');
       for (const sessionId of sessionIds) {
         sessionContextManager.remove(sessionId);
       }
@@ -796,6 +1295,8 @@ describe('agent route RBAC', () => {
       };
 
       try {
+        const abortSpy = jest.spyOn(ClaudeRuntime.prototype, 'abortSession')
+          .mockImplementation(() => undefined);
         const traceId = `trace-same-session-${lateOutcome}`;
         const tracePath = path.join(tmpDir, `${traceId}.trace`);
         await fs.writeFile(tracePath, `${traceId} bytes`);
@@ -851,17 +1352,38 @@ describe('agent route RBAC', () => {
 
         const cancelA = await analystHeaders(
           request(app).post(`/api/agent/v1/${analyzeA.body.sessionId}/cancel`),
-        );
+        ).send({ runId: analyzeA.body.runId });
         expect(cancelA.status).toBe(200);
         expect(cancelA.body.status).toBe('cancelled');
+        expect(abortSpy).toHaveBeenCalledTimes(1);
 
-        const analyzeB = await analystHeaders(
+        const analyzeBBeforeSettle = await analystHeaders(
           request(app).post(`/api/agent/v1/sessions/${analyzeA.body.sessionId}/runs`),
         ).send({ traceId, query: 'run B' });
-        expect(analyzeB.status).toBe(200);
-        expect(analyzeB.body.sessionId).toBe(analyzeA.body.sessionId);
-        expect(analyzeB.body.runId).not.toBe(analyzeA.body.runId);
-        expect(deferreds).toHaveLength(2);
+        expect(analyzeBBeforeSettle.status).toBe(409);
+        expect(analyzeBBeforeSettle.body).toEqual(expect.objectContaining({
+          code: 'CANCELLATION_IN_PROGRESS',
+          runId: analyzeA.body.runId,
+        }));
+        expect(deferreds).toHaveLength(1);
+
+        const repeatedCancelA = await analystHeaders(
+          request(app).post(`/api/agent/v1/${analyzeA.body.sessionId}/cancel`),
+        ).send({ runId: analyzeA.body.runId });
+        expect(repeatedCancelA.status).toBe(200);
+        expect(repeatedCancelA.body).toEqual(expect.objectContaining({
+          runId: analyzeA.body.runId,
+          outcome: 'already_cancelled',
+        }));
+        expect(abortSpy).toHaveBeenCalledTimes(1);
+
+        const statusAfterRepeatedCancelA = await analystHeaders(
+          request(app).get(`/api/agent/v1/${analyzeA.body.sessionId}/status`),
+        );
+        expect(statusAfterRepeatedCancelA.body).toEqual(expect.objectContaining({
+          status: 'cancelled',
+          observability: expect.objectContaining({ runId: analyzeA.body.runId }),
+        }));
 
         if (lateOutcome === 'reject') {
           deferreds[0].reject(new Error('late run A failure'));
@@ -878,6 +1400,14 @@ describe('agent route RBAC', () => {
           });
         }
         await new Promise(resolve => setTimeout(resolve, 0));
+
+        const analyzeB = await analystHeaders(
+          request(app).post(`/api/agent/v1/sessions/${analyzeA.body.sessionId}/runs`),
+        ).send({ traceId, query: 'run B' });
+        expect(analyzeB.status).toBe(200);
+        expect(analyzeB.body.sessionId).toBe(analyzeA.body.sessionId);
+        expect(analyzeB.body.runId).not.toBe(analyzeA.body.runId);
+        expect(deferreds).toHaveLength(2);
 
         const statusAfterLateA = await analystHeaders(
           request(app).get(`/api/agent/v1/${analyzeA.body.sessionId}/status`),
@@ -925,7 +1455,7 @@ describe('agent route RBAC', () => {
 
         const cancelB = await analystHeaders(
           request(app).post(`/api/agent/v1/${analyzeA.body.sessionId}/cancel`),
-        );
+        ).send({ runId: analyzeB.body.runId });
         expect(cancelB.status).toBe(200);
         deferreds[1].reject(new Error('cleanup B'));
         await new Promise(resolve => setTimeout(resolve, 0));
@@ -1013,9 +1543,21 @@ describe('agent route RBAC', () => {
 
       const cancelA = await analystHeaders(
         request(app).post(`/api/agent/v1/${analyzeA.body.sessionId}/cancel`),
-      );
+      ).send({ runId: analyzeA.body.runId });
       expect(cancelA.status).toBe(200);
       expect(cancelA.body.status).toBe('cancelled');
+
+      const analyzeBBeforeSettle = await analystHeaders(
+        request(app).post(`/api/agent/v1/sessions/${analyzeA.body.sessionId}/runs`),
+      ).send({ traceId, query: 'run B' });
+      expect(analyzeBBeforeSettle.status).toBe(409);
+      expect(analyzeBBeforeSettle.body).toEqual(expect.objectContaining({
+        code: 'CANCELLATION_IN_PROGRESS',
+        runId: analyzeA.body.runId,
+      }));
+
+      deferreds[0].reject(new Error('late run A failure'));
+      await new Promise(resolve => setTimeout(resolve, 0));
 
       const analyzeB = await analystHeaders(
         request(app).post(`/api/agent/v1/sessions/${analyzeA.body.sessionId}/runs`),
@@ -1044,7 +1586,7 @@ describe('agent route RBAC', () => {
 
       const cancelB = await analystHeaders(
         request(app).post(`/api/agent/v1/${analyzeA.body.sessionId}/cancel`),
-      );
+      ).send({ runId: analyzeB.body.runId });
       expect(cancelB.status).toBe(200);
       deferreds.forEach((deferred, index) => deferred.reject(new Error(`cleanup ${index}`)));
       await new Promise(resolve => setTimeout(resolve, 0));
@@ -1135,15 +1677,16 @@ describe('agent route RBAC', () => {
       const respondRes = await analystHeaders(
         request(makeApp())
           .post(`/api/agent/v1/${sessionId}/respond`)
-          .send({ action: 'abort' }),
+          .send({ action: 'abort', runId: `run-${sessionId}-1` }),
       );
 
-      expect(respondRes.status).toBe(200);
-      expect(respondRes.body).toEqual({
-        success: true,
+      expect(respondRes.status).toBe(404);
+      expect(respondRes.body).toEqual(expect.objectContaining({
+        success: false,
         sessionId,
-        status: 'completed',
-      });
+        runId: `run-${sessionId}-1`,
+        code: 'RUN_NOT_FOUND',
+      }));
     } finally {
       sessionContextManager.remove('session-resume-integration');
       SessionPersistenceService.resetForTests();

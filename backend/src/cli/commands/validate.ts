@@ -7,7 +7,7 @@
  *
  * Validates skill YAML files for syntax and semantic correctness.
  *
- * Tier/stdlib lint rules (added 2026-05 per docs/skills-audit-2026-05.md §7):
+ * Tier/stdlib lint rules (documented in docs/reference/skill-system.md):
  *   1. skill-tier-must-match-declared        — tier: S/A/B 与实际指标一致
  *   2. skill-stdlib-detected-vs-declared     — SQL 用到的 stdlib 表 ⊂ prerequisites.modules
  *   3. skill-include-budget-soft-cap         — prerequisites.modules.length ≤ 8 (warning)
@@ -21,6 +21,7 @@ import path from 'path';
 import yaml from 'js-yaml';
 import { SkillDefinition } from '../../services/skillEngine/types';
 import { validateSkillConditions } from '../../services/skillEngine/skillValidator';
+import { validateSkillBatchAnalysis } from '../../services/skillEngine/skillBatchAnalysis';
 import {
   formatDisplayContractIssue,
   validateSkillDisplayContract,
@@ -85,7 +86,7 @@ export interface StrategyFrontmatterValidationContext {
 }
 
 /**
- * Tier + stdlib lint rules (rules 1, 2, 3 from docs/skills-audit-2026-05.md §7).
+ * Tier + stdlib lint rules (rules 1, 2, 3 from docs/reference/skill-system.md).
  * Returns errors/warnings to merge into the file's overall result.
  *
  * Rule 1 — skill-tier-must-match-declared:
@@ -147,7 +148,7 @@ function validateTierAndStdlib(skill: SkillDefinition): { errors: string[]; warn
     }
   } else {
     // No tier declared — emit migration warning so M1 sweep adds it.
-    warnings.push(`tier: field missing — please declare 'tier: S|A|B' (see docs/skills-audit-2026-05.md §6)`);
+    warnings.push(`tier: field missing — please declare 'tier: S|A|B' (see docs/reference/skill-system.md)`);
   }
 
   // ---- Rule 3: include-budget-soft-cap ----
@@ -493,7 +494,7 @@ function validateSkillDefinition(skill: SkillDefinition, filePath: string): Vali
   // Validate diagnostic rules (in diagnostic steps, not skill-level)
   // V2 diagnostics are defined within DiagnosticStep, not at skill level
 
-  // Tier + stdlib lint rules (1, 2, 3) — see docs/skills-audit-2026-05.md §7
+  // Tier + stdlib lint rules (1, 2, 3) — see docs/reference/skill-system.md
   const tierStdlib = validateTierAndStdlib(skill);
   errors.push(...tierStdlib.errors);
   warnings.push(...tierStdlib.warnings);
@@ -526,7 +527,7 @@ function validateVendorOverrideDefinition(override: VendorOverrideDefinition, fi
   }
 
   // Lint rule 5 — skill-vendor-override-runtime-conformant
-  // Per docs/skills-audit-2026-05.md §5: claudeMcpServer.ts:708 silently skips
+  // Per docs/reference/skill-system.md: claudeMcpServer.ts:708 silently skips
   // overrides whose `additional_steps.length === 0`, so empty overrides are
   // dead diff. detectVendor() also requires at least one signature pattern to
   // ever match. These are now errors (was warnings).
@@ -709,6 +710,9 @@ function validateSql(sql: string): { errors: string[]; warnings: string[] } {
 export function validateContracts(skill: SkillDefinition, filePath?: string): { errors: string[]; warnings: string[] } {
   const errors: string[] = [];
   const warnings: string[] = [];
+
+  errors.push(...validateSkillBatchAnalysis(skill).map(validationIssue =>
+    `${validationIssue.path}: ${validationIssue.message}`));
 
   // 1. Input declarations completeness
   if (Array.isArray(skill.inputs)) {

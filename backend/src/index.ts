@@ -67,6 +67,9 @@ import analysisResultRoutes from './routes/analysisResultRoutes';
 import workspaceWindowRoutes from './routes/workspaceWindowRoutes';
 import comparisonRoutes from './routes/comparisonRoutes';
 import mcpRoutes from './routes/mcpRoutes';
+import traceConfigProposalRoutes from './routes/traceConfigProposalRoutes';
+import skillPackRoutes from './routes/skillPackRoutes';
+import batchTraceRoutes from './routes/batchTraceRoutes';
 import traceProcessorProxyRoutes, { handleTraceProcessorProxyUpgrade } from './routes/traceProcessorProxyRoutes';
 import {authenticate} from './middleware/auth';
 import { collectEnvCredentialSources } from './agentRuntime/envCredentialSources';
@@ -87,6 +90,7 @@ import {
 
 // Import cleanup utilities
 import { TraceProcessorFactory, killOrphanProcessors } from './services/workingTraceProcessor';
+import { shouldCleanOrphanProcessorsOnStartup } from './services/startupCleanupPolicy';
 import { getPortPool, resetPortPool } from './services/portPool';
 import { failInterruptedAnalysisRunsOnStartup } from './services/analysisRunStore';
 import { startCaseEvolutionWorker } from './services/caseEvolution/caseEvolutionWorkerBootstrap';
@@ -184,6 +188,21 @@ app.use(
   comparisonRoutes,
 );
 app.use('/api/mcp', mcpRoutes);
+app.use(
+  '/api/workspaces/:workspaceId/trace-config',
+  ...workspaceRouteContextMiddleware,
+  traceConfigProposalRoutes,
+);
+app.use(
+  '/api/workspaces/:workspaceId/skill-packs',
+  ...workspaceRouteContextMiddleware,
+  skillPackRoutes,
+);
+app.use(
+  '/api/workspaces/:workspaceId/batch-traces',
+  ...workspaceRouteContextMiddleware,
+  batchTraceRoutes,
+);
 app.use(
   '/api/traces',
   markLegacyApi(
@@ -291,8 +310,11 @@ recoverInterruptedEnterpriseRuns();
 const caseEvolutionWorkerHandle = startCaseEvolutionWorker();
 const patternMemorySweepHandle = startPatternMemoryAutoConfirmSweep();
 
-// Kill orphan trace_processor processes from previous runs
-killOrphanProcessors();
+if (shouldCleanOrphanProcessorsOnStartup()) {
+  killOrphanProcessors();
+} else {
+  console.log('[TraceProcessor] Skipping global orphan cleanup for isolated process ownership');
+}
 
 // Graceful shutdown handler
 function gracefulShutdown(signal: string) {

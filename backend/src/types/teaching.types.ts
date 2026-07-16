@@ -43,8 +43,11 @@ export interface TeachingPipelineResponse {
 export interface PipelineDetectionResult {
   detected: boolean;
   primaryPipelineId: string;
+  primaryRenderingTypeId: string;
   primaryConfidence: number;
   candidates: PipelineCandidate[];
+  renderingTypeCandidates: PipelineCandidate[];
+  relatedRenderingTypes: RelatedRenderingTypeCandidate[];
   features: DetectedFeature[];
   traceRequirementsMissing: string[];
 }
@@ -58,12 +61,19 @@ export interface PipelineDetectionResult {
 export interface TeachingDetectionResponse {
   detected: boolean;
   primaryPipelineId: string;
+  primaryRenderingTypeId: string;
   primaryConfidence: number;
   primary_pipeline: {
     id: string;
     confidence: number;
   };
+  renderingType: {
+    id: string;
+    docPath: string;
+  };
   candidates: PipelineCandidate[];
+  renderingTypeCandidates: PipelineCandidate[];
+  relatedRenderingTypes: RelatedRenderingTypeCandidate[];
   features: DetectedFeature[];
   subvariants: RenderingPipelineSubvariants;
   traceRequirementsMissing: string[];
@@ -83,6 +93,10 @@ export interface RenderingPipelineSubvariants {
 export interface PipelineCandidate {
   id: string;
   confidence: number;
+}
+
+export interface RelatedRenderingTypeCandidate extends PipelineCandidate {
+  docPath: string;
 }
 
 /**

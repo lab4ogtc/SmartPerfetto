@@ -24,6 +24,7 @@ and the 6-trace scene regression gate.
 | MCP, memory, report, provider, session, or agent runtime | `cd backend && npm run test:scene-trace-regression` |
 | Skill YAML | `cd backend && npm run validate:skills` plus scene trace regression |
 | Strategy/template Markdown | `cd backend && npm run validate:strategies` plus scene trace regression |
+| Trace corpus, Skill/Strategy coverage, or generator | `npm run trace:regression`; also run the focused Node corpus tests for tooling changes |
 | Frontend generated types | `cd backend && npm run generate:frontend-types` plus relevant tests |
 | AI plugin UI | Browser verification in `start-dev.sh`, relevant `perfetto/ui` tests/typecheck, then `./scripts/update-frontend.sh` |
 | Perfetto upstream sync, trace processor pin, SQL/stdlib index, or committed UI prebuild | Follow `.claude/rules/perfetto-sync.md`; normally `git diff --check`, `npm run check:frontend-prebuild`, `npm --prefix backend run cli:e2e`, scene trace regression, submodule remote reachability, and Skill/Strategy validation when those files changed |
@@ -97,6 +98,8 @@ The regression uses 6 canonical traces:
 | Flutter TextureView | `Scroll-Flutter-327-TextureView.pftrace` |
 | Flutter SurfaceView | `Scroll-Flutter-SurfaceView-Wechat-Wenyiwen.pftrace` |
 
+The aliases above resolve through `Trace/catalog.json`; maintained source must not add paths to the retired flat fixture directory. Full release/corpus verification is `npm run trace:regression`. Its report distinguishes positive semantic execution from explicit graceful-empty, unavailable-prerequisite, and definition-only contracts; inventory assignment alone is not a semantic pass.
+
 ## Focused Unit Tests
 
 Useful focused suites:
@@ -128,7 +131,7 @@ Startup:
 ```bash
 cd backend
 npx tsx src/scripts/verifyAgentSseScrolling.ts \
-  --trace ../test-traces/lacunh_heavy.pftrace \
+  --trace ../Trace/real/android-startup-heavy/trace.pftrace \
   --query "分析启动性能" \
   --output test-output/e2e-startup.json \
   --keep-session
@@ -184,13 +187,13 @@ rendering pipelines differ:
 ```bash
 cd backend
 npx tsx src/scripts/verifyAgentSseScrolling.ts \
-  --trace "../test-traces/Scroll-Flutter-327-TextureView.pftrace" \
+  --trace "../Trace/real/flutter-scroll-texture-view/trace.pftrace" \
   --query "分析 Flutter 滑动性能" \
   --output test-output/e2e-flutter-textureview.json \
   --keep-session
 
 npx tsx src/scripts/verifyAgentSseScrolling.ts \
-  --trace "../test-traces/Scroll-Flutter-SurfaceView-Wechat-Wenyiwen.pftrace" \
+  --trace "../Trace/real/flutter-scroll-surface-view/trace.pftrace" \
   --query "分析 Flutter 滑动性能" \
   --output test-output/e2e-flutter-surfaceview.json \
   --keep-session
@@ -202,13 +205,13 @@ Fast/full mode:
 cd backend
 npx tsx src/scripts/verifyAgentSseScrolling.ts \
   --mode fast \
-  --trace ../test-traces/scroll-demo-customer-scroll.pftrace \
+  --trace ../Trace/real/android-scroll-customer/trace.pftrace \
   --query "这个 trace 的应用包名和主要进程是什么？" \
   --output test-output/e2e-fast.json
 
 npx tsx src/scripts/verifyAgentSseScrolling.ts \
   --mode full \
-  --trace ../test-traces/scroll-demo-customer-scroll.pftrace \
+  --trace ../Trace/real/android-scroll-customer/trace.pftrace \
   --query "分析滑动性能" \
   --output test-output/e2e-full.json
 ```

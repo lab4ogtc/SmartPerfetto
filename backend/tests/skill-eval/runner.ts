@@ -16,6 +16,10 @@ import { validateSkillInputs } from '../../src/services/skillEngine/skillValidat
 import yaml from 'js-yaml';
 import fs from 'fs';
 
+const traceCaseCatalog = require('../../../Trace/tools/lib/catalog.cjs') as {
+  resolveCaseTrace(repoRoot: string, selector: string): string;
+};
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -63,13 +67,14 @@ export class SkillEvaluator {
   private skill: SkillDefinition | null = null;
   private availablePrerequisiteModules: string[] | null = null;
   private static sharedTraceProcessor: TraceProcessorService | null = null;
+  private static skillRegistry: Map<string, SkillDefinition> | null = null;
 
   constructor(skillId: string) {
     this.skillId = skillId;
     // 使用共享的 TraceProcessorService 实例，避免重复启动进程
     if (!SkillEvaluator.sharedTraceProcessor) {
       SkillEvaluator.sharedTraceProcessor = new TraceProcessorService(
-        path.join(process.cwd(), 'uploads', 'test-traces')
+        path.join(process.cwd(), 'uploads', 'trace-corpus-eval')
       );
     }
     this.traceProcessor = SkillEvaluator.sharedTraceProcessor;
@@ -77,7 +82,7 @@ export class SkillEvaluator {
 
   /**
    * 加载 trace 文件
-   * @param tracePath 相对于项目根目录的路径，如 'test-traces/scrolling.pftrace'
+ * @param tracePath Trace catalog 解析出的绝对路径，或相对于项目根目录的路径
    */
   async loadTrace(tracePath: string): Promise<void> {
     const absolutePath = path.resolve(process.cwd(), '..', tracePath);
@@ -91,18 +96,23 @@ export class SkillEvaluator {
     console.log(`[SkillEvaluator] Trace loaded with ID: ${this.traceId}`);
     this.availablePrerequisiteModules = null;
 
-    // 创建 executor
-    this.executor = createSkillExecutor(this.traceProcessor);
+    await this.selectSkill(this.skillId);
+  }
 
-    // 加载 skill 定义
-    await this.loadSkill();
-
-    // 注册 skill
-    if (this.skill) {
-      this.executor.registerSkill(this.skill);
-      // 也需要注册子 skills（如果有 iterator 步骤）
-      await this.registerDependentSkills();
+  /** Reuse the currently loaded trace while switching to another corpus Skill. */
+  async selectSkill(skillId: string): Promise<void> {
+    if (!this.traceId) {
+      throw new Error('SkillEvaluator not initialized. Call loadTrace() first.');
     }
+    this.skillId = skillId;
+    this.skill = null;
+    this.availablePrerequisiteModules = null;
+    this.executor = createSkillExecutor(this.traceProcessor);
+    this.executor.setFragmentRegistry(this.loadFragmentRegistry(path.join(process.cwd(), 'skills')));
+    await this.loadSkill();
+    if (!this.skill) throw new Error(`Skill not found: ${skillId}`);
+    this.executor.registerSkill(this.skill);
+    await this.registerDependentSkills();
   }
 
   /**
@@ -110,36 +120,65 @@ export class SkillEvaluator {
    */
   private async loadSkill(): Promise<void> {
     const skillsDir = path.join(process.cwd(), 'skills');
+    const skill = this.getSkillRegistry(skillsDir).get(this.skillId);
+    if (skill) {
+      this.skill = skill;
+      this.availablePrerequisiteModules = null;
+      console.log(`[SkillEvaluator] Loaded skill: ${skill.name}`);
+      return;
+    }
+    throw new Error(`Skill not found: ${this.skillId}`);
+  }
 
-    // 搜索 skill 文件
-    const searchDirs = ['atomic', 'composite', 'base'];
-
-    for (const dir of searchDirs) {
-      const dirPath = path.join(skillsDir, dir);
-      if (!fs.existsSync(dirPath)) continue;
-
-      const files = fs.readdirSync(dirPath);
-      for (const file of files) {
-        if (!file.endsWith('.skill.yaml') && !file.endsWith('.skill.yml')) continue;
-
-        const filePath = path.join(dirPath, file);
+  private getSkillRegistry(skillsDir: string): Map<string, SkillDefinition> {
+    if (SkillEvaluator.skillRegistry) return SkillEvaluator.skillRegistry;
+    const registry = new Map<string, SkillDefinition>();
+    const stack = [skillsDir];
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      if (!fs.existsSync(current)) continue;
+      for (const entry of fs.readdirSync(current, {withFileTypes: true})) {
+        const absolute = path.join(current, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name !== '_template') stack.push(absolute);
+          continue;
+        }
+        if (
+          !entry.isFile()
+          || entry.name.startsWith('_')
+          || (!entry.name.endsWith('.skill.yaml') && !entry.name.endsWith('.skill.yml'))
+        ) continue;
         try {
-          const content = fs.readFileSync(filePath, 'utf-8');
-          const skill = yaml.load(content) as SkillDefinition;
-
-          if (skill && skill.name === this.skillId) {
-            this.skill = skill;
-            this.availablePrerequisiteModules = null;
-            console.log(`[SkillEvaluator] Loaded skill: ${skill.name}`);
-            return;
-          }
-        } catch (e) {
-          // 忽略解析错误
+          const skill = yaml.load(fs.readFileSync(absolute, 'utf8')) as SkillDefinition;
+          if (skill?.name && !registry.has(skill.name)) registry.set(skill.name, skill);
+        } catch {
+          // The normal Skill validators report malformed YAML with file context.
         }
       }
     }
+    SkillEvaluator.skillRegistry = registry;
+    return registry;
+  }
 
-    throw new Error(`Skill not found: ${this.skillId}`);
+  private loadFragmentRegistry(skillsDir: string): Map<string, string> {
+    const fragmentsRoot = path.join(skillsDir, 'fragments');
+    const registry = new Map<string, string>();
+    if (!fs.existsSync(fragmentsRoot)) return registry;
+
+    const stack = [fragmentsRoot];
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      for (const entry of fs.readdirSync(current, {withFileTypes: true})) {
+        const absolute = path.join(current, entry.name);
+        if (entry.isDirectory()) {
+          stack.push(absolute);
+        } else if (entry.isFile() && entry.name.endsWith('.sql')) {
+          const key = path.relative(skillsDir, absolute).split(path.sep).join('/');
+          registry.set(key, fs.readFileSync(absolute, 'utf8'));
+        }
+      }
+    }
+    return registry;
   }
 
   /**
@@ -232,31 +271,7 @@ export class SkillEvaluator {
    * 查找并加载 skill
    */
   private async findAndLoadSkill(skillName: string, skillsDir: string): Promise<SkillDefinition | null> {
-    const searchDirs = ['atomic', 'composite', 'base'];
-
-    for (const dir of searchDirs) {
-      const dirPath = path.join(skillsDir, dir);
-      if (!fs.existsSync(dirPath)) continue;
-
-      const files = fs.readdirSync(dirPath);
-      for (const file of files) {
-        if (!file.endsWith('.skill.yaml') && !file.endsWith('.skill.yml')) continue;
-
-        const filePath = path.join(dirPath, file);
-        try {
-          const content = fs.readFileSync(filePath, 'utf-8');
-          const skill = yaml.load(content) as SkillDefinition;
-
-          if (skill && skill.name === skillName) {
-            return skill;
-          }
-        } catch (e) {
-          // 忽略解析错误
-        }
-      }
-    }
-
-    return null;
+    return this.getSkillRegistry(skillsDir).get(skillName) ?? null;
   }
 
   /**
@@ -323,6 +338,11 @@ export class SkillEvaluator {
     }
 
     const executor = this.executor as any;
+    // Perfetto stdlib tables declared by a Skill do not exist until their
+    // modules are included. Match the production execution order before
+    // checking required_tables, otherwise valid module-owned tables look
+    // absent in the regression harness.
+    const moduleIncludes = await this.getAvailablePrerequisiteModules();
     const prereqCheck = await executor.checkPrerequisites(this.skill, this.traceId);
     if (!prereqCheck.success) {
       throw new Error(`Skipped: ${prereqCheck.error}`);
@@ -334,7 +354,7 @@ export class SkillEvaluator {
       inherited: {},
       results: {},
       variables: {},
-      moduleIncludes: await this.getAvailablePrerequisiteModules(),
+      moduleIncludes,
     };
 
     const results: EvalStepResult[] = [];
@@ -671,7 +691,7 @@ export function createSkillEvaluator(skillId: string): SkillEvaluator {
  * 获取测试 trace 文件路径
  */
 export function getTestTracePath(traceName: string): string {
-  return path.join('test-traces', traceName);
+  return traceCaseCatalog.resolveCaseTrace(path.resolve(process.cwd(), '..'), traceName);
 }
 
 /**
@@ -682,7 +702,7 @@ export function getTestTracePath(traceName: string): string {
  * while still exercising the suite when fixtures are available.
  *
  * Mirrors `loadTrace`'s path semantics: jest runs from backend/, traces live in
- * <repo-root>/test-traces, so we resolve relative to cwd then '..'.
+ * Trace catalog paths are absolute; path.resolve keeps them unchanged.
  */
 export function describeWithTrace(
   suiteName: string,

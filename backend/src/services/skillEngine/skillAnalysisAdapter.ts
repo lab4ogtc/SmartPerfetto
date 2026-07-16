@@ -11,11 +11,12 @@
 
 import { TraceProcessorService } from '../traceProcessorService';
 import { SkillExecutor, createSkillExecutor, LayeredResult } from './skillExecutor';
-import { skillRegistry, ensureSkillRegistryInitialized, getSkillsDir } from './skillLoader';
+import { skillRegistry, ensureSkillRegistryInitialized, type SkillRegistry } from './skillLoader';
 import { SkillDefinition, SkillEvent, DisplayLevel, DisplayLayer, StepResult } from './types';
 import { smartSummaryGenerator } from './smartSummaryGenerator';
 import { answerGenerator, GeneratedAnswer } from './answerGenerator';
 import { SkillEventCollector, createEventCollector, EventSummary, ProgressInfo } from './eventCollector';
+import type { SkillOriginMetadata } from '../skillPacks/skillPackTypes';
 
 // =============================================================================
 // Types
@@ -79,6 +80,7 @@ export interface SkillListItem {
   type: string;
   keywords: string[];
   tags?: string[];
+  origin?: SkillOriginMetadata;
 }
 
 export interface AdaptedResult {
@@ -86,6 +88,11 @@ export interface AdaptedResult {
   layers: LayeredResult['layers'];
   defaultExpanded: DisplayLayer[];
   metadata: LayeredResult['metadata'];
+}
+
+export interface SkillAnalysisAdapterOptions {
+  registry?: SkillRegistry;
+  registryFingerprint?: string;
 }
 
 // =============================================================================
@@ -98,13 +105,19 @@ export class SkillAnalysisAdapter {
   private initialized = false;
   private eventHandler?: (event: SkillEvent) => void;
   private currentEventCollector?: SkillEventCollector;
+  private registry: SkillRegistry;
+  private registryFingerprint?: string;
+  private registeredFingerprint?: string;
 
   constructor(
     traceProcessor: TraceProcessorService,
-    eventHandler?: (event: SkillEvent) => void
+    eventHandler?: (event: SkillEvent) => void,
+    options: SkillAnalysisAdapterOptions = {},
   ) {
     this.traceProcessor = traceProcessor;
     this.eventHandler = eventHandler;
+    this.registry = options.registry ?? skillRegistry;
+    this.registryFingerprint = options.registryFingerprint;
 
     // 创建 executor，传入事件处理器
     this.executor = createSkillExecutor(
@@ -114,9 +127,16 @@ export class SkillAnalysisAdapter {
     );
 
     // Wire fragment cache from the skill registry (if loaded)
-    if (skillRegistry.isInitialized()) {
-      this.executor.setFragmentRegistry(skillRegistry.getFragmentCache());
+    if (this.registry.isInitialized()) {
+      this.executor.setFragmentRegistry(this.registry.getFragmentCache());
     }
+  }
+
+  setSkillRegistry(registry: SkillRegistry, registryFingerprint?: string): void {
+    if (this.registry === registry && this.registryFingerprint === registryFingerprint) return;
+    this.registry = registry;
+    this.registryFingerprint = registryFingerprint;
+    this.initialized = false;
   }
 
   /**
@@ -139,15 +159,22 @@ export class SkillAnalysisAdapter {
    * 确保 skill registry 已初始化
    */
   async ensureInitialized(): Promise<void> {
-    if (this.initialized) return;
+    const fingerprint = this.registryFingerprint ?? (this.registry === skillRegistry ? 'built_in' : 'injected');
+    if (this.initialized && this.registeredFingerprint === fingerprint) return;
 
-    await ensureSkillRegistryInitialized();
+    if (this.registry === skillRegistry) {
+      await ensureSkillRegistryInitialized();
+    } else if (!this.registry.isInitialized()) {
+      throw new Error('skill_registry_not_initialized');
+    }
 
     // 将所有 skills 注册到 executor
-    const skills = skillRegistry.getAllSkills();
-    this.executor.registerSkills(skills);
+    const skills = this.registry.getAllSkills();
+    this.executor.replaceRegisteredSkills(skills);
+    this.executor.setFragmentRegistry(this.registry.getFragmentCache());
 
     this.initialized = true;
+    this.registeredFingerprint = fingerprint;
     console.log(`[SkillAnalysisAdapter] Initialized with ${skills.length} skills`);
   }
 
@@ -156,7 +183,7 @@ export class SkillAnalysisAdapter {
    * 返回匹配的 skill ID 或 null
    */
   detectIntent(question: string): string | null {
-    const skill = skillRegistry.findMatchingSkill(question);
+    const skill = this.registry.findMatchingSkill(question);
     return skill ? skill.name : null;
   }
 
@@ -310,7 +337,7 @@ export class SkillAnalysisAdapter {
     }
 
     // 获取 skill 信息
-    const skill = skillRegistry.getSkill(targetSkillId);
+    const skill = this.registry.getSkill(targetSkillId);
     if (!skill) {
       return {
         skillId: targetSkillId,
@@ -877,7 +904,7 @@ export class SkillAnalysisAdapter {
   async listSkills(): Promise<SkillListItem[]> {
     await this.ensureInitialized();
 
-    const skills = skillRegistry.getAllSkills();
+    const skills = this.registry.getAllSkills();
 
     return skills.map((skill: SkillDefinition) => {
       const triggers = skill.triggers;
@@ -899,6 +926,7 @@ export class SkillAnalysisAdapter {
         type: skill.type,
         keywords,
         tags: skill.meta?.tags,
+        origin: this.registry.getSkillOrigin(skill.name),
       };
     });
   }
@@ -908,7 +936,7 @@ export class SkillAnalysisAdapter {
    */
   async getSkillDetail(skillId: string): Promise<SkillDefinition | null> {
     await this.ensureInitialized();
-    return skillRegistry.getSkill(skillId) || null;
+    return this.registry.getSkill(skillId) || null;
   }
 
   /**
@@ -944,7 +972,8 @@ export function getSkillAnalysisAdapter(
 
 export function createSkillAnalysisAdapter(
   traceProcessor: TraceProcessorService,
-  eventHandler?: (event: SkillEvent) => void
+  eventHandler?: (event: SkillEvent) => void,
+  options: SkillAnalysisAdapterOptions = {},
 ): SkillAnalysisAdapter {
-  return new SkillAnalysisAdapter(traceProcessor, eventHandler);
+  return new SkillAnalysisAdapter(traceProcessor, eventHandler, options);
 }

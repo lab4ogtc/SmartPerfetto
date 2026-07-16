@@ -21,8 +21,8 @@ import { query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { createSdkEnv, getSdkBinaryOption } from './claudeConfig';
 import type { Finding, StreamingUpdate } from '../../../agent/types';
 import type { VerificationResult, VerificationIssue, AnalysisPlanV3, Hypothesis, ToolCallRecord } from '../../../agentv3/types';
-import { expectedCallMatchesRecord, expectedToolNames, formatExpectedCall } from '../../../agentv3/types';
-import { isConclusionLikePlanPhase } from '../../../agentv3/planPhaseSemantics';
+import { expectedCallMatchesRecord, expectedToolNames, formatExpectedCall, phaseMatchesCall } from '../../../agentv3/types';
+import { isComparisonSynthesisPlanPhase, isConclusionLikePlanPhase } from '../../../agentv3/planPhaseSemantics';
 import type { SceneType } from '../../../agentv3/sceneClassifier';
 import { DEFAULT_OUTPUT_LANGUAGE, localize, type OutputLanguage } from '../../../agentv3/outputLanguage';
 import { backendLogPath } from '../../../runtimePaths';
@@ -366,6 +366,24 @@ function hasNonConclusionPhaseToolEvidence(
   });
 }
 
+function hasPriorNonConclusionMatchingToolEvidence(
+  plan: AnalysisPlanV3,
+  phase: AnalysisPlanV3['phases'][number],
+): boolean {
+  const phaseById = new Map(plan.phases.map(entry => [entry.id, entry]));
+  const phaseIndex = plan.phases.findIndex(entry => entry.id === phase.id);
+  return plan.toolCallLog.some(record => {
+    if (!record.matchedPhaseId || record.matchedPhaseId === phase.id) return false;
+    const matchedPhase = phaseById.get(record.matchedPhaseId);
+    if (!matchedPhase || isConclusionLikePlanPhase(matchedPhase)) return false;
+    if (phaseIndex >= 0) {
+      const matchedIndex = plan.phases.findIndex(entry => entry.id === matchedPhase.id);
+      if (matchedIndex > phaseIndex) return false;
+    }
+    return phaseMatchesCall(phase, record);
+  });
+}
+
 function expectedCallWasExecutedAnywhere(
   plan: AnalysisPlanV3,
   expectedCall: NonNullable<AnalysisPlanV3['phases'][number]['expectedCalls']>[number],
@@ -412,8 +430,11 @@ export function verifyPlanAdherence(plan: AnalysisPlanV3 | null): VerificationIs
   for (const phase of completedPhases) {
     const matchedCalls = plan.toolCallLog.filter(t => t.matchedPhaseId === phase.id);
     const isConclusionPhase = isConclusionLikePlanPhase(phase);
+    const isComparisonSynthesisPhase = isComparisonSynthesisPlanPhase(phase);
     const hasExternalEvidence = isConclusionPhase &&
       hasNonConclusionPhaseToolEvidence(plan, phase.id);
+    const hasReusableComparisonEvidence = isComparisonSynthesisPhase &&
+      hasPriorNonConclusionMatchingToolEvidence(plan, phase);
     const expected = expectedToolNames(phase).join(', ');
     const missingExpectedCallsForPhase = (phase.expectedCalls ?? [])
       .filter(call => !matchedCalls.some(record => expectedCallMatchesRecord(call, record)));
@@ -433,6 +454,9 @@ export function verifyPlanAdherence(plan: AnalysisPlanV3 | null): VerificationIs
     const hasExpectations = phase.expectedTools.length > 0;
     if (matchedCalls.length === 0 && hasExpectations) {
       if (isConclusionPhase && hasExternalEvidence) {
+        continue;
+      }
+      if (hasReusableComparisonEvidence) {
         continue;
       }
       issues.push({

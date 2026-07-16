@@ -78,6 +78,17 @@ interface UpsertOptions {
   embeddingRef?: string;
 }
 
+interface MutateOptions extends UpsertOptions {
+  rowScope: string;
+}
+
+interface ScopedKnowledgeMutation<T> {
+  kind: string;
+  externalId: string;
+  mutate: (current: T | undefined) => T;
+  options: MutateOptions;
+}
+
 export function enterpriseKnowledgeStoreEnabled(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
@@ -196,6 +207,57 @@ export function upsertScopedKnowledgeRecord<T>(
   });
 }
 
+/**
+ * Atomically read-modify-write one scoped record while holding the SQLite
+ * writer lock. Policy records use this to avoid stale multi-instance updates
+ * re-enabling consent that another instance just revoked.
+ */
+export function mutateScopedKnowledgeRecord<T>(
+  kind: string,
+  externalId: string,
+  scopeInput: KnowledgeScope | undefined,
+  mutate: (current: T | undefined) => T,
+  opts: MutateOptions,
+): T {
+  const scope = resolveKnowledgeScope(scopeInput);
+  return withKnowledgeDb((db) => {
+    const tx = db.transaction(() => {
+      ensureEnterpriseKnowledgeGraph(db, scope);
+      return mutateScopedKnowledgeRecordInDb(db, scope, {
+        kind,
+        externalId,
+        mutate,
+        options: opts,
+      });
+    });
+    return tx.immediate();
+  });
+}
+
+/**
+ * Atomically mutate two scoped policy records under one SQLite IMMEDIATE
+ * transaction. This is used when a policy mutation must be fenced by a lease:
+ * validating/renewing the lease and changing the protected record cannot be
+ * separated by a process scheduling window.
+ */
+export function mutateScopedKnowledgeRecordPair<TFirst, TSecond>(
+  first: ScopedKnowledgeMutation<TFirst>,
+  second: ScopedKnowledgeMutation<TSecond>,
+  scopeInput?: KnowledgeScope,
+): {first: TFirst; second: TSecond} {
+  const scope = resolveKnowledgeScope(scopeInput);
+  return withKnowledgeDb((db) => {
+    const tx = db.transaction(() => {
+      ensureEnterpriseKnowledgeGraph(db, scope);
+      return {
+        first: mutateScopedKnowledgeRecordInDb(db, scope, first),
+        second: mutateScopedKnowledgeRecordInDb(db, scope, second),
+      };
+    });
+    return tx.immediate();
+  });
+}
+
 export function getScopedKnowledgeRecord<T>(
   kind: string,
   externalId: string,
@@ -278,6 +340,54 @@ function withKnowledgeDb<T>(fn: (db: Database.Database) => T): T {
   } finally {
     db.close();
   }
+}
+
+function mutateScopedKnowledgeRecordInDb<T>(
+  db: Database.Database,
+  scope: ResolvedKnowledgeScope,
+  mutation: ScopedKnowledgeMutation<T>,
+): T {
+  const repo = createEnterpriseWorkspaceRepository<KnowledgeEntryRow>(
+    db,
+    'memory_entries',
+  );
+  const rowId = scopedKnowledgeRowId(mutation.kind, mutation.externalId, scope);
+  const existing = repo.getById(scope, rowId);
+  const current = existing
+    ? parseKnowledgeRow<T>(mutation.kind, existing)?.record
+    : undefined;
+  const record = mutation.mutate(current);
+  const now = mutation.options.updatedAt ?? Date.now();
+  const sourceRunId = resolveSourceRunId(
+    db,
+    mutation.options.sourceRunId || scope.sourceRunId,
+  );
+  const envelope: KnowledgeEnvelope<T> = {
+    schemaVersion: 1,
+    kind: mutation.kind,
+    externalId: mutation.externalId,
+    sourceTenantId: scope.tenantId,
+    sourceWorkspaceId: scope.workspaceId,
+    ...(sourceRunId ? {sourceRunId} : {}),
+    record,
+  };
+  const updateValues = {
+    scope: mutation.options.rowScope,
+    source_run_id: sourceRunId,
+    content_json: JSON.stringify(envelope),
+    embedding_ref: mutation.options.embeddingRef ?? null,
+    updated_at: now,
+  };
+  const changes = existing
+    ? repo.updateById(scope, rowId, updateValues)
+    : repo.upsertById(scope, rowId, {
+      ...updateValues,
+      created_at: mutation.options.createdAt ?? now,
+    });
+  if (changes === 0) {
+    throw new Error('Knowledge entry id already exists outside the repository scope');
+  }
+  return record;
 }
 
 function sanitizeScopeSegment(value: string, label: string): string {

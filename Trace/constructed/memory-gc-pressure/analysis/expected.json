@@ -1,0 +1,296 @@
+{
+  "schema_version": 1,
+  "case_id": "memory-gc-pressure",
+  "marker": "SmartPerfetto::CASE::memory-gc-pressure",
+  "expectations": [
+    {
+      "id": "execute-android_bitmap_memory_per_process",
+      "type": "skill",
+      "target": "android_bitmap_memory_per_process",
+      "mode": "semantic",
+      "source_file": "backend/skills/atomic/android_bitmap_memory_per_process.skill.yaml",
+      "parameters": {},
+      "required_steps": [
+        "bitmap_memory"
+      ],
+      "semantic_step": "bitmap_memory",
+      "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+    },
+    {
+      "id": "execute-android_heap_dominator_path_extract",
+      "type": "skill",
+      "target": "android_heap_dominator_path_extract",
+      "mode": "semantic",
+      "source_file": "backend/skills/composite/android_heap_dominator_path_extract.skill.yaml",
+      "parameters": {
+        "max_rows": 500
+      },
+      "required_steps": [
+        "data_check",
+        "dominator_paths"
+      ],
+      "semantic_step": "dominator_paths",
+      "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+    },
+    {
+      "id": "execute-android_heap_graph_leak_candidates",
+      "type": "skill",
+      "target": "android_heap_graph_leak_candidates",
+      "mode": "semantic",
+      "source_file": "backend/skills/atomic/android_heap_graph_leak_candidates.skill.yaml",
+      "parameters": {
+        "lifecycle_slice_prefix": "SI$",
+        "max_candidates": 50,
+        "max_reference_edges": 100
+      },
+      "required_steps": [
+        "leak_candidates"
+      ],
+      "semantic_step": "leak_candidates",
+      "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+    },
+    {
+      "id": "execute-android_heap_graph_summary",
+      "type": "skill",
+      "target": "android_heap_graph_summary",
+      "mode": "semantic",
+      "source_file": "backend/skills/atomic/android_heap_graph_summary.skill.yaml",
+      "parameters": {
+        "max_rows": 30
+      },
+      "required_steps": [
+        "heap_graph_availability"
+      ],
+      "semantic_step": "heap_graph_availability",
+      "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+    },
+    {
+      "id": "execute-android_memory_v57_ai_diagnostics",
+      "type": "skill",
+      "target": "android_memory_v57_ai_diagnostics",
+      "mode": "semantic",
+      "source_file": "backend/skills/composite/android_memory_v57_ai_diagnostics.skill.yaml",
+      "parameters": {
+        "min_size_mb": 1,
+        "max_rows": 40
+      },
+      "required_steps": [
+        "data_check",
+        "heap_graph_repeated_objects"
+      ],
+      "semantic_step": "heap_graph_repeated_objects",
+      "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+    },
+    {
+      "id": "execute-dmabuf_analysis",
+      "type": "skill",
+      "target": "dmabuf_analysis",
+      "mode": "unavailable",
+      "source_file": "backend/skills/composite/dmabuf_analysis.skill.yaml",
+      "parameters": {
+        "min_size_mb": 1
+      },
+      "required_steps": [
+        "data_check",
+        "dmabuf_overview"
+      ],
+      "semantic_step": "dmabuf_overview",
+      "limitation_reason": "The fixture does not contain DMA-BUF allocation/residency events.",
+      "expected_error": "Condition not met",
+      "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+    },
+    {
+      "id": "execute-gc_analysis",
+      "type": "skill",
+      "target": "gc_analysis",
+      "mode": "unavailable",
+      "source_file": "backend/skills/composite/gc_analysis.skill.yaml",
+      "parameters": {
+        "min_gc_dur_ms": 5
+      },
+      "required_steps": [
+        "data_check",
+        "gc_overview"
+      ],
+      "semantic_step": "gc_overview",
+      "limitation_reason": "The fixture has GC marker slices but not ART garbage-collection packets.",
+      "expected_error": "Condition not met",
+      "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+    },
+    {
+      "id": "definition-gc_events_in_range",
+      "type": "skill",
+      "target": "gc_events_in_range",
+      "mode": "definition",
+      "source_file": "backend/skills/atomic/gc_events_in_range.skill.yaml",
+      "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+    },
+    {
+      "id": "execute-linux_process_rss_swap_timeline",
+      "type": "skill",
+      "target": "linux_process_rss_swap_timeline",
+      "mode": "semantic",
+      "source_file": "backend/skills/atomic/linux_process_rss_swap_timeline.skill.yaml",
+      "parameters": {},
+      "required_steps": [
+        "rss_swap_peaks"
+      ],
+      "semantic_step": "rss_swap_peaks",
+      "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+    },
+    {
+      "id": "execute-lmk_analysis",
+      "type": "skill",
+      "target": "lmk_analysis",
+      "mode": "semantic",
+      "source_file": "backend/skills/composite/lmk_analysis.skill.yaml",
+      "parameters": {},
+      "required_steps": [
+        "data_check",
+        "lmk_overview"
+      ],
+      "semantic_step": "lmk_overview",
+      "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+    },
+    {
+      "id": "execute-lmk_kill_attribution",
+      "type": "skill",
+      "target": "lmk_kill_attribution",
+      "mode": "semantic",
+      "source_file": "backend/skills/atomic/lmk_kill_attribution.skill.yaml",
+      "parameters": {},
+      "required_steps": [
+        "lmk_events"
+      ],
+      "semantic_step": "lmk_events",
+      "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+    },
+    {
+      "id": "definition-logcat_analysis",
+      "type": "skill",
+      "target": "logcat_analysis",
+      "mode": "definition",
+      "source_file": "backend/skills/atomic/logcat_analysis.skill.yaml",
+      "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+    },
+    {
+      "id": "execute-memory_analysis",
+      "type": "skill",
+      "target": "memory_analysis",
+      "mode": "semantic",
+      "source_file": "backend/skills/composite/memory_analysis.skill.yaml",
+      "parameters": {
+        "gc_count_critical": 100,
+        "gc_count_warning": 50,
+        "gc_total_time_critical_ms": 2000,
+        "main_thread_gc_critical": 10,
+        "single_gc_warning_ms": 50
+      },
+      "required_steps": [
+        "get_process"
+      ],
+      "semantic_step": "get_process",
+      "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+    },
+    {
+      "id": "execute-memory_growth_detector",
+      "type": "skill",
+      "target": "memory_growth_detector",
+      "mode": "semantic",
+      "source_file": "backend/skills/atomic/memory_growth_detector.skill.yaml",
+      "parameters": {
+        "growth_warning_mb": 50,
+        "growth_pct_min_mb": 5,
+        "growth_warning_pct": 20,
+        "growth_critical_pct": 50,
+        "jump_warning_mb": 10,
+        "peak_avg_warning_ratio": 2
+      },
+      "required_steps": [
+        "memory_growth"
+      ],
+      "semantic_step": "memory_growth",
+      "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+    },
+    {
+      "id": "execute-memory_module",
+      "type": "skill",
+      "target": "memory_module",
+      "mode": "semantic",
+      "source_file": "backend/skills/modules/hardware/memory_module.skill.yaml",
+      "parameters": {},
+      "required_steps": [
+        "memory_overview"
+      ],
+      "semantic_step": "memory_overview",
+      "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+    },
+    {
+      "id": "execute-memory_pressure_in_range",
+      "type": "skill",
+      "target": "memory_pressure_in_range",
+      "mode": "semantic",
+      "source_file": "backend/skills/atomic/memory_pressure_in_range.skill.yaml",
+      "parameters": {
+        "start_ts": "${trace_start}",
+        "end_ts": "${trace_end}"
+      },
+      "required_steps": [
+        "memory_pressure_analysis"
+      ],
+      "semantic_step": "memory_pressure_analysis",
+      "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+    },
+    {
+      "id": "execute-memory_rss_high_watermark",
+      "type": "skill",
+      "target": "memory_rss_high_watermark",
+      "mode": "semantic",
+      "source_file": "backend/skills/atomic/memory_rss_high_watermark.skill.yaml",
+      "parameters": {
+        "top_n": 30
+      },
+      "required_steps": [
+        "rss_peaks"
+      ],
+      "semantic_step": "rss_peaks",
+      "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+    },
+    {
+      "id": "execute-native_heap_breakdown",
+      "type": "skill",
+      "target": "native_heap_breakdown",
+      "mode": "graceful_empty",
+      "source_file": "backend/skills/atomic/native_heap_breakdown.skill.yaml",
+      "parameters": {},
+      "required_steps": [
+        "native_heap_hotspots"
+      ],
+      "semantic_step": "native_heap_hotspots",
+      "limitation_reason": "The fixture does not contain heapprofd allocation packets.",
+      "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+    },
+    {
+      "id": "execute-oom_adjuster_score_timeline",
+      "type": "skill",
+      "target": "oom_adjuster_score_timeline",
+      "mode": "semantic",
+      "source_file": "backend/skills/atomic/oom_adjuster_score_timeline.skill.yaml",
+      "parameters": {},
+      "required_steps": [
+        "oom_intervals"
+      ],
+      "semantic_step": "oom_intervals",
+      "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+    },
+    {
+      "id": "strategy-memory",
+      "type": "strategy",
+      "target": "memory",
+      "query": "内存",
+      "expected_strategy": "memory",
+      "source_file": "backend/strategies/memory.strategy.md",
+      "required_marker": "SmartPerfetto::CASE::memory-gc-pressure"
+    }
+  ]
+}

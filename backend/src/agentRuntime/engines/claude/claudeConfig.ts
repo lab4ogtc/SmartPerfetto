@@ -51,7 +51,7 @@ export interface ClaudeAgentConfig {
   outputLanguage: OutputLanguage;
 }
 
-const DEFAULT_MODEL = 'claude-sonnet-4-6';
+const DEFAULT_MODEL = 'claude-sonnet-5';
 const DEFAULT_LIGHT_MODEL = 'claude-haiku-4-5';
 // Scrolling pipeline: 1 time-range + 1 scrolling_analysis + 2-3 deep-drill (blocking_chain/binder_root_cause)
 // + 1-2 jank_frame_detail + hypothesis submit/resolve + conclusion = ~20-25 turns.
@@ -477,8 +477,11 @@ export function createQuickConfig(
 ): ClaudeAgentConfig {
   const budgetConfig = resolveAgentRuntimeBudgetConfig(env);
   const quickMaxTurns = parsePositiveIntEnvFrom(env, 'CLAUDE_QUICK_MAX_TURNS', budgetConfig.quickMaxTurns);
+  const quickModel = env.CLAUDE_LIGHT_MODEL ?? baseConfig.lightModel;
   return {
     ...baseConfig,
+    model: quickModel,
+    lightModel: quickModel,
     maxTurns: quickMaxTurns,
     quickTargetTurns: Math.min(
       parsePositiveIntEnvFrom(env, 'CLAUDE_QUICK_TARGET_TURNS', budgetConfig.quickTargetTurns),

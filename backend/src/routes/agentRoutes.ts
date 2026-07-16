@@ -16,13 +16,12 @@ import {
   type TraceInfo,
   type TraceProcessorLeaseQueryContext,
 } from '../services/traceProcessorService';
-import {
-  createSessionLogger,
-  SessionLogger,
-} from '../services/sessionLogger';
+import { createSessionLogger, SessionLogger } from '../services/sessionLogger';
 import { getHTMLReportGenerator } from '../services/htmlReportGenerator';
 import { buildAgentDrivenReportData } from '../services/agentReportData';
 import { persistAgentTurn } from '../services/persistAgentSession';
+import { buildAnalysisReceipt } from '../services/analysisReceiptBuilder';
+import { deriveUiActionProposals } from '../services/uiActionProposalDeriver';
 import { buildRawTraceComparisonReportSection } from '../services/comparisonAppendixService';
 import { applyFinalResultQualityGate } from '../services/finalResultQualityGate';
 import {
@@ -40,27 +39,20 @@ import {
   type ResourceOwnerFields,
 } from '../services/resourceOwnership';
 import { hasRbacPermission, sendForbidden } from '../services/rbac';
+import { requireAiEnabledForHttp, sendAiDisabledErrorIfPresent } from './aiCapabilityPolicyHttp';
+import { AiDisabledError, assertAiFeatureEnabled } from '../services/aiCapabilityPolicy';
 import { readTraceMetadataForContext } from '../services/traceMetadataStore';
-import {
-  sessionContextManager,
-  EnhancedSessionContext,
-} from '../agent/context/enhancedSessionContext';
-import {
-  registerCoreTools,
-  StreamingUpdate,
-  AgentRuntimeAnalysisResult,
-  Hypothesis,
-} from '../agent';
+import { sessionContextManager, EnhancedSessionContext } from '../agent/context/enhancedSessionContext';
+import { registerCoreTools, StreamingUpdate, AgentRuntimeAnalysisResult, Hypothesis } from '../agent';
 import { getSharedModelRouter } from '../agent/core/modelRouterSingleton';
 import type { IOrchestrator, TraceDataset } from '../agent/core/orchestratorTypes';
 import { resolveConclusionScene } from '../agent/core/conclusionSceneTemplates';
 import { DEEP_REASON_LABEL } from '../utils/analysisNarrative';
+import { localize, parseOutputLanguage } from '../agentv3/outputLanguage';
 import { sanitizeNarrativeForClient } from './narrativeSanitizer';
 import { registerSceneReconstructRoutes } from './agentSceneReconstructRoutes';
 import { SceneStoryService } from '../agent/scene/sceneStoryService';
-import {
-  buildSmartSceneSelectionReport,
-} from '../agent/scene/buildSmartChatReport';
+import { buildSmartSceneSelectionReport } from '../agent/scene/buildSmartChatReport';
 import { buildSmartDeepDiveDispatch } from '../agent/scene/smartDeepDiveDispatch';
 import type { SceneAnalysisSelection, SceneReport } from '../agent/scene/types';
 import { SmartCancelBridge } from '../agent/scene/smartCancelBridge';
@@ -79,10 +71,7 @@ import {
   buildTraceProcessorLeaseModeDecision,
   type TraceProcessorLeaseModeDecision,
 } from '../services/traceProcessorLeaseModeDecision';
-import {
-  evaluateAnalysisRunQuota,
-  type EnterpriseQuotaDecision,
-} from '../services/enterpriseQuotaPolicyService';
+import { evaluateAnalysisRunQuota, type EnterpriseQuotaDecision } from '../services/enterpriseQuotaPolicyService';
 import {
   evaluateTenantMutationPolicy,
   sendTenantMutationDeniedPayload,
@@ -95,12 +84,9 @@ import { registerAgentReportRoutes } from './agentReportRoutes';
 import { registerAgentResumeRoutes } from './agentResumeRoutes';
 import { registerAgentSessionCatalogRoutes } from './agentSessionCatalogRoutes';
 import { registerTeachingRoutes } from './agentTeachingRoutes';
-import {
-  AnalyzeOptionsError,
-  normalizeAnalyzeOptions,
-  type AnalyzeMode,
-} from './agent/normalizeAnalyzeOptions';
+import { AnalyzeOptionsError, normalizeAnalyzeOptions, type AnalyzeMode } from './agent/normalizeAnalyzeOptions';
 import { finalizeAgentDrivenSession } from './agent/finalizeAgentDrivenSession';
+import { projectStateTimelineRunResult } from './agent/stateTimelineRunProjection';
 import { AssistantApplicationService } from '../assistant/application/assistantApplicationService';
 import { StreamProjector, SSE_RING_BUFFER_SIZE, type BufferedSseEvent } from '../assistant/stream/streamProjector';
 import {
@@ -135,15 +121,8 @@ import { runClaimVerification } from '../services/verifier/claimVerificationRunn
 // Agent-Driven Architecture v2.0 - Focus tracking
 import type { FocusInteraction } from '../agent/context/focusStore';
 // DataEnvelope types for v2.0 data contract
-import {
-  createDataEnvelope,
-  generateEventId,
-  type DataEnvelope,
-} from '../types/dataContract';
-import {
-  buildTraceContextDataEnvelopes,
-  decorateTraceContextDatasets,
-} from '../agentRuntime/traceContextEvidence';
+import { createDataEnvelope, generateEventId, type DataEnvelope } from '../types/dataContract';
+import { buildTraceContextDataEnvelopes, decorateTraceContextDatasets } from '../agentRuntime/traceContextEvidence';
 import type { ConclusionContract } from '../agent/core/conclusionContract';
 import type { ClaimSupportV1 } from '../types/evidenceContract';
 import type { ClaimVerificationResult } from '../types/claimVerification';
@@ -156,10 +135,7 @@ import {
   enrichFeedbackEntry,
   type SessionLookup as FeedbackSessionLookup,
 } from '../agentv3/selfImprove/feedbackEnricher';
-import {
-  formatToolCallNarration,
-  looksLikeGenericToolMessage,
-} from '../agentv3/toolNarration';
+import { formatToolCallNarration, looksLikeGenericToolMessage } from '../agentv3/toolNarration';
 import { applyFeedbackToPattern } from '../agentv3/analysisPatternMemory';
 import { backendLogPath } from '../runtimePaths';
 import { CaseLibrary } from '../services/caseLibrary';
@@ -176,13 +152,10 @@ import {
   isCaseEvolutionRetrieveEnabled,
   loadCaseEvolutionConfig,
 } from '../services/caseEvolution/caseEvolutionConfig';
-import {
-  knowledgeScopeFromRequestContext,
-  type KnowledgeScope,
-} from '../services/scopedKnowledgeStore';
+import { knowledgeScopeFromRequestContext, type KnowledgeScope } from '../services/scopedKnowledgeStore';
 import type { CaseCandidateCaptureInput, CaseEvolutionConfig } from '../types/caseEvolution';
 
-const COMPLETED_ANALYSIS_SSE_EVENTS_QUALITY_GATE_VERSION = 1;
+const COMPLETED_ANALYSIS_SSE_EVENTS_QUALITY_GATE_VERSION = 3;
 
 const router = express.Router();
 
@@ -205,10 +178,7 @@ function generateRequestId(): string {
 }
 
 function resolveRequestIdFromRequest(req: express.Request): string {
-  const headerId =
-    req.header(REQUEST_ID_HEADER) ||
-    req.header('x-correlation-id') ||
-    req.header('x-amzn-trace-id');
+  const headerId = req.header(REQUEST_ID_HEADER) || req.header('x-correlation-id') || req.header('x-amzn-trace-id');
   const bodyId =
     req.body && typeof req.body === 'object' && !Array.isArray(req.body)
       ? (req.body as Record<string, unknown>).requestId
@@ -230,10 +200,7 @@ function buildRunId(sessionId: string, sequence: number): string {
   return `run-${sessionId}-${sequence}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function sendAgentQuotaDenied(
-  res: express.Response,
-  decision: EnterpriseQuotaDecision,
-): express.Response {
+function sendAgentQuotaDenied(res: express.Response, decision: EnterpriseQuotaDecision): express.Response {
   return res.status(decision.httpStatus).json({
     success: false,
     code: decision.code,
@@ -302,9 +269,8 @@ function buildLeaseModeDecisionForTrace(
     estimatedSqlMs: options.estimatedSqlMs,
     heavySkill: options.heavySkill,
     longTask: options.longTask,
-    estimatedNewLeaseRssBytes: typeof options.traceSizeBytes === 'number'
-      ? estimateTraceProcessorRssBytes(options.traceSizeBytes)
-      : undefined,
+    estimatedNewLeaseRssBytes:
+      typeof options.traceSizeBytes === 'number' ? estimateTraceProcessorRssBytes(options.traceSizeBytes) : undefined,
     leases: store.listLeases(scope, { traceId }),
     processors: processorStats.processors,
     ramBudget: processorStats.ramBudget,
@@ -312,7 +278,7 @@ function buildLeaseModeDecisionForTrace(
 }
 
 function buildSessionObservability(
-  session: AnalysisSession
+  session: AnalysisSession,
 ): { runId: string; requestId: string; runSequence: number; status: string } | undefined {
   const run = session.activeRun || session.lastRun;
   if (!run) return undefined;
@@ -341,10 +307,7 @@ function registerSessionRun(session: AnalysisSession, run: AnalyzeSessionRunCont
   return registry[run.runId];
 }
 
-function resolveSessionRun(
-  session: AnalysisSession,
-  runId?: string,
-): AnalyzeSessionRunContext | undefined {
+function resolveSessionRun(session: AnalysisSession, runId?: string): AnalyzeSessionRunContext | undefined {
   if (runId) {
     if (session.activeRun?.runId === runId) return session.activeRun;
     if (session.lastRun?.runId === runId) return session.lastRun;
@@ -392,8 +355,9 @@ function buildStreamObservability(
 function startSessionRun(
   session: AnalysisSession,
   query: string,
-  requestId: string
-): AnalyzeSessionRunContext {
+  requestId: string,
+): AnalyzeSessionRunContext | undefined {
+  if (session.cancellationInFlightRunId) return undefined;
   const nextSequence = normalizeRunSequence(session.runSequence) + 1;
   session.runSequence = nextSequence;
 
@@ -409,10 +373,15 @@ function startSessionRun(
   session.lastRun = run;
   session.cancelState = { runId: run.runId, cancelled: false };
   registerSessionRun(session, run);
+  markSessionRunExecutionActive(session, run.runId);
 
   // Record query in cross-turn history (append-only, never overwritten)
   if (!session.queryHistory) session.queryHistory = [];
-  session.queryHistory.push({ turn: nextSequence, query, timestamp: Date.now() });
+  session.queryHistory.push({
+    turn: nextSequence,
+    query,
+    timestamp: Date.now(),
+  });
 
   // Inject turn boundary marker for multi-turn conversations
   if (nextSequence > 1) {
@@ -441,10 +410,7 @@ function markSessionRunStatus(
 ): void {
   if (!runId) return;
   const completedAt =
-    status === 'completed' ||
-    status === 'failed' ||
-    status === 'cancelled' ||
-    status === 'quota_exceeded'
+    status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'quota_exceeded'
       ? Date.now()
       : undefined;
   const nextRun = updateRegisteredSessionRun(session, runId, {
@@ -459,10 +425,7 @@ function markSessionRunStatus(
   persistSessionRunState(session, status, error, runId);
 }
 
-function initializeCancelStateForRun(
-  session: AnalysisSession,
-  run: AnalyzeSessionRunContext,
-): void {
+function initializeCancelStateForRun(session: AnalysisSession, run: AnalyzeSessionRunContext): void {
   registerSessionRun(session, run);
   if (isSessionRunCancelled(session, run.runId)) {
     session.cancelState = {
@@ -479,24 +442,22 @@ function getSessionRunId(session: AnalysisSession): string | undefined {
   return session.activeRun?.runId || session.lastRun?.runId;
 }
 
+function getCompletedResultRunId(session: AnalysisSession, runId?: string): string | undefined {
+  return runId ?? getSessionRunId(session);
+}
+
 function isSessionRunCancelled(
   session: AnalysisSession,
   runId: string | undefined = getSessionRunId(session),
 ): boolean {
   return Boolean(
     runId &&
-    (
-      session.cancelledRuns?.[runId]?.cancelled ||
-      (session.cancelState?.runId === runId && session.cancelState.cancelled)
-    )
+    (session.cancelledRuns?.[runId]?.cancelled ||
+      (session.cancelState?.runId === runId && session.cancelState.cancelled)),
   );
 }
 
-function markSessionRunCancelled(
-  session: AnalysisSession,
-  runId: string,
-  reason: string,
-): void {
+function markSessionRunCancelled(session: AnalysisSession, runId: string, reason: string): void {
   if (!session.cancelledRuns) session.cancelledRuns = {};
   session.cancelledRuns[runId] = {
     cancelled: true,
@@ -511,17 +472,7 @@ function markSessionRunCancelled(
   markSessionRunStatus(session, 'cancelled', reason, runId);
 }
 
-function markCurrentRunCancelled(session: AnalysisSession, reason: string): string | undefined {
-  const runId = getSessionRunId(session);
-  if (!runId) return undefined;
-  markSessionRunCancelled(session, runId, reason);
-  return runId;
-}
-
-function setCurrentSessionRun(
-  session: AnalysisSession,
-  run: AnalyzeSessionRunContext,
-): AnalyzeSessionRunContext {
+function setCurrentSessionRun(session: AnalysisSession, run: AnalyzeSessionRunContext): AnalyzeSessionRunContext {
   session.activeRun = cloneRunContext(run);
   session.lastRun = cloneRunContext(run);
   registerSessionRun(session, run);
@@ -532,10 +483,39 @@ function isStaleRun(session: AnalysisSession, runId: string | undefined): boolea
   return Boolean(runId && !isCurrentRunOwner(session, runId));
 }
 
-async function abortSessionBestEffort(
+function markSessionRunExecutionActive(session: AnalysisSession, runId: string): void {
+  if (!session.executingRunIds) session.executingRunIds = new Set<string>();
+  session.executingRunIds.add(runId);
+}
+
+function isSessionRunExecutionActive(session: AnalysisSession, runId: string): boolean {
+  return session.executingRunIds?.has(runId) === true;
+}
+
+function clearCancellationInFlightIfSettled(
   session: AnalysisSession,
-  component: string,
-): Promise<void> {
+  runId: string,
+): void {
+  if (
+    session.cancellationInFlightRunId !== runId ||
+    session.cancellationAbortCompletedRunId !== runId ||
+    isSessionRunExecutionActive(session, runId)
+  ) {
+    return;
+  }
+  session.cancellationInFlightRunId = undefined;
+  session.cancellationAbortCompletedRunId = undefined;
+}
+
+function settleSessionRunExecution(session: AnalysisSession, runId: string): void {
+  session.executingRunIds?.delete(runId);
+  if (session.executingRunIds?.size === 0) {
+    session.executingRunIds = undefined;
+  }
+  clearCancellationInFlightIfSettled(session, runId);
+}
+
+async function abortSessionBestEffort(session: AnalysisSession, component: string): Promise<void> {
   if (typeof session.orchestrator.abortSession !== 'function') return;
   try {
     await session.orchestrator.abortSession(session.sessionId, session.referenceTraceId);
@@ -546,6 +526,20 @@ async function abortSessionBestEffort(
       error: message,
     });
   }
+}
+
+async function abortOwnedRunBestEffort(session: AnalysisSession, runId: string, component: string): Promise<boolean> {
+  if (session.cancellationInFlightRunId !== runId || !isCurrentRunOwner(session, runId)) {
+    session.logger.warn(component, 'Skipped session abort for a run that no longer owns cancellation', {
+      sessionId: session.sessionId,
+      runId,
+      activeRunId: session.activeRun?.runId,
+      cancellationInFlightRunId: session.cancellationInFlightRunId,
+    });
+    return false;
+  }
+  await abortSessionBestEffort(session, component);
+  return true;
 }
 
 function cleanupSessionBestEffort(sessionId: string, session: AnalysisSession, component: string): void {
@@ -568,11 +562,7 @@ function cleanupSessionBestEffort(sessionId: string, session: AnalysisSession, c
   }
 }
 
-async function abortAndCleanupSession(
-  sessionId: string,
-  session: AnalysisSession,
-  component: string,
-): Promise<void> {
+async function abortAndCleanupSession(sessionId: string, session: AnalysisSession, component: string): Promise<void> {
   await abortSessionBestEffort(session, component);
   cleanupSessionBestEffort(sessionId, session, component);
 }
@@ -583,26 +573,33 @@ function appendCancellationTerminalEvents(
   runId?: string,
 ): BufferedSseEvent[] {
   const observability = buildStreamObservability(session, runId);
-  const cancelled = appendAndPersistReplayableSessionEvent(session, 'analysis_cancelled', {
-    type: 'analysis_cancelled',
-    architecture: 'agent-driven',
-    ...observability,
-    message: reason,
-    reason,
-    terminalRunStatus: 'cancelled',
-    timestamp: Date.now(),
-  }, runId);
-  const end = appendAndPersistReplayableSessionEvent(session, 'end', {
-    timestamp: Date.now(),
-    ...observability,
-  }, runId);
+  const cancelled = appendAndPersistReplayableSessionEvent(
+    session,
+    'analysis_cancelled',
+    {
+      type: 'analysis_cancelled',
+      architecture: 'agent-driven',
+      ...observability,
+      message: reason,
+      reason,
+      terminalRunStatus: 'cancelled',
+      timestamp: Date.now(),
+    },
+    runId,
+  );
+  const end = appendAndPersistReplayableSessionEvent(
+    session,
+    'end',
+    {
+      timestamp: Date.now(),
+      ...observability,
+    },
+    runId,
+  );
   return [cancelled, end];
 }
 
-function findCancellationTerminalEvents(
-  events: readonly BufferedSseEvent[],
-  runId?: string,
-): BufferedSseEvent[] {
+function findCancellationTerminalEvents(events: readonly BufferedSseEvent[], runId?: string): BufferedSseEvent[] {
   let cancelledIndex = -1;
   for (let index = events.length - 1; index >= 0; index--) {
     if (
@@ -614,23 +611,19 @@ function findCancellationTerminalEvents(
     }
   }
   if (cancelledIndex < 0) return [];
-  const endIndex = events.findIndex((event, index) =>
-    index > cancelledIndex &&
-    event.eventType === 'end' &&
-    (!runId || !event.runId || event.runId === runId)
+  const endIndex = events.findIndex(
+    (event, index) =>
+      index > cancelledIndex && event.eventType === 'end' && (!runId || !event.runId || event.runId === runId),
   );
   if (endIndex < 0) return [];
   return events.slice(cancelledIndex, endIndex + 1);
 }
 
-function getCancellationTerminalEvents(
-  session: AnalysisSession,
-  reason: string,
-  runId?: string,
-): BufferedSseEvent[] {
-  const buffer = runId && !isCurrentRunOwner(session, runId)
-    ? getRunSseReplayState(session, runId).sseEventBuffer
-    : session.sseEventBuffer;
+function getCancellationTerminalEvents(session: AnalysisSession, reason: string, runId?: string): BufferedSseEvent[] {
+  const buffer =
+    runId && !isCurrentRunOwner(session, runId)
+      ? getRunSseReplayState(session, runId).sseEventBuffer
+      : session.sseEventBuffer;
   const buffered = findCancellationTerminalEvents(buffer, runId);
   if (buffered.length > 0) return buffered;
 
@@ -647,29 +640,73 @@ function writeSessionEventsToClient(res: express.Response, events: readonly Buff
   }
 }
 
+type CancelSessionRunResult = {
+  session: AnalysisSession;
+  runId: string;
+  runStatus?: AnalyzeSessionRunContext['status'];
+  outcome: 'cancelled' | 'already_cancelled' | 'run_not_found' | 'run_not_active' | 'run_not_cancellable';
+  reason?: string;
+};
+
 async function cancelSessionRun(
   sessionId: string,
+  runId: string,
   reason = 'Analysis cancelled by user',
-): Promise<AnalysisSession | undefined> {
+): Promise<CancelSessionRunResult | undefined> {
   const session = assistantAppService.getSession(sessionId);
   if (!session) return undefined;
 
-  if (session.status === 'cancelled') {
-    return session;
+  const targetRun = resolveSessionRun(session, runId);
+  if (!targetRun) {
+    return {
+      session,
+      runId,
+      outcome: 'run_not_found',
+    };
+  }
+  if (isSessionRunCancelled(session, runId) || targetRun.status === 'cancelled') {
+    return {
+      session,
+      runId,
+      runStatus: 'cancelled',
+      outcome: 'already_cancelled',
+      reason: session.cancelledRuns?.[runId]?.reason || targetRun.error || reason,
+    };
+  }
+  if (!isCurrentRunOwner(session, runId)) {
+    return {
+      session,
+      runId,
+      runStatus: targetRun.status,
+      outcome: 'run_not_active',
+    };
   }
   if (
-    session.status !== 'pending' &&
-    session.status !== 'running' &&
-    session.status !== 'awaiting_user'
+    (targetRun.status !== 'pending' && targetRun.status !== 'running') ||
+    (session.status !== 'pending' && session.status !== 'running' && session.status !== 'awaiting_user')
   ) {
-    return session;
+    return {
+      session,
+      runId,
+      runStatus: targetRun.status,
+      outcome: 'run_not_cancellable',
+    };
   }
 
-  const runId = markCurrentRunCancelled(session, reason);
+  session.cancellationInFlightRunId = runId;
+  session.cancellationAbortCompletedRunId = undefined;
+  markSessionRunCancelled(session, runId, reason);
   const smartCancelled = smartCancelBridge.cancel(sessionId, runId);
   if (smartCancelled) smartCancelBridge.tryClaimTerminal(sessionId, runId);
   const sceneCancelled = sceneStoryService.cancel(sessionId, runId);
-  await abortSessionBestEffort(session, 'AgentRoutes');
+  try {
+    await abortOwnedRunBestEffort(session, runId, 'AgentRoutes');
+  } finally {
+    if (session.cancellationInFlightRunId === runId) {
+      session.cancellationAbortCompletedRunId = runId;
+      clearCancellationInFlightIfSettled(session, runId);
+    }
+  }
 
   const terminalEvents = appendCancellationTerminalEvents(session, reason, runId);
   const terminalClients = filterSseClientsForRun(session.sseClients, runId);
@@ -681,7 +718,7 @@ async function cancelSessionRun(
       // client may already be closed
     }
   }
-  session.sseClients = session.sseClients.filter(client => !terminalClients.includes(client));
+  session.sseClients = session.sseClients.filter((client) => !terminalClients.includes(client));
   session.lastActivityAt = Date.now();
   session.logger.info('AgentRoutes', 'Session cancelled by user', {
     sessionId,
@@ -689,7 +726,65 @@ async function cancelSessionRun(
     smartCancelled,
     sceneCancelled,
   });
-  return session;
+  return {
+    session,
+    runId,
+    runStatus: 'cancelled',
+    outcome: 'cancelled',
+    reason,
+  };
+}
+
+function readRequiredCancellationRunId(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const runId = value.trim();
+  return runId ? runId : undefined;
+}
+
+function sendCancelSessionRunResult(res: express.Response, result: CancelSessionRunResult): express.Response {
+  const { session, runId, runStatus, outcome, reason } = result;
+  switch (outcome) {
+    case 'cancelled':
+    case 'already_cancelled':
+      return res.json({
+        success: true,
+        sessionId: session.sessionId,
+        runId,
+        status: 'cancelled',
+        sessionStatus: session.status,
+        outcome,
+        reason,
+      });
+    case 'run_not_found':
+      return res.status(404).json({
+        success: false,
+        sessionId: session.sessionId,
+        runId,
+        code: 'RUN_NOT_FOUND',
+        error: 'Run not found in session',
+      });
+    case 'run_not_active':
+      return res.status(409).json({
+        success: false,
+        sessionId: session.sessionId,
+        runId,
+        code: 'RUN_NOT_ACTIVE',
+        error: 'Run no longer owns the active session analysis',
+        status: runStatus,
+        activeRunId: session.activeRun?.runId,
+        sessionStatus: session.status,
+      });
+    case 'run_not_cancellable':
+      return res.status(409).json({
+        success: false,
+        sessionId: session.sessionId,
+        runId,
+        code: 'RUN_NOT_CANCELLABLE',
+        error: 'Run is already terminal',
+        status: runStatus,
+        sessionStatus: session.status,
+      });
+  }
 }
 
 // Attach/echo requestId for all agent endpoints.
@@ -737,9 +832,11 @@ interface AnalysisSession {
   providerSnapshotChanged?: boolean;
   providerSnapshotChangeReason?: string;
   agentQuery?: string;
+  analysisMode?: AnalyzeMode;
   continuityBreaks?: import('../agentv3/sessionStateSnapshot').ProviderContinuityBreak[];
   codeAwareMode?: import('../services/codebase/codeAwareFeature').CodeAwareMode;
   codebaseIds?: string[];
+  knowledgeSourceIds?: string[];
   /** Reference trace ID for comparison mode (dual-trace analysis) */
   referenceTraceId?: string;
   comparisonSource?: 'raw_trace_pair' | 'analysis_result_snapshots';
@@ -786,13 +883,21 @@ interface AnalysisSession {
   activeRun?: AnalyzeSessionRunContext;
   lastRun?: AnalyzeSessionRunContext;
   cancelState?: { runId: string; cancelled: boolean; reason?: string };
+  cancellationInFlightRunId?: string;
+  cancellationAbortCompletedRunId?: string;
+  executingRunIds?: Set<string>;
   runRegistry?: Record<string, AnalyzeSessionRunContext>;
   cancelledRuns?: Record<string, CancelledRunRecord>;
   runSseState?: Record<string, RunScopedSseReplayState>;
   /** Cross-turn query history — appended on each turn, never overwritten */
   queryHistory: Array<{ turn: number; query: string; timestamp: number }>;
   /** Cross-turn conclusion history — appended after each turn completes */
-  conclusionHistory: Array<{ turn: number; conclusion: string; confidence: number; timestamp: number }>;
+  conclusionHistory: Array<{
+    turn: number;
+    conclusion: string;
+    confidence: number;
+    timestamp: number;
+  }>;
   /** F3: Monotonic SSE event counter for replay on reconnect */
   sseEventSeq: number;
   /** F3: Ring buffer of recent SSE events for replay on reconnect */
@@ -802,17 +907,13 @@ const assistantAppService = new AssistantApplicationService<AnalysisSession>();
 const streamProjector = new StreamProjector();
 const smartCancelBridge = new SmartCancelBridge();
 
-function agentEventScopeFromSession(
-  session: AnalysisSession,
-  runId?: string,
-): AgentEventPersistenceScope | null {
+function normalizeReceiptAnalysisMode(value: unknown): AnalyzeMode | undefined {
+  return value === 'fast' || value === 'full' || value === 'auto' ? value : undefined;
+}
+
+function agentEventScopeFromSession(session: AnalysisSession, runId?: string): AgentEventPersistenceScope | null {
   const run = resolveSessionRun(session, runId);
-  if (
-    !resolveFeatureConfig().enterprise ||
-    !session.tenantId ||
-    !session.workspaceId ||
-    !run?.runId
-  ) {
+  if (!resolveFeatureConfig().enterprise || !session.tenantId || !session.workspaceId || !run?.runId) {
     return null;
   }
   return {
@@ -826,10 +927,7 @@ function agentEventScopeFromSession(
   };
 }
 
-function analysisRunScopeFromSession(
-  session: AnalysisSession,
-  runId?: string,
-): AnalysisRunPersistenceScope | null {
+function analysisRunScopeFromSession(session: AnalysisSession, runId?: string): AnalysisRunPersistenceScope | null {
   return agentEventScopeFromSession(session, runId);
 }
 
@@ -882,12 +980,7 @@ function isPersistedSessionRunFresh(session: AnalysisSession, now: number): bool
   const scope = analysisRunScopeFromSession(session);
   if (!scope) return false;
   try {
-    return isAnalysisRunHeartbeatFresh(
-      scope,
-      scope.runId,
-      now,
-      AGENT_RUN_HEARTBEAT_MAX_STALE_MS,
-    );
+    return isAnalysisRunHeartbeatFresh(scope, scope.runId, now, AGENT_RUN_HEARTBEAT_MAX_STALE_MS);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     session.logger.warn('AnalysisRun', 'Failed to inspect persisted run heartbeat', {
@@ -899,11 +992,7 @@ function isPersistedSessionRunFresh(session: AnalysisSession, now: number): bool
   }
 }
 
-function persistBufferedAgentEvent(
-  session: AnalysisSession,
-  event: SerializedAgentEvent,
-  runId?: string,
-): void {
+function persistBufferedAgentEvent(session: AnalysisSession, event: SerializedAgentEvent, runId?: string): void {
   const scope = agentEventScopeFromSession(session, runId);
   if (!scope) return;
   try {
@@ -942,14 +1031,9 @@ function sanitizePersistedAnalysisCompletedEvent(
   } catch {
     return event;
   }
-  const data = payload?.data && typeof payload.data === 'object'
-    ? payload.data
-    : payload;
-  const conclusion = typeof data?.conclusion === 'string'
-    ? data.conclusion
-    : typeof data?.answer === 'string'
-      ? data.answer
-      : '';
+  const data = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
+  const conclusion =
+    typeof data?.conclusion === 'string' ? data.conclusion : typeof data?.answer === 'string' ? data.answer : '';
   if (!conclusion.trim()) return event;
 
   const result: AgentRuntimeAnalysisResult = {
@@ -982,9 +1066,8 @@ function sanitizePersistedAnalysisCompletedEvent(
     terminationMessage: result.terminationMessage,
     quickRun: result.quickRun,
   };
-  const nextPayload = payload?.data && typeof payload.data === 'object'
-    ? { ...payload, data: nextData }
-    : { ...payload, ...nextData };
+  const nextPayload =
+    payload?.data && typeof payload.data === 'object' ? { ...payload, data: nextData } : { ...payload, ...nextData };
   return {
     ...event,
     eventData: JSON.stringify(nextPayload),
@@ -1040,18 +1123,19 @@ function appendReplayableRunEvent(
   payload: unknown,
   runId?: string,
 ): BufferedSseEvent {
-  const replayState =
-    runId && !isCurrentRunOwner(session, runId)
-      ? getRunSseReplayState(session, runId)
-      : session;
+  const replayState = runId && !isCurrentRunOwner(session, runId) ? getRunSseReplayState(session, runId) : session;
   const event = appendReplayableSseEvent(replayState, eventType, payload);
   if (runId) event.runId = runId;
-  persistBufferedAgentEvent(session, {
-    cursor: event.seqId,
-    eventType: event.eventType,
-    eventData: event.eventData,
-    createdAt: Date.now(),
-  }, runId);
+  persistBufferedAgentEvent(
+    session,
+    {
+      cursor: event.seqId,
+      eventType: event.eventType,
+      eventData: event.eventData,
+      createdAt: Date.now(),
+    },
+    runId,
+  );
   return event;
 }
 
@@ -1082,38 +1166,35 @@ function writeBufferedSessionEvent(res: express.Response, event: BufferedSseEven
   res.write(`data: ${event.eventData}\n\n`);
 }
 
-function loadPersistedCompletedAnalysisSseEvents(
-  session: AnalysisSession,
-  runId?: string,
-): BufferedSseEvent[] {
+function loadPersistedCompletedAnalysisSseEvents(session: AnalysisSession, runId?: string): BufferedSseEvent[] {
   const scope = agentEventScopeFromSession(session, runId);
   if (!scope) return [];
   const events = listSerializedAgentEventsAfter(scope, scope.runId, 0)
-    .filter(event =>
-      event.eventType === 'snapshot_created' ||
-      event.eventType === 'analysis_completed' ||
-      event.eventType === 'analysis_cancelled' ||
-      event.eventType === 'scene_reconstruction_completed' ||
-      event.eventType === 'end')
-    .map(event => sanitizePersistedAnalysisCompletedEvent(session, event))
-    .map(event => ({
+    .filter(
+      (event) =>
+        event.eventType === 'snapshot_created' ||
+        event.eventType === 'progress' ||
+        event.eventType === 'analysis_completed' ||
+        event.eventType === 'analysis_cancelled' ||
+        event.eventType === 'scene_reconstruction_completed' ||
+        event.eventType === 'end',
+    )
+    .map((event) => sanitizePersistedAnalysisCompletedEvent(session, event))
+    .map((event) => ({
       seqId: event.cursor,
       eventType: event.eventType,
       eventData: event.eventData,
       runId: scope.runId,
     }));
-  const hasCompletedTerminal = events.some(event => event.eventType === 'analysis_completed');
-  const hasCancelledTerminal = events.some(event => event.eventType === 'analysis_cancelled');
-  if ((!hasCompletedTerminal && !hasCancelledTerminal) ||
-      !events.some(event => event.eventType === 'end')) {
+  const hasCompletedTerminal = events.some((event) => event.eventType === 'analysis_completed');
+  const hasCancelledTerminal = events.some((event) => event.eventType === 'analysis_cancelled');
+  if ((!hasCompletedTerminal && !hasCancelledTerminal) || !events.some((event) => event.eventType === 'end')) {
     return [];
   }
   const replayState =
-    runId && !isCurrentRunOwner(session, scope.runId)
-      ? getRunSseReplayState(session, scope.runId)
-      : session;
-  replayState.sseEventSeq = Math.max(replayState.sseEventSeq || 0, ...events.map(event => event.seqId));
-  const existing = new Set(replayState.sseEventBuffer.map(event => `${event.seqId}:${event.eventType}`));
+    runId && !isCurrentRunOwner(session, scope.runId) ? getRunSseReplayState(session, scope.runId) : session;
+  replayState.sseEventSeq = Math.max(replayState.sseEventSeq || 0, ...events.map((event) => event.seqId));
+  const existing = new Set(replayState.sseEventBuffer.map((event) => `${event.seqId}:${event.eventType}`));
   for (const event of events) {
     const key = `${event.seqId}:${event.eventType}`;
     if (!existing.has(key)) replayState.sseEventBuffer.push(event);
@@ -1122,6 +1203,12 @@ function loadPersistedCompletedAnalysisSseEvents(
     replayState.sseEventBuffer.splice(0, replayState.sseEventBuffer.length - SSE_RING_BUFFER_SIZE);
   }
   return events;
+}
+
+function latestBufferedProgressEvent(session: AnalysisSession, runId?: string): BufferedSseEvent | undefined {
+  const replayState = runId && !isCurrentRunOwner(session, runId) ? session.runSseState?.[runId] : session;
+  const buffer = replayState?.sseEventBuffer ?? [];
+  return [...buffer].reverse().find((event) => event.eventType === 'progress' && (!runId || event.runId === runId));
 }
 
 type TurnHistorySource = 'memory' | 'persistence';
@@ -1138,8 +1225,7 @@ function resolveSessionContextForReview(sessionId: string): ResolvedSessionConte
   const activeSession = assistantAppService.getSession(sessionId);
   if (activeSession) {
     const activeContext =
-      sessionContextManager.get(sessionId, activeSession.traceId) ||
-      sessionContextManager.get(sessionId);
+      sessionContextManager.get(sessionId, activeSession.traceId) || sessionContextManager.get(sessionId);
     if (activeContext) {
       return {
         context: activeContext,
@@ -1246,6 +1332,67 @@ function requestedSessionIsVisible(sessionId: string, context: RequestContext): 
   return !persistedSession || isOwnedByContext(persistedSession.metadata, context);
 }
 
+function sendRunStartConflictIfNeeded(res: express.Response, session: AnalysisSession | undefined): boolean {
+  if (!session) return false;
+  if (session.cancellationInFlightRunId) {
+    res.status(409).json({
+      success: false,
+      code: 'CANCELLATION_IN_PROGRESS',
+      error: 'The current run is still stopping',
+      sessionId: session.sessionId,
+      runId: session.cancellationInFlightRunId,
+    });
+    return true;
+  }
+  const activeRun = session.activeRun;
+  if (session.status === 'awaiting_user' || activeRun?.status === 'pending' || activeRun?.status === 'running') {
+    res.status(409).json({
+      success: false,
+      code: 'RUN_ALREADY_ACTIVE',
+      error: 'The session already has an active run',
+      sessionId: session.sessionId,
+      runId: activeRun?.runId,
+    });
+    return true;
+  }
+  return false;
+}
+
+function normalizeRouteReferenceTraceId(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function resolveVisibleSessionReferenceTraceIdForTrace(
+  sessionId: string | undefined,
+  traceId: string,
+  context: RequestContext,
+): string | undefined {
+  if (!sessionId) return undefined;
+
+  const activeSession = assistantAppService.getSession(sessionId);
+  if (activeSession) {
+    if (activeSession.traceId !== traceId || !isOwnedByContext(activeSession, context)) {
+      return undefined;
+    }
+    return normalizeRouteReferenceTraceId(activeSession.referenceTraceId);
+  }
+
+  const persistenceService = SessionPersistenceService.getInstance();
+  const persistedSession = persistenceService.getSession(sessionId);
+  if (
+    !persistedSession ||
+    persistedSession.traceId !== traceId ||
+    !isOwnedByContext(persistedSession.metadata, context)
+  ) {
+    return undefined;
+  }
+  return (
+    normalizeRouteReferenceTraceId(persistedSession.metadata?.referenceTraceId) ??
+    normalizeRouteReferenceTraceId(persistedSession.metadata?.sessionStateSnapshot?.referenceTraceId) ??
+    normalizeRouteReferenceTraceId(persistenceService.loadSessionStateSnapshot(sessionId)?.referenceTraceId)
+  );
+}
+
 function buildTurnSeverityCounts(turn: ConversationTurn): Record<string, number> {
   const counts: Record<string, number> = {
     critical: 0,
@@ -1269,9 +1416,7 @@ function buildTurnSeverityCounts(turn: ConversationTurn): Record<string, number>
 }
 
 function toJsonSafe<T>(value: T): T {
-  return JSON.parse(
-    JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? v.toString() : v))
-  ) as T;
+  return JSON.parse(JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? v.toString() : v))) as T;
 }
 
 function buildDisplayTurnResult(turn: ConversationTurn): ConversationTurn['result'] {
@@ -1307,16 +1452,10 @@ function buildDisplayTurnResult(turn: ConversationTurn): ConversationTurn['resul
 
 function buildTurnSummary(turn: ConversationTurn) {
   const displayResult = buildDisplayTurnResult(turn);
-  const confidence =
-    typeof displayResult?.confidence === 'number'
-      ? displayResult.confidence
-      : undefined;
-  const sanitizedConclusion = typeof displayResult?.message === 'string'
-    ? normalizeNarrativeForClient(displayResult.message)
-    : '';
-  const conclusionPreview = sanitizedConclusion
-    ? sanitizedConclusion.replace(/\s+/g, ' ').slice(0, 240)
-    : undefined;
+  const confidence = typeof displayResult?.confidence === 'number' ? displayResult.confidence : undefined;
+  const sanitizedConclusion =
+    typeof displayResult?.message === 'string' ? normalizeNarrativeForClient(displayResult.message) : '';
+  const conclusionPreview = sanitizedConclusion ? sanitizedConclusion.replace(/\s+/g, ' ').slice(0, 240) : undefined;
 
   return {
     turnId: turn.id,
@@ -1372,20 +1511,18 @@ function getLastCompletedTurn(context: EnhancedSessionContext): ConversationTurn
 
 function buildRecoveredResultFromContext(
   sessionId: string,
-  context: EnhancedSessionContext
+  context: EnhancedSessionContext,
 ): AgentRuntimeAnalysisResult | null {
   const turn = getLastCompletedTurn(context);
   if (!turn || !turn.result) {
     return null;
   }
 
-  const conclusion = typeof turn.result.message === 'string' && turn.result.message.trim().length > 0
-    ? turn.result.message
-    : `已恢复会话历史。可通过 /api/agent/v1/${sessionId}/turns 查看历史轮次。`;
-  const confidence =
-    typeof turn.result.confidence === 'number'
-      ? turn.result.confidence
-      : 0.5;
+  const conclusion =
+    typeof turn.result.message === 'string' && turn.result.message.trim().length > 0
+      ? turn.result.message
+      : `已恢复会话历史。可通过 /api/agent/v1/${sessionId}/turns 查看历史轮次。`;
+  const confidence = typeof turn.result.confidence === 'number' ? turn.result.confidence : 0.5;
 
   return {
     sessionId,
@@ -1418,8 +1555,7 @@ function annotateRecoveredResultQuality(
   });
   if (!issue) return;
 
-  const context = sessionContextManager.get(sessionId, session.traceId) ||
-    sessionContextManager.get(sessionId);
+  const context = sessionContextManager.get(sessionId, session.traceId) || sessionContextManager.get(sessionId);
   context?.annotateLatestCompletedTurn({
     success: result.success,
     findings: result.findings,
@@ -1435,7 +1571,10 @@ function annotateRecoveredResultQuality(
   });
 }
 
-function recoverResultForSessionIfNeeded(sessionId: string, session: AnalysisSession): AgentRuntimeAnalysisResult | null {
+function recoverResultForSessionIfNeeded(
+  sessionId: string,
+  session: AnalysisSession,
+): AgentRuntimeAnalysisResult | null {
   if (session.result) {
     annotateRecoveredResultQuality(sessionId, session, session.result);
     return session.result;
@@ -1587,7 +1726,7 @@ function setSseClientRunScope(client: express.Response, runId?: string): void {
 
 function filterSseClientsForRun(clients: express.Response[], runId?: string): express.Response[] {
   if (!runId) return clients;
-  return clients.filter(client => {
+  return clients.filter((client) => {
     const scopedRunId = (client as RunScopedSseClient)[RUN_SCOPED_SSE_CLIENT_ID];
     return !scopedRunId || scopedRunId === runId;
   });
@@ -1613,14 +1752,11 @@ function ensureToolsRegistered() {
 }
 
 function isDedicatedSceneReplayRequest(query: string): boolean {
-  const q = String(query || '').trim().toLowerCase();
+  const q = String(query || '')
+    .trim()
+    .toLowerCase();
   if (!q) return false;
-  return (
-    q === '/scene' ||
-    q.includes('场景还原') ||
-    q.includes('scene reconstruction') ||
-    q.includes('scene replay')
-  );
+  return q === '/scene' || q.includes('场景还原') || q.includes('scene reconstruction') || q.includes('scene replay');
 }
 
 // ============================================================================
@@ -1656,6 +1792,9 @@ async function handleAnalyzeRequest(
   res: express.Response,
   requestedSessionIdOverride?: string,
 ): Promise<void> {
+  let executionSession: AnalysisSession | undefined;
+  let executionRunId: string | undefined;
+  let executionHandedOff = false;
   try {
     const requestId = getRequestId(req);
     const requestContext = requireRequestContext(req);
@@ -1672,6 +1811,10 @@ async function handleAnalyzeRequest(
     const requestedSessionId = requestedSessionIdOverride || bodyRequestedSessionId;
     if (!hasRbacPermission(requestContext, 'agent:run')) {
       sendForbidden(res, 'Starting analysis requires agent:run permission');
+      return;
+    }
+
+    if (!requireAiEnabledForHttp(res, 'agent_analyze')) {
       return;
     }
 
@@ -1707,11 +1850,22 @@ async function handleAnalyzeRequest(
       return;
     }
 
+    const inheritedReferenceTraceId = resolveVisibleSessionReferenceTraceIdForTrace(
+      requestedSessionId,
+      traceId,
+      requestContext,
+    );
     let options: ReturnType<typeof normalizeAnalyzeOptions>;
     try {
       options = normalizeAnalyzeOptions(rawOptions, {
         endpoint: requestedSessionIdOverride ? '/sessions/:id/runs' : '/analyze',
-        hasReferenceTraceId: !!referenceTraceId,
+        hasReferenceTraceId: !!referenceTraceId || !!inheritedReferenceTraceId,
+        ...(typeof traceId === 'string' ? { traceId } : {}),
+        ...(typeof referenceTraceId === 'string'
+          ? { referenceTraceId }
+          : typeof inheritedReferenceTraceId === 'string'
+            ? { referenceTraceId: inheritedReferenceTraceId }
+            : {}),
       });
     } catch (error: any) {
       if (error instanceof AnalyzeOptionsError) {
@@ -1744,7 +1898,7 @@ async function handleAnalyzeRequest(
 
     // Verify trace exists
     const traceProcessorService = getTraceProcessorService();
-    if (!await ensureTraceAccessible(req, res, traceId)) {
+    if (!(await ensureTraceAccessible(req, res, traceId))) {
       return;
     }
     const trace = await traceProcessorService.getOrLoadTrace(traceId);
@@ -1758,9 +1912,7 @@ async function handleAnalyzeRequest(
       return;
     }
 
-    const validateReferenceTraceForRun = async (
-      candidateReferenceTraceId: string,
-    ): Promise<TraceInfo | null> => {
+    const validateReferenceTraceForRun = async (candidateReferenceTraceId: string): Promise<TraceInfo | null> => {
       if (candidateReferenceTraceId === traceId) {
         res.status(400).json({
           success: false,
@@ -1769,7 +1921,7 @@ async function handleAnalyzeRequest(
         });
         return null;
       }
-      if (!await ensureTraceAccessible(req, res, candidateReferenceTraceId)) {
+      if (!(await ensureTraceAccessible(req, res, candidateReferenceTraceId))) {
         return null;
       }
       const refTrace = await traceProcessorService.getOrLoadTrace(candidateReferenceTraceId);
@@ -1812,6 +1964,8 @@ async function handleAnalyzeRequest(
     let sessionId: string;
     let preparedSession: AnalysisSession | undefined;
     let isNewSession = true;
+    const liveRequestedSession = requestedSessionId ? assistantAppService.getSession(requestedSessionId) : undefined;
+    if (sendRunStartConflictIfNeeded(res, liveRequestedSession)) return;
     try {
       const prepared = analyzeSessionService.prepareSession({
         traceId,
@@ -1848,10 +2002,12 @@ async function handleAnalyzeRequest(
       throw error;
     }
 
-    const blockedStrategyIds = Array.from(new Set([
-      ...SCENE_STRATEGY_IDS,
-      ...(Array.isArray(options.blockedStrategyIds) ? options.blockedStrategyIds : []),
-    ]));
+    const blockedStrategyIds = Array.from(
+      new Set([
+        ...SCENE_STRATEGY_IDS,
+        ...(Array.isArray(options.blockedStrategyIds) ? options.blockedStrategyIds : []),
+      ]),
+    );
     const sessionForRun = preparedSession || assistantAppService.getSession(sessionId);
     if (!sessionForRun) {
       throw new Error(`Session ${sessionId} not found after preparation`);
@@ -1868,8 +2024,18 @@ async function handleAnalyzeRequest(
     }
     sessionForRun.codeAwareMode = options.codeAwareMode;
     sessionForRun.codebaseIds = Array.isArray(options.codebaseIds) ? options.codebaseIds : undefined;
+    sessionForRun.knowledgeSourceIds = Array.isArray(options.knowledgeSourceIds)
+      ? options.knowledgeSourceIds
+      : undefined;
 
+    if (sendRunStartConflictIfNeeded(res, sessionForRun)) return;
     const runContext = startSessionRun(sessionForRun, query, requestId);
+    if (!runContext) {
+      sendRunStartConflictIfNeeded(res, sessionForRun);
+      return;
+    }
+    executionSession = sessionForRun;
+    executionRunId = runContext.runId;
     sessionForRun.logger.setMetadata({
       requestId: runContext.requestId,
       runId: runContext.runId,
@@ -1877,7 +2043,7 @@ async function handleAnalyzeRequest(
     });
 
     if (options.preset === 'smart') {
-      runSmartAnalysis(sessionId, query, traceId, {
+      const smartAnalysisPromise = runSmartAnalysis(sessionId, query, traceId, {
         runContext,
         traceProcessorService,
         smartAction: options.smartAction ?? 'preview',
@@ -1887,6 +2053,7 @@ async function handleAnalyzeRequest(
         blockedStrategyIds,
         owner: ownerFieldsFromContext(requestContext),
         knowledgeScope: knowledgeScopeFromRequestContext(requestContext),
+        knowledgeSourceIds: options.knowledgeSourceIds,
       }).catch((error) => {
         const session = assistantAppService.getSession(sessionId);
         if (session) {
@@ -1902,12 +2069,20 @@ async function handleAnalyzeRequest(
           session.status = 'failed';
           session.error = error.message;
           markSessionRunStatus(session, 'failed', error.message, runContext.runId);
-          broadcastToAgentDrivenClients(sessionId, {
-            type: 'error',
-            content: { message: error.message, error: error.message },
-            timestamp: Date.now(),
-          }, runContext.runId);
+          broadcastToAgentDrivenClients(
+            sessionId,
+            {
+              type: 'error',
+              content: { message: error.message, error: error.message },
+              timestamp: Date.now(),
+            },
+            runContext.runId,
+          );
         }
+      });
+      executionHandedOff = true;
+      void smartAnalysisPromise.finally(() => {
+        settleSessionRunExecution(sessionForRun, runContext.runId);
       });
 
       res.json({
@@ -1937,15 +2112,10 @@ async function handleAnalyzeRequest(
     if (enterpriseLeasesEnabled()) {
       try {
         const scope = leaseScopeFromRequestContext(requestContext);
-        agentRunLeaseDecision = buildLeaseModeDecisionForTrace(
-          scope,
-          traceId,
-          'agent_run',
-          {
-            analysisMode: options.analysisMode,
-            traceSizeBytes: trace.size,
-          },
-        );
+        agentRunLeaseDecision = buildLeaseModeDecisionForTrace(scope, traceId, 'agent_run', {
+          analysisMode: options.analysisMode,
+          traceSizeBytes: trace.size,
+        });
         agentRunLease = getTraceProcessorLeaseStore().acquireHolder(
           scope,
           traceId,
@@ -1970,7 +2140,9 @@ async function handleAnalyzeRequest(
           try {
             getTraceProcessorLeaseStore().markFailed(leaseScopeFromRequestContext(requestContext), agentRunLease.id);
           } catch (markFailedError: any) {
-            console.warn(`[AgentRoutes] Failed to mark agent_run lease ${agentRunLease.id} failed: ${markFailedError.message}`);
+            console.warn(
+              `[AgentRoutes] Failed to mark agent_run lease ${agentRunLease.id} failed: ${markFailedError.message}`,
+            );
           }
         }
         if (!isSessionRunCancelled(sessionForRun, runContext.runId) && !isStaleRun(sessionForRun, runContext.runId)) {
@@ -1986,7 +2158,9 @@ async function handleAnalyzeRequest(
         return;
       }
 
-      if (effectiveReferenceTraceId) {
+      const currentLeaseRunIsActive =
+        !isSessionRunCancelled(sessionForRun, runContext.runId) && !isStaleRun(sessionForRun, runContext.runId);
+      if (effectiveReferenceTraceId && currentLeaseRunIsActive) {
         try {
           const scope = leaseScopeFromRequestContext(requestContext);
           referenceAgentRunLeaseDecision = buildLeaseModeDecisionForTrace(
@@ -2026,9 +2200,14 @@ async function handleAnalyzeRequest(
         } catch (leaseError: any) {
           if (referenceAgentRunLease) {
             try {
-              getTraceProcessorLeaseStore().markFailed(leaseScopeFromRequestContext(requestContext), referenceAgentRunLease.id);
+              getTraceProcessorLeaseStore().markFailed(
+                leaseScopeFromRequestContext(requestContext),
+                referenceAgentRunLease.id,
+              );
             } catch (markFailedError: any) {
-              console.warn(`[AgentRoutes] Failed to mark reference agent_run lease ${referenceAgentRunLease.id} failed: ${markFailedError.message}`);
+              console.warn(
+                `[AgentRoutes] Failed to mark reference agent_run lease ${referenceAgentRunLease.id} failed: ${markFailedError.message}`,
+              );
             }
           }
           if (agentRunLease) {
@@ -2040,7 +2219,9 @@ async function handleAnalyzeRequest(
                 runContext.runId,
               );
             } catch (releaseError: any) {
-              console.warn(`[AgentRoutes] Failed to release current agent_run lease after reference lease failure ${agentRunLease.id}: ${releaseError.message}`);
+              console.warn(
+                `[AgentRoutes] Failed to release current agent_run lease after reference lease failure ${agentRunLease.id}: ${releaseError.message}`,
+              );
             }
           }
           if (!isSessionRunCancelled(sessionForRun, runContext.runId) && !isStaleRun(sessionForRun, runContext.runId)) {
@@ -2065,54 +2246,72 @@ async function handleAnalyzeRequest(
         )
       : undefined;
 
-    runAgentDrivenAnalysis(sessionId, query, traceId, {
-      ...options,
-      selectionContext,
-      blockedStrategyIds,
-      traceProcessorService,
-      runContext,
-      referenceTraceId: effectiveReferenceTraceId,
-      traceContext: traceContext && traceContext.length > 0 ? traceContext : undefined,
-      providerId: sessionForRun.providerId !== undefined ? sessionForRun.providerId : providerId,
-      knowledgeScope: knowledgeScopeFromRequestContext(requestContext),
-      traceProcessorLease: agentRunLease
-        ? {
-          traceId,
-          leaseId: agentRunLease.id,
-          mode: agentRunLease.mode,
-          leaseScope: leaseScopeFromRequestContext(requestContext),
-        }
-        : undefined,
-      referenceTraceProcessorLease: referenceAgentRunLease && effectiveReferenceTraceId
-        ? {
-          traceId: effectiveReferenceTraceId,
-          leaseId: referenceAgentRunLease.id,
-          mode: referenceAgentRunLease.mode,
-          leaseScope: leaseScopeFromRequestContext(requestContext),
-        }
-        : undefined,
-    }).catch((error) => {
-      const session = assistantAppService.getSession(sessionId);
-      if (session) {
-        if (isSessionRunCancelled(session, runContext.runId) || isStaleRun(session, runContext.runId)) {
-          session.logger.info('AgentRoutes', 'Ignoring agent-driven analysis failure after cancellation', {
+    const sessionRunIsInactive =
+      isSessionRunCancelled(sessionForRun, runContext.runId) || isStaleRun(sessionForRun, runContext.runId);
+    if (sessionRunIsInactive) {
+      sessionForRun.logger.info('AgentRoutes', 'Skipping agent-driven analysis for inactive run', {
+        sessionId,
+        runId: runContext.runId,
+      });
+    }
+    let analysisPromise: Promise<void> = Promise.resolve();
+    if (!sessionRunIsInactive) {
+      analysisPromise = runAgentDrivenAnalysis(sessionId, query, traceId, {
+        ...options,
+        selectionContext,
+        blockedStrategyIds,
+        traceProcessorService,
+        runContext,
+        referenceTraceId: effectiveReferenceTraceId,
+        traceContext: traceContext && traceContext.length > 0 ? traceContext : undefined,
+        providerId: sessionForRun.providerId !== undefined ? sessionForRun.providerId : providerId,
+        knowledgeScope: knowledgeScopeFromRequestContext(requestContext),
+        traceProcessorLease: agentRunLease
+          ? {
+              traceId,
+              leaseId: agentRunLease.id,
+              mode: agentRunLease.mode,
+              leaseScope: leaseScopeFromRequestContext(requestContext),
+            }
+          : undefined,
+        referenceTraceProcessorLease:
+          referenceAgentRunLease && effectiveReferenceTraceId
+            ? {
+                traceId: effectiveReferenceTraceId,
+                leaseId: referenceAgentRunLease.id,
+                mode: referenceAgentRunLease.mode,
+                leaseScope: leaseScopeFromRequestContext(requestContext),
+              }
+            : undefined,
+      }).catch((error) => {
+        const session = assistantAppService.getSession(sessionId);
+        if (session) {
+          if (isSessionRunCancelled(session, runContext.runId) || isStaleRun(session, runContext.runId)) {
+            session.logger.info('AgentRoutes', 'Ignoring agent-driven analysis failure after cancellation', {
+              sessionId,
+              runId: runContext.runId,
+              error: error?.message || String(error),
+            });
+            return;
+          }
+          session.logger.error('AgentRoutes', 'Agent-driven analysis failed', error);
+          session.status = 'failed';
+          session.error = error.message;
+          markSessionRunStatus(session, 'failed', error.message, runContext.runId);
+          broadcastToAgentDrivenClients(
             sessionId,
-            runId: runContext.runId,
-            error: error?.message || String(error),
-          });
-          return;
+            {
+              type: 'error',
+              content: { message: error.message, error: error.message },
+              timestamp: Date.now(),
+            },
+            runContext.runId,
+          );
         }
-        session.logger.error('AgentRoutes', 'Agent-driven analysis failed', error);
-        session.status = 'failed';
-        session.error = error.message;
-        markSessionRunStatus(session, 'failed', error.message, runContext.runId);
-        broadcastToAgentDrivenClients(sessionId, {
-          type: 'error',
-          content: { message: error.message, error: error.message },
-          timestamp: Date.now(),
-        }, runContext.runId);
-      }
-    }).finally(() => {
+      });
+    }
+    executionHandedOff = true;
+    void analysisPromise.finally(() => {
       if (agentRunLease) {
         try {
           getTraceProcessorLeaseStore().releaseHolder(
@@ -2134,9 +2333,12 @@ async function handleAnalyzeRequest(
             `${runContext.runId}:reference`,
           );
         } catch (releaseError: any) {
-          console.warn(`[AgentRoutes] Failed to release reference agent_run lease ${referenceAgentRunLease.id}: ${releaseError.message}`);
+          console.warn(
+            `[AgentRoutes] Failed to release reference agent_run lease ${referenceAgentRunLease.id}: ${releaseError.message}`,
+          );
         }
       }
+      settleSessionRunExecution(sessionForRun, runContext.runId);
     });
 
     res.json({
@@ -2169,11 +2371,18 @@ async function handleAnalyzeRequest(
       },
     });
   } catch (error: any) {
+    if (sendAiDisabledErrorIfPresent(res, error)) {
+      return;
+    }
     console.error('[AgentRoutes] Analyze error:', error);
     res.status(500).json({
       success: false,
       error: error.message || 'Agent analysis failed',
     });
+  } finally {
+    if (!executionHandedOff && executionSession && executionRunId) {
+      settleSessionRunExecution(executionSession, executionRunId);
+    }
   }
 }
 
@@ -2203,25 +2412,21 @@ router.post('/sessions/:sessionId/runs', async (req, res) => {
  * - error: Error occurred
  * - end: Stream ended
  */
-function resolveReplayBufferForStream(
-  session: AnalysisSession,
-  runId?: string,
-): BufferedSseEvent[] {
+function resolveReplayBufferForStream(session: AnalysisSession, runId?: string): BufferedSseEvent[] {
   const targetRunId = runId || getSessionRunId(session);
   if (runId && !isCurrentRunOwner(session, runId)) {
     const byKey = new Map<string, BufferedSseEvent>();
     for (const event of [
-      ...session.sseEventBuffer.filter(candidate => candidate.runId === runId),
-      ...getRunSseReplayState(session, runId).sseEventBuffer.filter(candidate => candidate.runId === runId),
+      ...session.sseEventBuffer.filter((candidate) => candidate.runId === runId),
+      ...getRunSseReplayState(session, runId).sseEventBuffer.filter((candidate) => candidate.runId === runId),
     ]) {
       byKey.set(`${event.seqId}:${event.eventType}:${event.runId || ''}`, event);
     }
-    return Array.from(byKey.values())
-      .sort((a, b) => a.seqId - b.seqId);
+    return Array.from(byKey.values()).sort((a, b) => a.seqId - b.seqId);
   }
   const source = session.sseEventBuffer;
   if (!targetRunId) return source;
-  return source.filter(event => !event.runId || event.runId === targetRunId);
+  return source.filter((event) => !event.runId || event.runId === targetRunId);
 }
 
 function handleSessionStream(
@@ -2242,10 +2447,7 @@ function handleSessionStream(
 
   // Check for Last-Event-ID (reconnect replay support). The header is the
   // canonical fetch-stream path; the query param is kept for older clients.
-  const lastEventId = parseLastEventId(
-    req.headers['last-event-id'],
-    req.query.lastEventId
-  );
+  const lastEventId = parseLastEventId(req.headers['last-event-id'], req.query.lastEventId);
 
   streamProjector.setSseHeaders(res);
   streamProjector.sendConnected(res, {
@@ -2258,10 +2460,7 @@ function handleSessionStream(
     ...buildStreamObservability(session, streamRunId),
   });
 
-  if (
-    lastEventId !== null &&
-    (streamStatus === 'completed' || streamStatus === 'quota_exceeded')
-  ) {
+  if (lastEventId !== null && (streamStatus === 'completed' || streamStatus === 'quota_exceeded')) {
     recoverResultForSessionIfNeeded(sessionId, session);
     if (session.result) {
       sendAgentDrivenResult(res, session, streamRunId);
@@ -2273,13 +2472,13 @@ function handleSessionStream(
   const shouldReplayInitialSessionBuffer =
     lastEventId === null &&
     !streamRunId &&
-    (
-      streamStatus === 'pending' ||
+    (streamStatus === 'pending' ||
       streamStatus === 'running' ||
       streamStatus === 'awaiting_user' ||
+      streamStatus === 'completed' ||
+      streamStatus === 'quota_exceeded' ||
       streamStatus === 'failed' ||
-      streamStatus === 'cancelled'
-    );
+      streamStatus === 'cancelled');
   const persistedReplayFrom = streamRunId && lastEventId === null ? 0 : lastEventId;
   let ringReplayAfter = persistedReplayFrom;
   if (persistedReplayFrom !== null) {
@@ -2288,7 +2487,7 @@ function handleSessionStream(
     if (persistedReplay.replayed > 0) {
       console.log(
         `[AgentRoutes] Replayed ${persistedReplay.replayed} persisted SSE events for ${sessionId} ` +
-        `(after seqId ${persistedReplayFrom})`
+          `(after seqId ${persistedReplayFrom})`,
       );
     }
     if (persistedReplay.includesTerminal) {
@@ -2304,13 +2503,15 @@ function handleSessionStream(
   const replayBuffer = resolveReplayBufferForStream(session, streamRunId);
   if (ringReplayAfter !== null && replayBuffer.length > 0) {
     const replayState = {
-      sseEventSeq: Math.max(0, ...replayBuffer.map(event => event.seqId)),
+      sseEventSeq: Math.max(0, ...replayBuffer.map((event) => event.seqId)),
       sseEventBuffer: replayBuffer,
     };
     const replayIncludesTerminal = hasTerminalReplayAfter(replayState, ringReplayAfter);
     const replayed = streamProjector.replayBufferedEvents(res, replayBuffer, ringReplayAfter);
     if (replayed > 0) {
-      console.log(`[AgentRoutes] Replayed ${replayed} missed SSE events for ${sessionId} (after seqId ${ringReplayAfter})`);
+      console.log(
+        `[AgentRoutes] Replayed ${replayed} missed SSE events for ${sessionId} (after seqId ${ringReplayAfter})`,
+      );
     }
     if (replayIncludesTerminal) {
       res.end();
@@ -2449,22 +2650,19 @@ router.get('/:sessionId/status', (req, res) => {
           existingContract: recoveredResult.conclusionContract as ConclusionContract | undefined,
           mode: recoveredResult.rounds > 1 ? 'focused_answer' : 'initial_report',
           sceneId: sceneIdHint,
-        }) ||
-        undefined;
-      const qualityArtifacts = recoveredResult.claimSupport &&
-        recoveredResult.claimVerificationResult &&
-        recoveredResult.identityResolutions
-        ? {
-          claimSupport: recoveredResult.claimSupport,
-          claimVerificationResult: recoveredResult.claimVerificationResult,
-          identityResolutions: recoveredResult.identityResolutions,
-        }
-        : ensureAnalysisQualityArtifacts(session, conclusionContract, recoveredResult);
+        }) || undefined;
+      const qualityArtifacts =
+        recoveredResult.claimSupport && recoveredResult.claimVerificationResult && recoveredResult.identityResolutions
+          ? {
+              claimSupport: recoveredResult.claimSupport,
+              claimVerificationResult: recoveredResult.claimVerificationResult,
+              identityResolutions: recoveredResult.identityResolutions,
+            }
+          : ensureAnalysisQualityArtifacts(session, conclusionContract, recoveredResult);
       const completedPayload = ensureCompletedAnalysisResultPayload(session);
       const finalArtifacts = completedPayload?.finalArtifacts;
       const normalizedCompletedConclusion = completedPayload?.normalizedConclusion || conclusion;
-      const normalizedCompletedContract =
-        completedPayload?.normalizedConclusionContract || conclusionContract;
+      const normalizedCompletedContract = completedPayload?.normalizedConclusionContract || conclusionContract;
       response.result = {
         answer: normalizedCompletedConclusion,
         conclusion: normalizedCompletedConclusion,
@@ -2481,6 +2679,8 @@ router.get('/:sessionId/status', (req, res) => {
         reportUrl: finalArtifacts?.reportUrl,
         reportError: finalArtifacts?.reportError,
         resultSnapshotId: finalArtifacts?.resultSnapshotId,
+        analysisReceipt: completedPayload?.analysisReceipt,
+        uiActionProposals: completedPayload?.uiActionProposals,
         findings: recoveredResult.findings,
         findingsCount: recoveredResult.findings.length,
         resultContract,
@@ -2588,10 +2788,10 @@ router.get('/:sessionId/turns/:turnId', (req, res) => {
   if (turnId === 'latest') {
     turn = turns[turns.length - 1];
   } else {
-    turn = turns.find(t => t.id === turnId);
+    turn = turns.find((t) => t.id === turnId);
     if (!turn && /^\d+$/.test(turnId)) {
       const parsed = parseInt(turnId, 10);
-      turn = turns.find(t => t.turnIndex === parsed) || turns.find(t => t.turnIndex === parsed - 1);
+      turn = turns.find((t) => t.turnIndex === parsed) || turns.find((t) => t.turnIndex === parsed - 1);
     }
   }
 
@@ -2603,8 +2803,8 @@ router.get('/:sessionId/turns/:turnId', (req, res) => {
     });
   }
 
-  const previousTurn = turns.find(t => t.turnIndex === turn!.turnIndex - 1) || null;
-  const nextTurn = turns.find(t => t.turnIndex === turn!.turnIndex + 1) || null;
+  const previousTurn = turns.find((t) => t.turnIndex === turn!.turnIndex - 1) || null;
+  const nextTurn = turns.find((t) => t.turnIndex === turn!.turnIndex + 1) || null;
 
   return res.json({
     success: true,
@@ -2689,10 +2889,7 @@ router.post('/:sessionId/feedback', async (req, res) => {
   let patternStatusAfter: string | null = null;
   if (validated.value.patternId) {
     try {
-      patternStatusAfter = await applyFeedbackToPattern(
-        validated.value.patternId,
-        validated.value.rating,
-      );
+      patternStatusAfter = await applyFeedbackToPattern(validated.value.patternId, validated.value.rating);
     } catch (err) {
       console.warn('[Feedback] Pattern state update failed:', (err as Error).message);
     }
@@ -2716,7 +2913,11 @@ router.post('/:sessionId/feedback', async (req, res) => {
     } catch (err) {
       console.warn('[Feedback] Case candidate state update failed:', (err as Error).message);
     } finally {
-      try { outbox?.close(); } catch { /* ignore */ }
+      try {
+        outbox?.close();
+      } catch {
+        /* ignore */
+      }
     }
   }
 
@@ -2752,8 +2953,22 @@ async function handleSessionRespond(req: express.Request, res: express.Response,
   }
 
   if (action === 'abort') {
-    await cancelSessionRun(sessionId, 'Aborted by user');
-    res.json({ success: true, sessionId, status: session.status });
+    const runId = readRequiredCancellationRunId(req.body?.runId);
+    if (!runId) {
+      res.status(400).json({
+        success: false,
+        sessionId,
+        code: 'RUN_ID_REQUIRED',
+        error: 'runId is required for abort',
+      });
+      return;
+    }
+    const result = await cancelSessionRun(sessionId, runId, 'Aborted by user');
+    if (!result) {
+      sendResourceNotFound(res, 'Session not found');
+      return;
+    }
+    sendCancelSessionRunResult(res, result);
     return;
   }
 
@@ -2814,9 +3029,19 @@ router.post('/:sessionId/cancel', async (req, res) => {
   const session = getAuthorizedSession(req, res, sessionId);
   if (!session) return;
 
-  await cancelSessionRun(sessionId, 'Analysis cancelled by user');
+  const runId = readRequiredCancellationRunId(req.body?.runId);
+  if (!runId) {
+    return res.status(400).json({
+      success: false,
+      sessionId,
+      code: 'RUN_ID_REQUIRED',
+      error: 'runId is required for cancellation',
+    });
+  }
 
-  return res.json({ success: true, sessionId, status: session.status });
+  const result = await cancelSessionRun(sessionId, runId, 'Analysis cancelled by user');
+  if (!result) return sendResourceNotFound(res, 'Session not found');
+  return sendCancelSessionRunResult(res, result);
 });
 
 router.post('/:sessionId/interaction', async (req, res) => {
@@ -2865,9 +3090,8 @@ router.post('/:sessionId/interaction', async (req, res) => {
     // Record the interaction — ClaudeRuntime (agentv3) doesn't implement these methods.
     if (typeof session.orchestrator.recordUserInteraction === 'function') {
       session.orchestrator.recordUserInteraction(interaction);
-      const focusStore = typeof session.orchestrator.getFocusStore === 'function'
-        ? session.orchestrator.getFocusStore()
-        : null;
+      const focusStore =
+        typeof session.orchestrator.getFocusStore === 'function' ? session.orchestrator.getFocusStore() : null;
       const focusCount = focusStore ? focusStore.getTopFocuses(100).length : 0;
       return res.json({ success: true, sessionId, focusCount });
     }
@@ -3041,6 +3265,7 @@ async function runSmartAnalysis(
     blockedStrategyIds?: string[];
     owner: ResourceOwnerFields;
     knowledgeScope?: KnowledgeScope;
+    knowledgeSourceIds?: string[];
   },
 ): Promise<void> {
   const session = assistantAppService.getSession(sessionId);
@@ -3048,6 +3273,7 @@ async function runSmartAnalysis(
 
   const startedAt = Date.now();
   const runId = options.runContext.runId;
+  session.analysisMode = normalizeReceiptAnalysisMode(options.analysisMode) ?? session.analysisMode;
   setCurrentSessionRun(session, {
     ...options.runContext,
     query,
@@ -3096,9 +3322,7 @@ async function runSmartAnalysis(
         options: {
           routeProfile: 'smart',
           previewOnly: true,
-          forceRefresh: options.smartAction === 'preview'
-            ? true
-            : options.forceRefresh,
+          forceRefresh: options.smartAction === 'preview' ? true : options.forceRefresh,
           cancelToken,
         },
       });
@@ -3155,14 +3379,18 @@ async function runSmartAnalysis(
       runId: session.activeRun?.runId,
       requestId: session.activeRun?.requestId,
     });
-    broadcastToAgentDrivenClients(sessionId, {
-      type: 'progress',
-      content: {
-        phase: 'smart_deep_dive_dispatch',
-        message: `已选中 ${dispatch.selectedScenes.length} 个场景，进入详细分析`,
+    broadcastToAgentDrivenClients(
+      sessionId,
+      {
+        type: 'progress',
+        content: {
+          phase: 'smart_deep_dive_dispatch',
+          message: `已选中 ${dispatch.selectedScenes.length} 个场景，进入详细分析`,
+        },
+        timestamp: Date.now(),
       },
-      timestamp: Date.now(),
-    }, runId);
+      runId,
+    );
 
     dispatchedToAgentDeepDive = true;
     await runAgentDrivenAnalysis(sessionId, dispatch.query, traceId, {
@@ -3175,6 +3403,7 @@ async function runSmartAnalysis(
       analysisMode: resolveSmartDeepDiveAnalysisMode(options.analysisMode),
       generateTracks: false,
       knowledgeScope: options.knowledgeScope,
+      knowledgeSourceIds: options.knowledgeSourceIds,
     });
   } catch (error: any) {
     if (isSessionRunCancelled(session, runId) || isStaleRun(session, runId)) {
@@ -3190,11 +3419,15 @@ async function runSmartAnalysis(
     markSessionRunStatus(session, 'failed', session.error, runId);
     session.logger.error('SmartAnalysis', 'Smart analysis failed', error);
     if (!dispatchedToAgentDeepDive && smartCancelBridge.tryClaimTerminal(sessionId, runId)) {
-      broadcastToAgentDrivenClients(sessionId, {
-        type: 'error',
-        content: { message: session.error, error: session.error },
-        timestamp: Date.now(),
-      }, runId);
+      broadcastToAgentDrivenClients(
+        sessionId,
+        {
+          type: 'error',
+          content: { message: session.error, error: session.error },
+          timestamp: Date.now(),
+        },
+        runId,
+      );
     }
   } finally {
     smartCancelBridge.release(sessionId, runId);
@@ -3292,7 +3525,10 @@ function completeAgentDrivenSessionWithResult(input: {
   });
 }
 
-function objectRowsToEnvelopePayload(rows: Array<Record<string, any>>): { columns: string[]; rows: any[][] } {
+function objectRowsToEnvelopePayload(rows: Array<Record<string, any>>): {
+  columns: string[];
+  rows: any[][];
+} {
   if (!Array.isArray(rows) || rows.length === 0) {
     return { columns: [], rows: [] };
   }
@@ -3361,15 +3597,17 @@ function buildSceneExtractionEnvelopesFromRawResults(rawResults: any): DataEnvel
     const payload = objectRowsToEnvelopePayload(rows);
     if (payload.columns.length === 0) continue;
 
-    envelopes.push(createDataEnvelope(payload, {
-      type: 'skill_result',
-      source: `scene_reconstruction.${stepId}`,
-      skillId: 'scene_reconstruction',
-      stepId,
-      title: stepId,
-      layer: 'list',
-      format: 'table',
-    }));
+    envelopes.push(
+      createDataEnvelope(payload, {
+        type: 'skill_result',
+        source: `scene_reconstruction.${stepId}`,
+        skillId: 'scene_reconstruction',
+        stepId,
+        title: stepId,
+        layer: 'list',
+        format: 'table',
+      }),
+    );
   }
 
   return envelopes;
@@ -3383,7 +3621,7 @@ function buildSceneExtractionEnvelopesFromRawResults(rawResults: any): DataEnvel
  */
 async function executeStateTimelineSkill(
   traceProcessorService: ReturnType<typeof getTraceProcessorService>,
-  traceId: string
+  traceId: string,
 ): Promise<DataEnvelope[]> {
   await ensureSkillRegistryInitialized();
 
@@ -3412,15 +3650,17 @@ async function executeStateTimelineSkill(
     const payload = objectRowsToEnvelopePayload(rows);
     if (payload.columns.length === 0) continue;
 
-    envelopes.push(createDataEnvelope(payload, {
-      type: 'skill_result',
-      source: `state_timeline:${stepId}`,
-      skillId: 'state_timeline',
-      stepId,
-      title: stepId,
-      layer: 'list',
-      format: 'table',
-    }));
+    envelopes.push(
+      createDataEnvelope(payload, {
+        type: 'skill_result',
+        source: `state_timeline:${stepId}`,
+        skillId: 'state_timeline',
+        stepId,
+        title: stepId,
+        layer: 'list',
+        format: 'table',
+      }),
+    );
   }
 
   return envelopes;
@@ -3428,7 +3668,7 @@ async function executeStateTimelineSkill(
 
 async function detectScenesQuickViaSkill(
   traceProcessorService: ReturnType<typeof getTraceProcessorService>,
-  traceId: string
+  traceId: string,
 ): Promise<DetectedScene[]> {
   await ensureSkillRegistryInitialized();
 
@@ -3454,7 +3694,9 @@ async function detectStartups(
 ): Promise<DetectedScene[]> {
   // Reclassify startup_type: platform may report 'warm' even when
   // bindApplication exists (process killed + ActivityRecord survives).
-  const result = await tps.query(traceId, `
+  const result = await tps.query(
+    traceId,
+    `
     SELECT
       s.ts,
       s.dur,
@@ -3475,7 +3717,8 @@ async function detectStartups(
     FROM android_startups s
     WHERE s.dur > 0
     ORDER BY s.ts
-  `);
+  `,
+  );
 
   const scenes: DetectedScene[] = [];
   if (result.rows) {
@@ -3504,7 +3747,9 @@ async function detectScrollSessions(
   tps: ReturnType<typeof getTraceProcessorService>,
   traceId: string,
 ): Promise<DetectedScene[]> {
-  const scrollResult = await tps.query(traceId, `
+  const scrollResult = await tps.query(
+    traceId,
+    `
     WITH
     input_exists AS (
       SELECT 1 AS ok WHERE EXISTS (
@@ -3568,7 +3813,8 @@ async function detectScrollSessions(
     FROM scroll_sessions s
     WHERE s.end_ts > s.start_ts + 100000000
     ORDER BY s.start_ts
-  `);
+  `,
+  );
 
   const scenes: DetectedScene[] = [];
   if (scrollResult.rows) {
@@ -3598,7 +3844,9 @@ async function detectTapEvents(
   tps: ReturnType<typeof getTraceProcessorService>,
   traceId: string,
 ): Promise<DetectedScene[]> {
-  const tapResult = await tps.query(traceId, `
+  const tapResult = await tps.query(
+    traceId,
+    `
     WITH
     input_exists AS (
       SELECT 1 AS ok WHERE EXISTS (
@@ -3631,7 +3879,8 @@ async function detectTapEvents(
       AND (up_ts - down_ts) < 300000000
     ORDER BY down_ts
     LIMIT 50
-  `);
+  `,
+  );
 
   const scenes: DetectedScene[] = [];
   if (tapResult.rows) {
@@ -3655,7 +3904,7 @@ async function detectTapEvents(
  */
 async function detectScenesQuickLegacy(
   traceProcessorService: ReturnType<typeof getTraceProcessorService>,
-  traceId: string
+  traceId: string,
 ): Promise<DetectedScene[]> {
   // =========================================================================
   // Pre-load Perfetto stdlib modules (parallel)
@@ -3663,15 +3912,16 @@ async function detectScenesQuickLegacy(
   // `android_input_events` and `android_startups` are stdlib VIEWS, not
   // intrinsic tables. They only exist after loading the corresponding modules.
   const REQUIRED_MODULES = [
-    'android.input',            // Creates android_input_events, android_key_events
+    'android.input', // Creates android_input_events, android_key_events
     'android.startup.startups', // Creates android_startups
   ];
 
   await Promise.all(
-    REQUIRED_MODULES.map(module =>
-      traceProcessorService.query(traceId, `INCLUDE PERFETTO MODULE ${module};`)
-        .catch(e => console.warn(`[QuickSceneDetect] Module not available: ${module}`, e))
-    )
+    REQUIRED_MODULES.map((module) =>
+      traceProcessorService
+        .query(traceId, `INCLUDE PERFETTO MODULE ${module};`)
+        .catch((e) => console.warn(`[QuickSceneDetect] Module not available: ${module}`, e)),
+    ),
   );
 
   // =========================================================================
@@ -3713,7 +3963,7 @@ async function detectScenesQuickLegacy(
 
 async function detectScenesQuick(
   traceProcessorService: ReturnType<typeof getTraceProcessorService>,
-  traceId: string
+  traceId: string,
 ): Promise<DetectedScene[]> {
   const cached = sceneCache.get(traceId);
   if (cached && Date.now() - cached.timestamp < SCENE_CACHE_TTL) {
@@ -3730,12 +3980,17 @@ async function detectScenesQuick(
     if (scenes.length === 0) {
       const legacyScenes = await detectScenesQuickLegacy(traceProcessorService, traceId);
       if (legacyScenes.length > 0) {
-        console.log(`[QuickSceneDetect] Legacy fallback provided ${legacyScenes.length} scenes after empty skill extraction`);
+        console.log(
+          `[QuickSceneDetect] Legacy fallback provided ${legacyScenes.length} scenes after empty skill extraction`,
+        );
         scenes = legacyScenes;
       }
     }
   } catch (error: any) {
-    console.warn('[QuickSceneDetect] Skill extraction failed, falling back to legacy SQL path:', error?.message || error);
+    console.warn(
+      '[QuickSceneDetect] Skill extraction failed, falling back to legacy SQL path:',
+      error?.message || error,
+    );
     scenes = await detectScenesQuickLegacy(traceProcessorService, traceId);
   }
 
@@ -3865,7 +4120,7 @@ export function collectPublishedSceneRootCauses(scope: KnowledgeScope | undefine
   const keys = new Set<string>();
   try {
     const library = new CaseLibrary(backendLogPath('case_library.json'));
-    const published = library.listCases({status: 'published'}, scope);
+    const published = library.listCases({ status: 'published' }, scope);
     for (const node of published) {
       const knowledge = node.knowledge;
       if (!knowledge) continue;
@@ -3883,24 +4138,40 @@ export async function captureCaseCandidatesAfterQualityArtifacts(
   input: CaptureCaseCandidatesAfterQualityArtifactsInput,
 ): Promise<void> {
   try {
+    try {
+      assertAiFeatureEnabled('background_review_agent');
+    } catch (error) {
+      if (error instanceof AiDisabledError) {
+        input.logger.info('CaseEvolution', 'Skipping background candidate capture because AI is disabled', {
+          sessionId: input.sessionId,
+          runId: input.runIdForAnalysis,
+          feature: error.feature,
+        });
+        return;
+      }
+      throw error;
+    }
     const config = input.caseEvolutionConfig || loadCaseEvolutionConfig();
     if (!isCaseEvolutionCaptureEnabled(config)) return;
 
-    const computeTraceHash = input.computeTraceHash || ((traceId) =>
-      computeTraceContentHash(getTraceProcessorService(), traceId));
+    const computeTraceHash =
+      input.computeTraceHash || ((traceId) => computeTraceContentHash(getTraceProcessorService(), traceId));
     const traceContentHash = await computeTraceHash(input.traceId);
     // §1.2 flooding guard: build the set of (scene::rootCause) keys the
     // published library already covers, so capture skips clusters that
     // already have published guidance. Defaults to scanning the live library.
-    const listPublishedSceneRootCauses = input.listPublishedSceneRootCauses
-      ?? ((scope?: KnowledgeScope) => collectPublishedSceneRootCauses(scope ?? input.knowledgeScope));
+    const listPublishedSceneRootCauses =
+      input.listPublishedSceneRootCauses ??
+      ((scope?: KnowledgeScope) => collectPublishedSceneRootCauses(scope ?? input.knowledgeScope));
     const existingPublishedSceneRootCauses = listPublishedSceneRootCauses(input.knowledgeScope);
-    const saveCandidates = input.saveCandidates || ((captureInput: CaseCandidateCaptureInput) =>
-      saveCaseCandidates(captureInput, {
-        logger: input.logger,
-        config,
-        existingPublishedSceneRootCauses,
-      }));
+    const saveCandidates =
+      input.saveCandidates ||
+      ((captureInput: CaseCandidateCaptureInput) =>
+        saveCaseCandidates(captureInput, {
+          logger: input.logger,
+          config,
+          existingPublishedSceneRootCauses,
+        }));
 
     await saveCandidates({
       result: input.result,
@@ -3928,16 +4199,19 @@ export async function captureCaseCandidatesAfterQualityArtifacts(
   }
 }
 
-async function runAgentDrivenAnalysis(
-  sessionId: string,
-  query: string,
-  traceId: string,
-  options: any = {}
-) {
+async function runAgentDrivenAnalysis(sessionId: string, query: string, traceId: string, options: any = {}) {
   const session = assistantAppService.getSession(sessionId);
   if (!session) return;
 
   const inputRun = options.runContext as AnalyzeSessionRunContext | undefined;
+  const requestedRunId = inputRun?.runId ?? session.activeRun?.runId;
+  if (requestedRunId && (isSessionRunCancelled(session, requestedRunId) || isStaleRun(session, requestedRunId))) {
+    session.logger.info('AgentDrivenAnalysis', 'Skipping inactive run before startup', {
+      sessionId,
+      runId: requestedRunId,
+    });
+    return;
+  }
   if (inputRun) {
     setCurrentSessionRun(session, {
       ...inputRun,
@@ -3946,12 +4220,10 @@ async function runAgentDrivenAnalysis(
       startedAt: inputRun.startedAt || Date.now(),
     });
     initializeCancelStateForRun(session, session.activeRun!);
-    session.runSequence = Math.max(
-      normalizeRunSequence(session.runSequence),
-      normalizeRunSequence(inputRun.sequence)
-    );
+    session.runSequence = Math.max(normalizeRunSequence(session.runSequence), normalizeRunSequence(inputRun.sequence));
   } else if (!session.activeRun) {
     const fallback = startSessionRun(session, query, generateRequestId());
+    if (!fallback) return;
     setCurrentSessionRun(session, {
       ...fallback,
       status: 'running',
@@ -3968,6 +4240,7 @@ async function runAgentDrivenAnalysis(
   }
 
   const { logger } = session;
+  session.analysisMode = normalizeReceiptAnalysisMode(options.analysisMode) ?? session.analysisMode;
   session.status = 'running';
   session.lastActivityAt = Date.now();
   const runIdForAnalysis = session.activeRun?.runId;
@@ -3985,9 +4258,10 @@ async function runAgentDrivenAnalysis(
   if (!runIdForAnalysis) {
     throw new Error(`Missing run id for session ${sessionId}`);
   }
-  const agentQuery = session.agentQuery && session.query === query
-    ? session.agentQuery
-    : buildAgentQueryWithContinuityNotice(query, session.continuityBreaks);
+  const agentQuery =
+    session.agentQuery && session.query === query
+      ? session.agentQuery
+      : buildAgentQueryWithContinuityNotice(query, session.continuityBreaks);
 
   // Track generation is a lightweight derivation step from DataEnvelopes.
   // Enable by default (unless explicitly disabled) so `/api/agent/v1/analyze` can
@@ -4003,10 +4277,9 @@ async function runAgentDrivenAnalysis(
   modelRouter.on('llmTelemetry', onLlmTelemetry);
 
   const runWithTraceProcessorLease = <T>(fn: () => Promise<T>): Promise<T> => {
-    const leaseContexts = [
-      options.traceProcessorLease,
-      options.referenceTraceProcessorLease,
-    ].filter(Boolean) as TraceProcessorLeaseQueryContext[];
+    const leaseContexts = [options.traceProcessorLease, options.referenceTraceProcessorLease].filter(
+      Boolean,
+    ) as TraceProcessorLeaseQueryContext[];
     if (leaseContexts.length > 1 && options.traceProcessorService?.runWithLeases) {
       return options.traceProcessorService.runWithLeases(leaseContexts, fn);
     }
@@ -4018,21 +4291,17 @@ async function runAgentDrivenAnalysis(
 
   // Set up streaming via event listener on orchestrator
   const handleUpdate = (update: StreamingUpdate) => {
-    if (isStaleRun(session, runIdForAnalysis)) return;
+    if (isStaleRun(session, runIdForAnalysis) || isSessionRunCancelled(session, runIdForAnalysis)) return;
     session.lastActivityAt = Date.now();
     console.log(`[AgentRoutes.AgentDriven] Received event: ${update.type}`, update.content?.phase);
     logger.debug('Stream', `Update: ${update.type}`, update.content);
-    const normalizedUpdate = augmentConclusionUpdateWithEvidenceIndex(
-      session,
-      normalizeAgentDrivenUpdate(update),
-    );
+    const normalizedUpdate = augmentConclusionUpdateWithEvidenceIndex(session, normalizeAgentDrivenUpdate(update));
 
     // Final narrative is emitted through analysis_completed after deterministic
     // evidence/claim verification has run. Suppress early conclusion events so
     // clients do not render an unverified terminal answer.
     const shouldBroadcastOriginalUpdate =
-      normalizedUpdate.type !== 'conclusion' &&
-      normalizedUpdate.type !== 'answer_token';
+      normalizedUpdate.type !== 'conclusion' && normalizedUpdate.type !== 'answer_token';
     if (shouldBroadcastOriginalUpdate) {
       broadcastToAgentDrivenClients(sessionId, normalizedUpdate, runIdForAnalysis);
     }
@@ -4047,39 +4316,52 @@ async function runAgentDrivenAnalysis(
     // Derive TrackEvent(s) for scene reconstruction sessions from emitted DataEnvelopes.
     // This keeps the TrackEvent feature while unifying on the agent-driven architecture.
     if (shouldGenerateTracks && normalizedUpdate.type === 'data') {
-      const envelopes = (Array.isArray(normalizedUpdate.content) ? normalizedUpdate.content : [normalizedUpdate.content])
-        .filter((e): e is DataEnvelope => !!e && typeof e === 'object');
+      const envelopes = (
+        Array.isArray(normalizedUpdate.content) ? normalizedUpdate.content : [normalizedUpdate.content]
+      ).filter((e): e is DataEnvelope => !!e && typeof e === 'object');
       const changed = updateSceneReconstructionArtifactsFromEnvelopes(session, envelopes);
       if (changed) {
-        broadcastToAgentDrivenClients(sessionId, {
-          type: 'track_data',
-          content: {
-            tracks: session.trackEvents || [],
-            scenes: session.scenes || [],
+        broadcastToAgentDrivenClients(
+          sessionId,
+          {
+            type: 'track_data',
+            content: {
+              tracks: session.trackEvents || [],
+              scenes: session.scenes || [],
+            },
+            timestamp: update.timestamp,
+            id: generateEventId('track_data', sessionId),
           },
-          timestamp: update.timestamp,
-          id: generateEventId('track_data', sessionId),
-        }, runIdForAnalysis);
+          runIdForAnalysis,
+        );
       }
     }
 
     // Track agent dialogue events
     if (normalizedUpdate.content?.phase === 'task_dispatched' || normalizedUpdate.content?.phase === 'task_completed') {
-      pushWithSessionCap(session.agentDialogue, {
-        agentId: normalizedUpdate.content.agentId || 'master',
-        type: normalizedUpdate.content.phase === 'task_dispatched' ? 'task' : 'response',
-        content: normalizedUpdate.content,
-        timestamp: normalizedUpdate.timestamp,
-      }, MAX_SESSION_AGENT_DIALOGUE);
+      pushWithSessionCap(
+        session.agentDialogue,
+        {
+          agentId: normalizedUpdate.content.agentId || 'master',
+          type: normalizedUpdate.content.phase === 'task_dispatched' ? 'task' : 'response',
+          content: normalizedUpdate.content,
+          timestamp: normalizedUpdate.timestamp,
+        },
+        MAX_SESSION_AGENT_DIALOGUE,
+      );
 
       // Collect full agent responses for HTML report enrichment
       if (normalizedUpdate.content.phase === 'task_completed') {
-        pushWithSessionCap(session.agentResponses, {
-          taskId: normalizedUpdate.content.taskId || '',
-          agentId: normalizedUpdate.content.agentId || 'unknown',
-          response: normalizedUpdate.content.response || normalizedUpdate.content,
-          timestamp: normalizedUpdate.timestamp,
-        }, MAX_SESSION_AGENT_RESPONSES);
+        pushWithSessionCap(
+          session.agentResponses,
+          {
+            taskId: normalizedUpdate.content.taskId || '',
+            agentId: normalizedUpdate.content.agentId || 'unknown',
+            response: normalizedUpdate.content.response || normalizedUpdate.content,
+            timestamp: normalizedUpdate.timestamp,
+          },
+          MAX_SESSION_AGENT_RESPONSES,
+        );
       }
     }
 
@@ -4089,12 +4371,16 @@ async function runAgentDrivenAnalysis(
     // and remapping would cause duplicate delivery to the frontend.
     const eventType = mapToAgentDrivenEventType(normalizedUpdate);
     if (shouldBroadcastOriginalUpdate && eventType !== normalizedUpdate.type) {
-      broadcastToAgentDrivenClients(sessionId, {
-        type: eventType,
-        content: normalizedUpdate.content,
-        timestamp: normalizedUpdate.timestamp,
-        id: normalizedUpdate.id,
-      }, runIdForAnalysis);
+      broadcastToAgentDrivenClients(
+        sessionId,
+        {
+          type: eventType,
+          content: normalizedUpdate.content,
+          timestamp: normalizedUpdate.timestamp,
+          id: normalizedUpdate.id,
+        },
+        runIdForAnalysis,
+      );
     }
   };
 
@@ -4105,33 +4391,53 @@ async function runAgentDrivenAnalysis(
   session.orchestratorUpdateHandler = handleUpdate;
   session.orchestrator.on('update', handleUpdate);
 
-  // Run state_timeline skill in parallel with Agent analysis (fire-and-forget).
+  // Run state_timeline in parallel while keeping it inside the run-owned lease.
   // Only execute when explicitly requested (e.g. scene reconstruction flow),
   // NOT on every analyze call — raw state lane data needs LLM reasoning before display.
+  let stateTimelinePromise: Promise<void> = Promise.resolve();
   if (options.executeStateTimeline && options.traceProcessorService) {
-    runWithTraceProcessorLease(() => executeStateTimelineSkill(options.traceProcessorService, traceId))
+    stateTimelinePromise = runWithTraceProcessorLease(() =>
+      executeStateTimelineSkill(options.traceProcessorService, traceId),
+    )
       .then((envelopes) => {
-        if (isStaleRun(session, runIdForAnalysis)) return;
-        if (envelopes.length === 0) return;
-        // Process envelopes through the same pipeline as Agent-produced data
-        const changed = updateSceneReconstructionArtifactsFromEnvelopes(session, envelopes);
-        // Broadcast each envelope as a 'data' event so frontend track_overlay picks it up
-        for (const env of envelopes) {
-          broadcastToAgentDrivenClients(sessionId, {
-            type: 'data',
-            content: env,
-            timestamp: Date.now(),
-            id: generateEventId('data', sessionId),
-          }, runIdForAnalysis);
-        }
-        if (changed) {
-          broadcastToAgentDrivenClients(sessionId, {
-            type: 'track_data',
-            content: { tracks: session.trackEvents || [], scenes: session.scenes || [] },
-            timestamp: Date.now(),
-            id: generateEventId('track_data', sessionId),
-          }, runIdForAnalysis);
-        }
+        const projected = projectStateTimelineRunResult({
+          envelopes,
+          isStaleRun: () => isStaleRun(session, runIdForAnalysis),
+          isRunCancelled: () => isSessionRunCancelled(session, runIdForAnalysis),
+          isRunActive: () => {
+            const status = resolveSessionRun(session, runIdForAnalysis)?.status;
+            return status === 'pending' || status === 'running';
+          },
+          updateArtifacts: (result) => updateSceneReconstructionArtifactsFromEnvelopes(session, result),
+          emitData: (envelope) => {
+            broadcastToAgentDrivenClients(
+              sessionId,
+              {
+                type: 'data',
+                content: envelope,
+                timestamp: Date.now(),
+                id: generateEventId('data', sessionId),
+              },
+              runIdForAnalysis,
+            );
+          },
+          emitTrackData: () => {
+            broadcastToAgentDrivenClients(
+              sessionId,
+              {
+                type: 'track_data',
+                content: {
+                  tracks: session.trackEvents || [],
+                  scenes: session.scenes || [],
+                },
+                timestamp: Date.now(),
+                id: generateEventId('track_data', sessionId),
+              },
+              runIdForAnalysis,
+            );
+          },
+        });
+        if (!projected) return;
         logger.info('StateTimeline', 'State timeline lanes broadcast', {
           laneCount: Object.keys(session.stateTimeline || {}).length,
           envelopeCount: envelopes.length,
@@ -4146,42 +4452,59 @@ async function runAgentDrivenAnalysis(
 
   const traceContextEnvelopes = appendTraceContextDataEnvelopes(session, decoratedTraceContext, traceId);
   if (traceContextEnvelopes.length > 0) {
-    broadcastToAgentDrivenClients(sessionId, {
-      type: 'data',
-      content: traceContextEnvelopes,
-      timestamp: Date.now(),
-    }, runIdForAnalysis);
+    broadcastToAgentDrivenClients(
+      sessionId,
+      {
+        type: 'data',
+        content: traceContextEnvelopes,
+        timestamp: Date.now(),
+      },
+      runIdForAnalysis,
+    );
   }
 
   try {
     console.log('[AgentRoutes.AgentDriven] Starting orchestrator.analyze...');
-    const result = await logger.timed('AgentDrivenAnalysis', 'analyze', async () => {
-      const analyze = () => session.orchestrator.analyze(agentQuery, sessionId, traceId, {
-        traceProcessorService: options.traceProcessorService,
-        packageName: options.packageName,
-        timeRange: options.timeRange,
-        taskTimeoutMs: options.taskTimeoutMs,
-        blockedStrategyIds: options.blockedStrategyIds,
-        adb: options.adb,
-        selectionContext: options.selectionContext,
-        analysisMode: options.analysisMode,
-        traceContext: decoratedTraceContext,
-        referenceTraceId: options.referenceTraceId,
-        providerId: options.providerId,
-        codeAwareMode: options.codeAwareMode,
-        codebaseIds: Array.isArray(options.codebaseIds) ? options.codebaseIds : undefined,
-        tenantId: session.tenantId,
-        workspaceId: session.workspaceId,
-        userId: session.userId,
-        runId: session.activeRun?.runId,
+    let result;
+    try {
+      result = await logger.timed('AgentDrivenAnalysis', 'analyze', async () => {
+        const analyze = () =>
+          session.orchestrator.analyze(agentQuery, sessionId, traceId, {
+            traceProcessorService: options.traceProcessorService,
+            packageName: options.packageName,
+            timeRange: options.timeRange,
+            taskTimeoutMs: options.taskTimeoutMs,
+            blockedStrategyIds: options.blockedStrategyIds,
+            adb: options.adb,
+            selectionContext: options.selectionContext,
+            analysisMode: options.analysisMode,
+            traceContext: decoratedTraceContext,
+            referenceTraceId: options.referenceTraceId,
+            tracePairContext: options.tracePairContext,
+            providerId: options.providerId,
+            codeAwareMode: options.codeAwareMode,
+            codebaseIds: Array.isArray(options.codebaseIds) ? options.codebaseIds : undefined,
+            knowledgeSourceIds: Array.isArray(options.knowledgeSourceIds)
+              ? options.knowledgeSourceIds
+              : undefined,
+            tenantId: session.tenantId,
+            workspaceId: session.workspaceId,
+            userId: session.userId,
+            runId: session.activeRun?.runId,
+          });
+        return runWithTraceProcessorLease(analyze);
       });
-      return runWithTraceProcessorLease(analyze);
-    });
+    } finally {
+      await stateTimelinePromise;
+    }
     console.log('[AgentRoutes.AgentDriven] analyze completed, success:', result.success);
-    if (isStaleRun(session, runIdForAnalysis)) {
-      logger.info('AgentDrivenAnalysis', 'Ignoring stale analysis success', {
+    const runIsInactive = () =>
+      isSessionRunCancelled(session, runIdForAnalysis) || isStaleRun(session, runIdForAnalysis);
+    if (runIsInactive()) {
+      logger.info('AgentDrivenAnalysis', 'Ignoring inactive analysis success', {
         sessionId,
         runId: runIdForAnalysis,
+        cancelled: isSessionRunCancelled(session, runIdForAnalysis),
       });
       return;
     }
@@ -4192,16 +4515,17 @@ async function runAgentDrivenAnalysis(
     }
 
     if (session.referenceTraceId && options.traceProcessorService) {
-      session.comparisonSource = 'raw_trace_pair';
+      let comparisonReportSection: typeof session.comparisonReportSection;
       try {
-        session.comparisonReportSection = await runWithTraceProcessorLease(() =>
+        comparisonReportSection = await runWithTraceProcessorLease(() =>
           buildRawTraceComparisonReportSection(options.traceProcessorService, {
             currentTraceId: traceId,
             referenceTraceId: session.referenceTraceId!,
           }),
         );
       } catch (comparisonSectionError: any) {
-        session.comparisonReportSection = {
+        if (runIsInactive()) return;
+        comparisonReportSection = {
           source: 'raw_trace_pair',
           title: 'SmartPerfetto 确定性对比附录',
           markdown: [
@@ -4214,8 +4538,18 @@ async function runAgentDrivenAnalysis(
           limitations: [`固定 SQL 附录生成失败：${comparisonSectionError?.message || String(comparisonSectionError)}`],
         };
       }
+      if (runIsInactive()) {
+        logger.info('AgentDrivenAnalysis', 'Ignoring comparison result for inactive run', {
+          sessionId,
+          runId: runIdForAnalysis,
+        });
+        return;
+      }
+      session.comparisonSource = 'raw_trace_pair';
+      session.comparisonReportSection = comparisonReportSection;
     }
 
+    if (runIsInactive()) return;
     if (result.success || result.partial === true) {
       // Read the case-evolution config ONCE per request so the attach-flag
       // and capture-flag decisions see the same snapshot (MINOR-2). Both the
@@ -4226,14 +4560,15 @@ async function runAgentDrivenAnalysis(
         query,
         findings: result.findings,
       });
-      let normalizedConclusionContract = (
-        deriveEvidenceBackedConclusionContractForNarrative(result.conclusion, session.dataEnvelopes || [], {
+      let normalizedConclusionContract = (deriveEvidenceBackedConclusionContractForNarrative(
+        result.conclusion,
+        session.dataEnvelopes || [],
+        {
           existingContract: result.conclusionContract as ConclusionContract | undefined,
           mode: result.rounds > 1 ? 'focused_answer' : 'initial_report',
           sceneId: sceneIdHint,
-        }) ||
-        undefined
-      ) as ConclusionContract | undefined;
+        },
+      ) || undefined) as ConclusionContract | undefined;
       if (normalizedConclusionContract) {
         if (isCaseEvolutionRetrieveEnabled(caseEvolutionConfig)) {
           const attached = attachCaseHitsToContractSync({
@@ -4313,11 +4648,15 @@ async function runAgentDrivenAnalysis(
     markSessionRunStatus(session, 'failed', error.message, runIdForAnalysis);
     logger.error('AgentDrivenAnalysis', 'Agent-driven analysis failed', error);
 
-    broadcastToAgentDrivenClients(sessionId, {
-      type: 'error',
-      content: { message: error.message, error: error.message },
-      timestamp: Date.now(),
-    }, runIdForAnalysis);
+    broadcastToAgentDrivenClients(
+      sessionId,
+      {
+        type: 'error',
+        content: { message: error.message, error: error.message },
+        timestamp: Date.now(),
+      },
+      runIdForAnalysis,
+    );
 
     logger.close();
     throw error;
@@ -4326,11 +4665,9 @@ async function runAgentDrivenAnalysis(
       clearInterval(runHeartbeatInterval);
     }
     // Prevent listener accumulation across multi-turn requests in the same session.
-    if (session.orchestratorUpdateHandler) {
-      session.orchestrator.off('update', session.orchestratorUpdateHandler);
-      if (session.orchestratorUpdateHandler === handleUpdate) {
-        session.orchestratorUpdateHandler = undefined;
-      }
+    session.orchestrator.off('update', handleUpdate);
+    if (session.orchestratorUpdateHandler === handleUpdate) {
+      session.orchestratorUpdateHandler = undefined;
     }
     modelRouter.off('llmTelemetry', onLlmTelemetry);
   }
@@ -4390,12 +4727,10 @@ function appendConversationStep(session: AnalysisSession, update: StreamingUpdat
   if (!text || !Number.isFinite(ordinal) || ordinal <= 0) return;
 
   const phaseRaw = sanitizeConversationText(payload.phase, 24) as AnalysisSession['conversationSteps'][number]['phase'];
-  const phase = ((
-    phaseRaw === 'thinking' ||
-    phaseRaw === 'tool' ||
-    phaseRaw === 'result' ||
-    phaseRaw === 'error'
-  ) ? phaseRaw : 'progress');
+  const phase =
+    phaseRaw === 'thinking' || phaseRaw === 'tool' || phaseRaw === 'result' || phaseRaw === 'error'
+      ? phaseRaw
+      : 'progress';
 
   const roleRaw = sanitizeConversationText(payload.role, 16) as AnalysisSession['conversationSteps'][number]['role'];
   const role = roleRaw === 'system' ? 'system' : 'agent';
@@ -4415,9 +4750,8 @@ function appendConversationStep(session: AnalysisSession, update: StreamingUpdat
     phase,
     role,
     text,
-    timestamp: typeof update.timestamp === 'number' && Number.isFinite(update.timestamp)
-      ? update.timestamp
-      : Date.now(),
+    timestamp:
+      typeof update.timestamp === 'number' && Number.isFinite(update.timestamp) ? update.timestamp : Date.now(),
     sourceEventType: sanitizeConversationText(payload?.source?.eventType, 48) || undefined,
   });
 
@@ -4440,13 +4774,46 @@ function summarizeTimelineToolCall(content: Record<string, any>): string {
   return message;
 }
 
+function normalizeTimelineTraceSide(value: unknown): 'current' | 'reference' | undefined {
+  return value === 'current' || value === 'reference' ? value : undefined;
+}
+
+function normalizeTimelinePaneSide(value: unknown): 'left' | 'right' | 'top' | 'bottom' | undefined {
+  return value === 'left' || value === 'right' || value === 'top' || value === 'bottom' ? value : undefined;
+}
+
+function timelineTraceRoleLabel(traceSide: 'current' | 'reference'): string {
+  return traceSide === 'reference' ? '参考' : '当前';
+}
+
+function timelinePaneLabel(paneSide: 'left' | 'right' | 'top' | 'bottom'): string {
+  switch (paneSide) {
+    case 'left':
+      return '左侧';
+    case 'right':
+      return '右侧';
+    case 'top':
+      return '上方';
+    case 'bottom':
+      return '下方';
+  }
+}
+
+function timelineTraceLocationLabel(envelope: Record<string, any>): string | undefined {
+  const traceSide = normalizeTimelineTraceSide(
+    envelope?.meta?.traceSide || envelope?.traceSide || envelope?.traceProvenance?.traceSide,
+  );
+  if (!traceSide) return undefined;
+
+  const paneSide = normalizeTimelinePaneSide(
+    envelope?.meta?.paneSide || envelope?.paneSide || envelope?.traceProvenance?.paneSide,
+  );
+  const roleLabel = timelineTraceRoleLabel(traceSide);
+  return paneSide ? `${timelinePaneLabel(paneSide)}/${roleLabel}` : roleLabel;
+}
+
 function summarizeTimelineResult(content: Record<string, any>): string {
-  const candidates = [
-    content.summary,
-    content.message,
-    content.result,
-    content.output,
-  ];
+  const candidates = [content.summary, content.message, content.result, content.output];
 
   for (const candidate of candidates) {
     const text = sanitizeConversationText(candidate);
@@ -4456,8 +4823,9 @@ function summarizeTimelineResult(content: Record<string, any>): string {
 }
 
 function summarizeDataEnvelopeForTimeline(update: StreamingUpdate): string {
-  const envelopes = (Array.isArray(update.content) ? update.content : [update.content])
-    .filter((entry) => entry && typeof entry === 'object') as Array<Record<string, any>>;
+  const envelopes = (Array.isArray(update.content) ? update.content : [update.content]).filter(
+    (entry) => entry && typeof entry === 'object',
+  ) as Array<Record<string, any>>;
   if (envelopes.length === 0) return '';
 
   const allTitles = envelopes
@@ -4471,57 +4839,52 @@ function summarizeDataEnvelopeForTimeline(update: StreamingUpdate): string {
       return Array.isArray(data?.rows) ? data.rows.length : undefined;
     })
     .filter((rowCount): rowCount is number => typeof rowCount === 'number');
-  const rowText = rows.length > 0
-    ? `，共 ${rows.reduce((sum, rowCount) => sum + rowCount, 0)} 行`
-    : '';
-  const traceSides = [...new Set(envelopes
-    .map((env) => env?.meta?.traceSide || env?.traceSide || env?.traceProvenance?.traceSide)
-    .filter((side): side is string => side === 'current' || side === 'reference'))];
-  const traceText = traceSides.length > 0
-    ? `，Trace: ${traceSides.map(side => side === 'reference' ? '参考' : '当前').join('/')}`
-    : '';
-  const evidenceRefs = envelopes
-    .map((env) => sanitizeConversationText(env?.meta?.evidenceRefId))
-    .filter(Boolean);
-  const evidenceText = evidenceRefs.length > 0
-    ? `，已登记 ${evidenceRefs.length} 个证据 ID`
-    : '';
-  const formats = [...new Set(envelopes
-    .map((env) => sanitizeConversationText(env?.display?.format, 24))
-    .filter(Boolean))];
-  const kindText = formats.length === 1
-    ? ({
-        table: '数据表',
-        summary: '摘要数据',
-        metric: '指标数据',
-        chart: '图表数据',
-        text: '文本数据',
-        timeline: '时间线数据',
-      } as Record<string, string>)[formats[0]] || '数据输出'
-    : '数据输出';
-  const planPhases = [...new Set(envelopes
-    .map((env) => sanitizeConversationText(env?.meta?.planPhaseTitle || env?.meta?.planPhaseId, 80))
-    .filter(Boolean))];
-  const phaseText = planPhases.length > 0
-    ? `，阶段: ${planPhases.slice(0, 2).join('/')}`
-    : '';
-  const phaseWarnings = [...new Set(envelopes
-    .map((env) => sanitizeConversationText(env?.meta?.planPhaseWarning, 120))
-    .filter(Boolean))];
-  const phaseWarningText = phaseWarnings.length > 0
-    ? `，阶段归因需核对: ${phaseWarnings.slice(0, 2).join('；')}`
-    : '';
+  const rowText = rows.length > 0 ? `，共 ${rows.reduce((sum, rowCount) => sum + rowCount, 0)} 行` : '';
+  const traceLocations = [
+    ...new Set(envelopes.map(timelineTraceLocationLabel).filter((label): label is string => !!label)),
+  ];
+  const traceText = traceLocations.length > 0 ? `，Trace: ${traceLocations.join('/')}` : '';
+  const evidenceRefs = envelopes.map((env) => sanitizeConversationText(env?.meta?.evidenceRefId)).filter(Boolean);
+  const evidenceText = evidenceRefs.length > 0 ? `，已登记 ${evidenceRefs.length} 个证据 ID` : '';
+  const formats = [
+    ...new Set(envelopes.map((env) => sanitizeConversationText(env?.display?.format, 24)).filter(Boolean)),
+  ];
+  const kindText =
+    formats.length === 1
+      ? (
+          {
+            table: '数据表',
+            summary: '摘要数据',
+            metric: '指标数据',
+            chart: '图表数据',
+            text: '文本数据',
+            timeline: '时间线数据',
+          } as Record<string, string>
+        )[formats[0]] || '数据输出'
+      : '数据输出';
+  const planPhases = [
+    ...new Set(
+      envelopes
+        .map((env) => sanitizeConversationText(env?.meta?.planPhaseTitle || env?.meta?.planPhaseId, 80))
+        .filter(Boolean),
+    ),
+  ];
+  const phaseText = planPhases.length > 0 ? `，阶段: ${planPhases.slice(0, 2).join('/')}` : '';
+  const phaseWarnings = [
+    ...new Set(envelopes.map((env) => sanitizeConversationText(env?.meta?.planPhaseWarning, 120)).filter(Boolean)),
+  ];
+  const phaseWarningText = phaseWarnings.length > 0 ? `，阶段归因需核对: ${phaseWarnings.slice(0, 2).join('；')}` : '';
   const reasons = envelopes
     .map((env) => sanitizeConversationText(env?.meta?.producerReason || env?.meta?.toolNarration, 180))
     .filter(Boolean);
   const uniqueReasons = [...new Set(reasons)].slice(0, 3);
   const omittedReasonCount = Math.max(0, reasons.length - uniqueReasons.length);
-  const reasonText = uniqueReasons.length > 0
-    ? `：${uniqueReasons.join('；')}${omittedReasonCount > 0 ? `；另有 ${omittedReasonCount} 条原因` : ''}`
-    : '';
-  const titleText = titles.length > 0
-    ? `：${titles.join(' / ')}${omittedTitleCount > 0 ? ` / 另有 ${omittedTitleCount} 份` : ''}`
-    : '';
+  const reasonText =
+    uniqueReasons.length > 0
+      ? `：${uniqueReasons.join('；')}${omittedReasonCount > 0 ? `；另有 ${omittedReasonCount} 条原因` : ''}`
+      : '';
+  const titleText =
+    titles.length > 0 ? `：${titles.join(' / ')}${omittedTitleCount > 0 ? ` / 另有 ${omittedTitleCount} 份` : ''}` : '';
   return `收到 ${envelopes.length} 份${kindText}${titleText}${rowText}${traceText}${phaseText}${phaseWarningText}${evidenceText}${reasonText || '，用于支撑后续诊断'}`;
 }
 
@@ -4586,9 +4949,8 @@ function buildConversationStepUpdate(
       phase = 'result';
       role = 'agent';
       if (update.type === 'finding' && Array.isArray(contentRecord.findings)) {
-        const firstFinding = contentRecord.findings.find(
-          (entry) => entry && typeof entry === 'object'
-        ) as Record<string, any> | undefined;
+        const firstFinding = contentRecord.findings.find((entry) => entry && typeof entry === 'object') as
+          Record<string, any> | undefined;
         const firstTitle = sanitizeConversationText(firstFinding?.title || firstFinding?.description);
         text = firstTitle
           ? `新增发现 ${contentRecord.findings.length} 条: ${firstTitle}`
@@ -4694,17 +5056,18 @@ function normalizeAgentDrivenUpdate(update: StreamingUpdate): StreamingUpdate {
     return update;
   }
 
-  const content: Record<string, any> = { ...(rawContent as Record<string, any>) };
+  const content: Record<string, any> = {
+    ...(rawContent as Record<string, any>),
+  };
 
   if (update.type === 'stage_transition') {
     const stageName = typeof content.stageName === 'string' ? content.stageName : 'unknown';
     const hasStageIndex = typeof content.stageIndex === 'number' && Number.isFinite(content.stageIndex);
-    const hasTotalStages = typeof content.totalStages === 'number' && Number.isFinite(content.totalStages) && content.totalStages > 0;
+    const hasTotalStages =
+      typeof content.totalStages === 'number' && Number.isFinite(content.totalStages) && content.totalStages > 0;
     const skipped = content.skipped === true;
     const skipReason = typeof content.skipReason === 'string' ? content.skipReason.trim() : '';
-    const stageSeq = hasStageIndex && hasTotalStages
-      ? ` (${content.stageIndex + 1}/${content.totalStages})`
-      : '';
+    const stageSeq = hasStageIndex && hasTotalStages ? ` (${content.stageIndex + 1}/${content.totalStages})` : '';
     if (typeof content.phase !== 'string' || !content.phase.trim()) {
       content.phase = 'stage_transition';
     }
@@ -4808,12 +5171,16 @@ function broadcastToAgentDrivenClients(sessionId: string, update: StreamingUpdat
     onBufferedEvent: (event) => {
       if (runId) event.runId = runId;
       session.sseEventBuffer.push(event);
-      persistBufferedAgentEvent(session, {
-        cursor: event.seqId,
-        eventType: event.eventType,
-        eventData: event.eventData,
-        createdAt: Date.now(),
-      }, runId);
+      persistBufferedAgentEvent(
+        session,
+        {
+          cursor: event.seqId,
+          eventType: event.eventType,
+          eventData: event.eventData,
+          createdAt: Date.now(),
+        },
+        runId,
+      );
       // Trim ring buffer to cap
       if (session.sseEventBuffer.length > SSE_RING_BUFFER_SIZE) {
         session.sseEventBuffer.splice(0, session.sseEventBuffer.length - SSE_RING_BUFFER_SIZE);
@@ -4827,7 +5194,7 @@ function broadcastToAgentDrivenClients(sessionId: string, update: StreamingUpdat
           errors: payload.errors.slice(0, 5),
           totalErrors: payload.errors.length,
           envelope: payload.envelope,
-        }
+        },
       );
     },
     onValidDataEnvelopes: (validEnvelopes) => {
@@ -4845,7 +5212,7 @@ function broadcastToAgentDrivenClients(sessionId: string, update: StreamingUpdat
           return true;
         });
         console.log(
-          `[AgentRoutes.broadcastToAgentDrivenClients] Sending ${validEnvelopes.length} DataEnvelope(s) for session ${sessionId}`
+          `[AgentRoutes.broadcastToAgentDrivenClients] Sending ${validEnvelopes.length} DataEnvelope(s) for session ${sessionId}`,
         );
         if (uniqueEnvelopes.length === 0) return;
         // P2-4: Tag envelopes with current turn number for multi-turn attribution
@@ -4915,7 +5282,7 @@ const SCENE_COLOR_SCHEMES: Record<SceneCategory, TrackEvent['colorScheme']> = {
   tap: 'tap',
   long_press: 'tap',
   idle: 'system',
-  jank_region: 'jank',  // Use jank color to highlight performance issues
+  jank_region: 'jank', // Use jank color to highlight performance issues
   back_key: 'system',
   home_key: 'system',
   recents_key: 'system',
@@ -4960,7 +5327,13 @@ const STEP_TO_LANE: Record<string, string> = {
 };
 
 type LaneStatus = 'available' | 'available_frame_based' | 'available_heuristic' | 'table_missing' | 'no_data';
-const VALID_LANE_STATUSES = new Set<string>(['available', 'available_frame_based', 'available_heuristic', 'table_missing', 'no_data']);
+const VALID_LANE_STATUSES = new Set<string>([
+  'available',
+  'available_frame_based',
+  'available_heuristic',
+  'table_missing',
+  'no_data',
+]);
 /** Statuses indicating data is expected (table exists, may have rows). */
 const DATA_PRESENT_STATUSES = new Set<string>(['available', 'available_frame_based', 'available_heuristic']);
 
@@ -4986,7 +5359,7 @@ function extractStateTimelineData(envelopes: DataEnvelope[]): {
         const lane = String(row.lane || '');
         const status = String(row.source_status || 'available');
         if (lane) {
-          availability[lane] = VALID_LANE_STATUSES.has(status) ? status as LaneStatus : 'available';
+          availability[lane] = VALID_LANE_STATUSES.has(status) ? (status as LaneStatus) : 'available';
         }
       }
       continue;
@@ -5035,7 +5408,7 @@ function extractStateTimelineData(envelopes: DataEnvelope[]): {
   for (const lane of [...new Set(Object.values(STEP_TO_LANE))]) {
     if (timeline[lane] && timeline[lane].length > 0) {
       // Has real data — check if it's all UNKNOWN (empty-source fallback)
-      const allUnknown = timeline[lane].every(s => s.state === 'UNKNOWN' || s.state === 'IDLE');
+      const allUnknown = timeline[lane].every((s) => s.state === 'UNKNOWN' || s.state === 'IDLE');
       if (!availability[lane]) {
         availability[lane] = allUnknown ? 'no_data' : 'available';
       }
@@ -5048,10 +5421,7 @@ function extractStateTimelineData(envelopes: DataEnvelope[]): {
   return { timeline, availability };
 }
 
-function updateSceneReconstructionArtifactsFromEnvelopes(
-  session: AnalysisSession,
-  envelopes: DataEnvelope[]
-): boolean {
+function updateSceneReconstructionArtifactsFromEnvelopes(session: AnalysisSession, envelopes: DataEnvelope[]): boolean {
   if (!Array.isArray(envelopes) || envelopes.length === 0) return false;
 
   // Extract scene events (from scene_reconstruction skill)
@@ -5133,9 +5503,7 @@ function extractDetectedScenesFromEnvelopes(envelopes: DataEnvelope[]): Detected
 
         const startupType = String(row.startup_type || '').toLowerCase();
         const type: SceneCategory =
-          startupType === 'warm' ? 'warm_start'
-          : startupType === 'hot' ? 'hot_start'
-          : 'cold_start';
+          startupType === 'warm' ? 'warm_start' : startupType === 'hot' ? 'hot_start' : 'cold_start';
 
         const startNs = BigInt(startTs);
         const endNs = startNs + durNs;
@@ -5167,9 +5535,7 @@ function extractDetectedScenesFromEnvelopes(envelopes: DataEnvelope[]): Detected
 
         const gestureType = String(row.gesture_type || '').toLowerCase();
         const type: SceneCategory =
-          gestureType === 'scroll' ? 'scroll'
-          : gestureType === 'long_press' ? 'long_press'
-          : 'tap';
+          gestureType === 'scroll' ? 'scroll' : gestureType === 'long_press' ? 'long_press' : 'tap';
 
         const startNs = BigInt(startTs);
         const endNs = startNs + durNs;
@@ -5339,30 +5705,30 @@ function extractDetectedScenesFromEnvelopes(envelopes: DataEnvelope[]): Detected
     // Step: clean_timeline (quality-gated unified timeline)
     if (stepId === 'clean_timeline') {
       const cleanTimelineTypeMapping: Record<string, SceneCategory> = {
-        'cold_start': 'cold_start',
-        'warm_start': 'warm_start',
-        'hot_start': 'hot_start',
-        'scroll': 'scroll',
-        'tap': 'tap',
-        'long_press': 'long_press',
-        'screen_on': 'screen_on',
-        'screen_off': 'screen_off',
-        'screen_sleep': 'screen_sleep',
-        'screen_unlock': 'screen_unlock',
-        'notification': 'notification',
-        'split_screen': 'split_screen',
-        'pip': 'navigation',
-        'app_switch': 'app_switch',
-        'home_screen': 'home_screen',
-        'app_foreground': 'app_foreground',
-        'back_key': 'back_key',
-        'home_key': 'home_key',
-        'recents_key': 'recents_key',
-        'anr': 'anr',
-        'ime_show': 'ime_show',
-        'ime_hide': 'ime_hide',
-        'window_transition': 'window_transition',
-        'idle': 'idle',
+        cold_start: 'cold_start',
+        warm_start: 'warm_start',
+        hot_start: 'hot_start',
+        scroll: 'scroll',
+        tap: 'tap',
+        long_press: 'long_press',
+        screen_on: 'screen_on',
+        screen_off: 'screen_off',
+        screen_sleep: 'screen_sleep',
+        screen_unlock: 'screen_unlock',
+        notification: 'notification',
+        split_screen: 'split_screen',
+        pip: 'navigation',
+        app_switch: 'app_switch',
+        home_screen: 'home_screen',
+        app_foreground: 'app_foreground',
+        back_key: 'back_key',
+        home_key: 'home_key',
+        recents_key: 'recents_key',
+        anr: 'anr',
+        ime_show: 'ime_show',
+        ime_hide: 'ime_hide',
+        window_transition: 'window_transition',
+        idle: 'idle',
       };
 
       for (const row of rows) {
@@ -5405,12 +5771,13 @@ function extractDetectedScenesFromEnvelopes(envelopes: DataEnvelope[]): Detected
     }
   }
 
-  const hasGestureLikeScene = scenes.some((scene) => (
-    scene.type === 'tap' ||
-    scene.type === 'scroll' ||
-    scene.type === 'long_press' ||
-    scene.type === 'inertial_scroll'
-  ));
+  const hasGestureLikeScene = scenes.some(
+    (scene) =>
+      scene.type === 'tap' ||
+      scene.type === 'scroll' ||
+      scene.type === 'long_press' ||
+      scene.type === 'inertial_scroll',
+  );
 
   if (!hasGestureLikeScene && jankRowsForFallback.length > 0) {
     const jankIntervals = aggregateJankFramesToIntervals(jankRowsForFallback);
@@ -5467,9 +5834,7 @@ function aggregateJankFramesToIntervals(rows: Array<Record<string, any>>): JankI
   });
 
   let currentStart = toBigInt(sortedRows[0].ts);
-  let currentEnd = currentStart !== null
-    ? currentStart + (toBigInt(sortedRows[0].dur) || 0n)
-    : null;
+  let currentEnd = currentStart !== null ? currentStart + (toBigInt(sortedRows[0].dur) || 0n) : null;
   let jankCount = 1;
   let severities: string[] = [String(sortedRows[0].jank_severity_type || '')];
 
@@ -5539,9 +5904,7 @@ function buildTrackEventsFromScenes(scenes: DetectedScene[]): TrackEvent[] {
     const displayName = SCENE_DISPLAY_NAMES[scene.type] || scene.type;
     const colorScheme = SCENE_COLOR_SCHEMES[scene.type] || 'system';
 
-    const appName = scene.appPackage
-      ? scene.appPackage.replace('com.', '').replace('android.', '')
-      : '';
+    const appName = scene.appPackage ? scene.appPackage.replace('com.', '').replace('android.', '') : '';
 
     let name = displayName;
     if (appName) name += ` [${appName}]`;
@@ -5570,7 +5933,7 @@ function buildTrackEventsFromScenes(scenes: DetectedScene[]): TrackEvent[] {
 }
 
 function fingerprintTrackEvents(events: TrackEvent[]): string {
-  return events.map(e => `${e.ts}:${e.dur}:${e.name}:${e.colorScheme}`).join('|');
+  return events.map((e) => `${e.ts}:${e.dur}:${e.name}:${e.colorScheme}`).join('|');
 }
 
 function payloadToObjectRowsLocal(payload: any): Array<Record<string, any>> {
@@ -5683,7 +6046,7 @@ type ClientFindingPayload = {
 
 function buildClientFindings(
   findings: AgentRuntimeAnalysisResult['findings'],
-  scenes: DetectedScene[]
+  scenes: DetectedScene[],
 ): ClientFindingPayload[] {
   const base: ClientFindingPayload[] = (findings || []).map((f: any) => ({
     id: String(f?.id || `finding_${Date.now()}`),
@@ -5724,10 +6087,7 @@ function buildClientFindings(
   return Array.from(dedup.values());
 }
 
-function buildSessionResultContract(
-  session: AnalysisSession,
-  findings: ClientFindingPayload[]
-) {
+function buildSessionResultContract(session: AnalysisSession, findings: ClientFindingPayload[]) {
   return buildAssistantResultContract({
     dataEnvelopes: session.dataEnvelopes,
     findings,
@@ -5751,10 +6111,7 @@ function deriveSceneIssueFindings(scenes: DetectedScene[]): ClientFindingPayload
   const derived: ClientFindingPayload[] = [];
   for (const item of inertialCandidates) {
     const s = item.scene;
-    const severity =
-      item.jankFrames >= 100 ? 'critical'
-        : item.jankFrames >= 40 ? 'warning'
-          : 'info';
+    const severity = item.jankFrames >= 100 ? 'critical' : item.jankFrames >= 40 ? 'warning' : 'info';
     const app = s.appPackage || 'unknown';
     const inertialStartNs = toBigInt(s.startTs);
     const inertialEndNs = toBigInt(s.endTs);
@@ -5802,11 +6159,7 @@ function deriveSceneIssueFindings(scenes: DetectedScene[]): ClientFindingPayload
 
 function isNoIssueText(text: string): boolean {
   const t = String(text || '').toLowerCase();
-  return (
-    t.includes('未发现明显性能问题') ||
-    t.includes('整体流畅度良好') ||
-    t.includes('分析未发现明显问题')
-  );
+  return t.includes('未发现明显性能问题') || t.includes('整体流畅度良好') || t.includes('分析未发现明显问题');
 }
 
 function hasIssueSignalText(text: string): boolean {
@@ -5899,16 +6252,16 @@ function buildSceneReplayNarrative(scenes: DetectedScene[]): string {
     return `${idx + 1}. [${startTs}] ${displayName}，持续 ${duration}${appText}，响应状态：${response}`;
   });
 
-  const extraLine = sorted.length > maxItems
-    ? `- 其余 ${sorted.length - maxItems} 个场景可在表格中继续查看。`
-    : '';
+  const extraLine = sorted.length > maxItems ? `- 其余 ${sorted.length - maxItems} 个场景可在表格中继续查看。` : '';
 
   return [
     `共还原 ${sorted.length} 个操作场景。以下为操作与设备响应事实回放（不含根因推断）：`,
     '',
     ...sequenceLines.map((line) => `- ${line}`),
     extraLine,
-  ].filter(Boolean).join('\n');
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 // Delegates to the shared normalizer so CLI's buildReportHtml gets identical
@@ -5920,15 +6273,17 @@ function normalizeNarrativeForClient(narrative: string): string {
 
 function conclusionHasEvidenceIndex(conclusion: string): boolean {
   const text = conclusion || '';
-  return /(^|\n)\s*##\s*证据(?:表)?索引\b/.test(text);
+  return /(^|\n)\s*##\s*证据(?:表)?索引\b/.test(text) || /(^|\n)\s*证据(?:表)?索引[:：]/.test(text);
 }
 
 function markdownCell(value: unknown, maxLen = 80): string {
-  return String(value ?? '')
-    .replace(/\s+/g, ' ')
-    .replace(/\|/g, '/')
-    .trim()
-    .slice(0, maxLen) || '-';
+  return (
+    String(value ?? '')
+      .replace(/\s+/g, ' ')
+      .replace(/\|/g, '/')
+      .trim()
+      .slice(0, maxLen) || '-'
+  );
 }
 
 function buildConclusionEvidenceIndex(envelopes: DataEnvelope[], maxItems = 3): string {
@@ -5956,14 +6311,14 @@ function buildConclusionEvidenceIndex(envelopes: DataEnvelope[], maxItems = 3): 
   if (candidates.length === 0) return '';
   const rows = candidates.slice(0, maxItems);
   const omitted = Math.max(0, candidates.length - rows.length);
-  const summary = rows
-    .map(item => `${item.title}（${item.source} / ${item.evidence}）`)
-    .join('；');
+  const summary = rows.map((item) => `${item.title}（${item.source} / ${item.evidence}）`).join('；');
   return [
     '## 证据索引',
     '',
     `关键数据来源：${summary}${omitted > 0 ? `；其余 ${omitted} 份结构化证据见报告数据详情。` : '。'}`,
-  ].filter(Boolean).join('\n');
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 function appendEvidenceIndexIfMissing(conclusion: string, envelopes: DataEnvelope[]): string {
@@ -5974,10 +6329,7 @@ function appendEvidenceIndexIfMissing(conclusion: string, envelopes: DataEnvelop
   return `${normalized.trim()}\n\n${evidenceIndex}`;
 }
 
-function augmentConclusionUpdateWithEvidenceIndex(
-  session: AnalysisSession,
-  update: StreamingUpdate,
-): StreamingUpdate {
+function augmentConclusionUpdateWithEvidenceIndex(session: AnalysisSession, update: StreamingUpdate): StreamingUpdate {
   if (update.type !== 'conclusion') return update;
   const content = update.content;
   if (!content || typeof content !== 'object' || Array.isArray(content)) return update;
@@ -6006,11 +6358,7 @@ function ensureAnalysisQualityArtifacts(
   const result = resultOverride || session.result;
   if (!result) return {};
 
-  if (
-    result.claimSupport &&
-    result.claimVerificationResult &&
-    result.identityResolutions
-  ) {
+  if (result.claimSupport && result.claimVerificationResult && result.identityResolutions) {
     session.claimSupport = result.claimSupport;
     session.claimVerificationResult = result.claimVerificationResult;
     session.identityResolutions = result.identityResolutions;
@@ -6075,16 +6423,17 @@ function collectEvidenceRefsFromClaimSupport(claimSupport: ClaimSupportV1[] | un
   return refs;
 }
 
-function currentRunEnvelopeCounts(session: AnalysisSession, runId?: string): {
+function currentRunEnvelopeCounts(
+  session: AnalysisSession,
+  runId?: string,
+): {
   currentRunDataEnvelopes: number;
   frontendPrequeryInjected: number;
 } {
   const run = resolveSessionRun(session, runId);
   const turn = run?.sequence || session.runSequence || session.activeRun?.sequence;
   const envelopes = session.dataEnvelopes || [];
-  const current = turn
-    ? envelopes.filter((env) => (env.meta as any)?.turn === turn)
-    : envelopes;
+  const current = turn ? envelopes.filter((env) => (env.meta as any)?.turn === turn) : envelopes;
   return {
     currentRunDataEnvelopes: current.length,
     frontendPrequeryInjected: current.filter((env) => env.meta?.source === 'frontend_trace_context').length,
@@ -6118,26 +6467,23 @@ function finalizeQuickRunReceipt(
   const textRefs = collectEvidenceRefsFromText(input.result.conclusion);
   const supportRefs = collectEvidenceRefsFromClaimSupport(input.qualityArtifacts.claimSupport);
   const citedRefs = new Set([...textRefs, ...supportRefs]);
-  const frontendPrequeryCited = [...citedRefs].filter(ref => ref.startsWith('data:frontend_prequery:')).length;
+  const frontendPrequeryCited = [...citedRefs].filter((ref) => ref.startsWith('data:frontend_prequery:')).length;
   const envelopeCounts = currentRunEnvelopeCounts(session, input.runId);
   const actualTurns = input.result.rounds || receipt.actualTurns;
   const extended = actualTurns > receipt.targetTurns;
   return {
     ...receipt,
-    profile: receipt.profile === 'triage'
-      ? 'triage'
-      : extended
-        ? 'extended'
-        : receipt.profile,
+    profile: receipt.profile === 'triage' ? 'triage' : extended ? 'extended' : receipt.profile,
     actualTurns,
     elapsedMs: input.result.totalDurationMs || receipt.elapsedMs,
-    stopReason: input.result.partial === true
-      ? receipt.stopReason === 'hard_cap' || receipt.stopReason === 'timeout'
-        ? receipt.stopReason
-        : 'partial'
-      : extended && receipt.stopReason === 'answered'
-        ? 'extended_answered'
-        : receipt.stopReason,
+    stopReason:
+      input.result.partial === true
+        ? receipt.stopReason === 'hard_cap' || receipt.stopReason === 'timeout'
+          ? receipt.stopReason
+          : 'partial'
+        : extended && receipt.stopReason === 'answered'
+          ? 'extended_answered'
+          : receipt.stopReason,
     evidence: {
       ...receipt.evidence,
       frontendPrequeryInjected: Math.max(
@@ -6172,6 +6518,8 @@ interface CompletedAnalysisResultPayload {
     identityResolutions?: IdentityResolutionV1[];
   };
   quickRun?: AgentRuntimeAnalysisResult['quickRun'];
+  analysisReceipt?: AgentRuntimeAnalysisResult['analysisReceipt'];
+  uiActionProposals?: AgentRuntimeAnalysisResult['uiActionProposals'];
   clientFindings: ReturnType<typeof buildClientFindings>;
   resultContract: ReturnType<typeof buildSessionResultContract>;
   finalArtifacts: CompletedAnalysisFinalArtifacts;
@@ -6190,14 +6538,19 @@ function ensureCompletedAnalysisFinalArtifacts(
   },
 ): CompletedAnalysisFinalArtifacts {
   const runId = input.runId;
-  const artifactCache = ((session as any).completedAnalysisFinalArtifactsByRunId ||= {}) as Record<string, CompletedAnalysisFinalArtifacts>;
+  const artifactCache = ((session as any).completedAnalysisFinalArtifactsByRunId ||= {}) as Record<
+    string,
+    CompletedAnalysisFinalArtifacts
+  >;
   const cached = runId
     ? artifactCache[runId]
-    : (session as any).completedAnalysisFinalArtifacts as CompletedAnalysisFinalArtifacts | undefined;
+    : ((session as any).completedAnalysisFinalArtifacts as CompletedAnalysisFinalArtifacts | undefined);
   if (cached) return cached;
 
   const result = input.result;
-  const finalArtifacts: CompletedAnalysisFinalArtifacts = { generatedAt: Date.now() };
+  const finalArtifacts: CompletedAnalysisFinalArtifacts = {
+    generatedAt: Date.now(),
+  };
   let reportId: string | undefined;
 
   if (!input.hasEvidenceBackedConclusion) {
@@ -6210,14 +6563,9 @@ function ensureCompletedAnalysisFinalArtifacts(
         const scope = leaseScopeFromSession(session);
         if (scope) {
           const traceInfo = getTraceProcessorService().getTrace(session.traceId);
-          const reportLeaseDecision = buildLeaseModeDecisionForTrace(
-            scope,
-            session.traceId,
-            'report_generation',
-            {
-              traceSizeBytes: traceInfo?.size,
-            },
-          );
+          const reportLeaseDecision = buildLeaseModeDecisionForTrace(scope, session.traceId, 'report_generation', {
+            traceSizeBytes: traceInfo?.size,
+          });
           reportLease = getTraceProcessorLeaseStore().acquireHolder(
             scope,
             session.traceId,
@@ -6239,9 +6587,29 @@ function ensureCompletedAnalysisFinalArtifacts(
       }
 
       const generator = getHTMLReportGenerator();
+      const reportUrl = `/api/reports/${reportId}`;
+      // Report generation needs a receipt before the final snapshot ID exists,
+      // so this projection is intentionally report-scoped.
+      const reportReceipt = buildAnalysisReceipt({
+        session,
+        result: input.resultForClient,
+        runId,
+        qualityArtifacts: input.qualityArtifacts,
+        quickRun: input.resultForClient.quickRun,
+        finalArtifacts: {
+          reportId,
+          reportUrl,
+          generatedAt: finalArtifacts.generatedAt,
+        },
+        providerId: session.providerId ?? null,
+      });
+      const resultForReport = {
+        ...input.resultForClient,
+        analysisReceipt: reportReceipt,
+      };
       const reportData = buildAgentDrivenReportData({
         session,
-        result: input.resultForClient as any,
+        result: resultForReport,
       });
       console.log(`[AgentRoutes] Generating HTML report, data keys:`, {
         hasResult: !!result,
@@ -6277,7 +6645,7 @@ function ensureCompletedAnalysisFinalArtifacts(
       });
 
       finalArtifacts.reportId = reportId;
-      finalArtifacts.reportUrl = `/api/reports/${reportId}`;
+      finalArtifacts.reportUrl = reportUrl;
       console.log(`[AgentRoutes] Generated agent-driven HTML report: ${reportId} (${html.length} bytes)`);
     } catch (error: any) {
       reportId = undefined;
@@ -6301,7 +6669,9 @@ function ensureCompletedAnalysisFinalArtifacts(
               finalArtifacts.reportId || reportId || 'report_generation',
             );
           } catch (releaseError: any) {
-            console.warn(`[AgentRoutes] Failed to release report_generation lease ${reportLease.id}: ${releaseError.message}`);
+            console.warn(
+              `[AgentRoutes] Failed to release report_generation lease ${reportLease.id}: ${releaseError.message}`,
+            );
           }
         }
       }
@@ -6310,6 +6680,17 @@ function ensureCompletedAnalysisFinalArtifacts(
 
   if (input.hasEvidenceBackedConclusion) {
     try {
+      // Snapshot persistence needs the latest report artifacts, but the
+      // snapshot ID is only known after persistCompletedAnalysisResultSnapshot.
+      const snapshotReceipt = buildAnalysisReceipt({
+        session,
+        result: input.resultForClient,
+        runId,
+        qualityArtifacts: input.qualityArtifacts,
+        quickRun: input.resultForClient.quickRun,
+        finalArtifacts,
+        providerId: session.providerId ?? null,
+      });
       const resultSnapshot = persistCompletedAnalysisResultSnapshot({
         tenantId: session.tenantId,
         workspaceId: session.workspaceId,
@@ -6330,6 +6711,8 @@ function ensureCompletedAnalysisFinalArtifacts(
         terminationReason: result.terminationReason,
         terminationMessage: result.terminationMessage,
         dataEnvelopes: session.dataEnvelopes,
+        analysisReceipt: snapshotReceipt,
+        uiActionProposals: input.resultForClient.uiActionProposals,
       });
       finalArtifacts.resultSnapshotId = resultSnapshot?.id;
       if (resultSnapshot) {
@@ -6368,6 +6751,7 @@ function ensureCompletedAnalysisResultPayload(
   session: AnalysisSession,
   runId?: string,
 ): CompletedAnalysisResultPayload | undefined {
+  const completedRunId = getCompletedResultRunId(session, runId);
   const result = session.result;
   if (!result) return undefined;
   const replayOnlyScene = isSceneReplayOnlyQuery(session.query);
@@ -6375,36 +6759,35 @@ function ensureCompletedAnalysisResultPayload(
   const isSmartResult = result.conclusionContract?.metadata?.sceneId === 'smart';
   const normalizedConclusion = replayOnlyScene
     ? buildSceneReplayNarrative(session.scenes || [])
-    : hasEvidenceBackedConclusion ? appendEvidenceIndexIfMissing(
-      normalizeNarrativeForClient(result.conclusion),
-      session.dataEnvelopes || [],
-    ) : normalizeNarrativeForClient(result.conclusion);
+    : hasEvidenceBackedConclusion
+      ? appendEvidenceIndexIfMissing(normalizeNarrativeForClient(result.conclusion), session.dataEnvelopes || [])
+      : normalizeNarrativeForClient(result.conclusion);
   const sceneIdHint = replayOnlyScene
     ? undefined
     : resolveConclusionSceneIdHint({
-      sessionId: session.sessionId,
-      query: session.query,
-      findings: result.findings,
-    });
+        sessionId: session.sessionId,
+        query: session.query,
+        findings: result.findings,
+      });
   const normalizedConclusionContract = replayOnlyScene
     ? undefined
     : isSmartResult
-      ? result.conclusionContract as ConclusionContract
-    : hasEvidenceBackedConclusion ? (
-      deriveEvidenceBackedConclusionContractForNarrative(result.conclusion, session.dataEnvelopes || [], {
-        existingContract: result.conclusionContract as ConclusionContract | undefined,
-        mode: result.rounds > 1 ? 'focused_answer' : 'initial_report',
-        sceneId: sceneIdHint,
-      }) ||
-      undefined
-    ) : undefined;
-  const qualityArtifacts = hasEvidenceBackedConclusion && !replayOnlyScene
-    ? ensureAnalysisQualityArtifacts(session, normalizedConclusionContract)
-    : {};
+      ? (result.conclusionContract as ConclusionContract)
+      : hasEvidenceBackedConclusion
+        ? deriveEvidenceBackedConclusionContractForNarrative(result.conclusion, session.dataEnvelopes || [], {
+            existingContract: result.conclusionContract as ConclusionContract | undefined,
+            mode: result.rounds > 1 ? 'focused_answer' : 'initial_report',
+            sceneId: sceneIdHint,
+          }) || undefined
+        : undefined;
+  const qualityArtifacts =
+    hasEvidenceBackedConclusion && !replayOnlyScene
+      ? ensureAnalysisQualityArtifacts(session, normalizedConclusionContract)
+      : {};
   let quickRun = finalizeQuickRunReceipt(session, {
     result,
     qualityArtifacts,
-    runId,
+    runId: completedRunId,
   });
   if (quickRun) {
     result.quickRun = quickRun;
@@ -6413,7 +6796,10 @@ function ensureCompletedAnalysisResultPayload(
     result.conclusionContract = normalizedConclusionContract;
   }
   if (!replayOnlyScene) {
-    const readPathQualityIssue = applyFinalResultQualityGate({ result, query: session.query });
+    const readPathQualityIssue = applyFinalResultQualityGate({
+      result,
+      query: session.query,
+    });
     if (readPathQualityIssue) {
       sessionContextManager.get(session.sessionId, session.traceId)?.annotateLatestCompletedTurn({
         success: result.success,
@@ -6431,28 +6817,40 @@ function ensureCompletedAnalysisResultPayload(
       quickRun = finalizeQuickRunReceipt(session, {
         result,
         qualityArtifacts,
-        runId,
+        runId: completedRunId,
       });
       if (quickRun) {
         result.quickRun = quickRun;
       }
     }
   }
-  const resultForClient =
+  let resultForClient: AgentRuntimeAnalysisResult =
     normalizedConclusion === result.conclusion &&
-      normalizedConclusionContract === result.conclusionContract &&
-      qualityArtifacts.claimSupport === result.claimSupport &&
-      qualityArtifacts.claimVerificationResult === result.claimVerificationResult &&
-      qualityArtifacts.identityResolutions === result.identityResolutions &&
-      quickRun === result.quickRun
+    normalizedConclusionContract === result.conclusionContract &&
+    qualityArtifacts.claimSupport === result.claimSupport &&
+    qualityArtifacts.claimVerificationResult === result.claimVerificationResult &&
+    qualityArtifacts.identityResolutions === result.identityResolutions &&
+    quickRun === result.quickRun
       ? result
       : {
-        ...result,
-        conclusion: normalizedConclusion,
-        conclusionContract: normalizedConclusionContract,
-        ...qualityArtifacts,
-        quickRun,
-      };
+          ...result,
+          conclusion: normalizedConclusion,
+          conclusionContract: normalizedConclusionContract,
+          ...qualityArtifacts,
+          quickRun,
+        };
+  const uiActionProposals = replayOnlyScene
+    ? []
+    : deriveUiActionProposals({
+        dataEnvelopes: session.dataEnvelopes || [],
+        currentTraceId: session.traceId,
+        existingProposals: result.uiActionProposals,
+      });
+  result.uiActionProposals = uiActionProposals;
+  resultForClient = {
+    ...resultForClient,
+    uiActionProposals,
+  };
   const clientFindings = replayOnlyScene ? [] : buildClientFindings(result.findings, session.scenes || []);
   const resultContract = buildSessionResultContract(session, clientFindings);
   const finalArtifacts = ensureCompletedAnalysisFinalArtifacts(session, {
@@ -6462,8 +6860,22 @@ function ensureCompletedAnalysisResultPayload(
     normalizedConclusionContract,
     qualityArtifacts,
     resultForClient: resultForClient as AgentRuntimeAnalysisResult,
-    runId,
+    runId: completedRunId,
   });
+  const analysisReceipt = buildAnalysisReceipt({
+    session,
+    result: resultForClient,
+    runId: completedRunId,
+    qualityArtifacts,
+    quickRun,
+    finalArtifacts,
+    providerId: session.providerId ?? null,
+  });
+  result.analysisReceipt = analysisReceipt;
+  resultForClient = {
+    ...resultForClient,
+    analysisReceipt,
+  };
   return {
     result,
     replayOnlyScene,
@@ -6471,6 +6883,8 @@ function ensureCompletedAnalysisResultPayload(
     normalizedConclusionContract,
     qualityArtifacts,
     quickRun,
+    analysisReceipt,
+    uiActionProposals,
     clientFindings,
     resultContract,
     finalArtifacts,
@@ -6481,31 +6895,31 @@ function ensureCompletedAnalysisResultPayload(
  * Send agent-driven analysis result to SSE client
  */
 function ensureCompletedAnalysisSseEvents(session: AnalysisSession, runId?: string): BufferedSseEvent[] {
-  const sseCache = ((session as any).completedAnalysisSseEventsByRunId ||= {}) as Record<string, {
-    qualityGateVersion?: number;
-    events: BufferedSseEvent[];
-  }>;
-  const runCache = runId ? sseCache[runId] : undefined;
-  const cached = runId
+  const completedRunId = getCompletedResultRunId(session, runId);
+  const sseCache = ((session as any).completedAnalysisSseEventsByRunId ||= {}) as Record<
+    string,
+    {
+      qualityGateVersion?: number;
+      events: BufferedSseEvent[];
+    }
+  >;
+  const runCache = completedRunId ? sseCache[completedRunId] : undefined;
+  const cached = completedRunId
     ? runCache?.events
-    : (session as any).completedAnalysisSseEvents as BufferedSseEvent[] | undefined;
-  const cachedVersion = runId
+    : ((session as any).completedAnalysisSseEvents as BufferedSseEvent[] | undefined);
+  const cachedVersion = completedRunId
     ? runCache?.qualityGateVersion
     : (session as any).completedAnalysisSseEventsQualityGateVersion;
-  if (
-    cached?.length &&
-    cachedVersion ===
-      COMPLETED_ANALYSIS_SSE_EVENTS_QUALITY_GATE_VERSION
-  ) {
+  if (cached?.length && cachedVersion === COMPLETED_ANALYSIS_SSE_EVENTS_QUALITY_GATE_VERSION) {
     return cached;
   }
 
-  const completedPayload = ensureCompletedAnalysisResultPayload(session, runId);
+  const completedPayload = ensureCompletedAnalysisResultPayload(session, completedRunId);
   if (!completedPayload) {
-    const persisted = loadPersistedCompletedAnalysisSseEvents(session, runId);
+    const persisted = loadPersistedCompletedAnalysisSseEvents(session, completedRunId);
     if (persisted.length > 0) {
-      if (runId) {
-        sseCache[runId] = { events: persisted };
+      if (completedRunId) {
+        sseCache[completedRunId] = { events: persisted };
       } else {
         (session as any).completedAnalysisSseEvents = persisted;
         delete (session as any).completedAnalysisSseEventsQualityGateVersion;
@@ -6520,119 +6934,173 @@ function ensureCompletedAnalysisSseEvents(session: AnalysisSession, runId?: stri
     normalizedConclusionContract,
     qualityArtifacts,
     quickRun,
+    analysisReceipt,
+    uiActionProposals,
     clientFindings,
     resultContract,
     finalArtifacts,
   } = completedPayload;
-  const observability = buildStreamObservability(session, runId);
+  const observability = buildStreamObservability(session, completedRunId);
   const events: BufferedSseEvent[] = [];
+  const progressEvent =
+    latestBufferedProgressEvent(session, completedRunId) ??
+    appendAndPersistReplayableSessionEvent(
+      session,
+      'progress',
+      {
+        type: 'progress',
+        architecture: 'agent-driven',
+        ...observability,
+        data: {
+          phase: 'completed',
+          message: localize(
+            parseOutputLanguage(process.env.SMARTPERFETTO_OUTPUT_LANGUAGE),
+            '分析已完成。',
+            'Analysis completed.',
+          ),
+        },
+        timestamp: Date.now(),
+      },
+      completedRunId,
+    );
+  events.push(progressEvent);
+
   if (finalArtifacts.resultSnapshotEventData) {
-    events.push(appendAndPersistReplayableSessionEvent(session, 'snapshot_created', {
-      type: 'snapshot_created',
-      architecture: 'agent-driven',
-      ...observability,
-      data: finalArtifacts.resultSnapshotEventData,
-      timestamp: Date.now(),
-    }, runId));
+    events.push(
+      appendAndPersistReplayableSessionEvent(
+        session,
+        'snapshot_created',
+        {
+          type: 'snapshot_created',
+          architecture: 'agent-driven',
+          ...observability,
+          data: finalArtifacts.resultSnapshotEventData,
+          timestamp: Date.now(),
+        },
+        completedRunId,
+      ),
+    );
   }
 
   // Send analysis_completed event with full result. Keep it replayable so a
   // reconnect between conclusion and report generation can recover reportUrl.
-  events.push(appendAndPersistReplayableSessionEvent(session, 'analysis_completed', {
-    type: 'analysis_completed',
-    architecture: 'agent-driven',
-    ...observability,
-    data: {
-      conclusion: normalizedConclusion,
-      conclusionContract: normalizedConclusionContract,
-      claimSupport: qualityArtifacts.claimSupport,
-      claimVerificationResult: qualityArtifacts.claimVerificationResult,
-      identityResolutions: qualityArtifacts.identityResolutions,
-      confidence: result.confidence,
-      rounds: result.rounds,
-      totalDurationMs: result.totalDurationMs,
-      partial: result.partial,
-      terminationReason: result.terminationReason,
-      terminationMessage: result.terminationMessage,
-      quickRun,
-      smartScenePreview: result.smartScenePreview,
-      findings: clientFindings,
-      resultContract,
-      hypotheses: result.hypotheses.map((h: AgentRuntimeAnalysisResult['hypotheses'][number]) => ({
-        id: h.id,
-        description: h.description,
-        status: h.status,
-        confidence: h.confidence,
-        supportingEvidence: h.supportingEvidence,
-        contradictingEvidence: h.contradictingEvidence,
-      })),
-      agentDialogueCount: session.agentDialogue.length,
-      conversationTimelineCount: session.conversationSteps.length,
-      conversationTimeline: session.conversationSteps,
-      reportUrl: finalArtifacts.reportUrl,
-      reportError: finalArtifacts.reportError,
-      comparisonReportSection: session.comparisonReportSection
-        ? {
-          source: session.comparisonReportSection.source,
-          title: session.comparisonReportSection.title,
-          markdown: session.comparisonReportSection.markdown,
-          limitations: session.comparisonReportSection.limitations,
-          evidencePack: session.comparisonReportSection.evidencePack,
-        }
-        : undefined,
-      resultSnapshotId: finalArtifacts.resultSnapshotId,
-      observability,
-      terminalRunStatus: session.status === 'quota_exceeded' ? 'quota_exceeded' : 'completed',
-    },
-    timestamp: Date.now(),
-  }, runId));
+  events.push(
+    appendAndPersistReplayableSessionEvent(
+      session,
+      'analysis_completed',
+      {
+        type: 'analysis_completed',
+        architecture: 'agent-driven',
+        ...observability,
+        data: {
+          conclusion: normalizedConclusion,
+          conclusionContract: normalizedConclusionContract,
+          claimSupport: qualityArtifacts.claimSupport,
+          claimVerificationResult: qualityArtifacts.claimVerificationResult,
+          identityResolutions: qualityArtifacts.identityResolutions,
+          confidence: result.confidence,
+          rounds: result.rounds,
+          totalDurationMs: result.totalDurationMs,
+          partial: result.partial,
+          terminationReason: result.terminationReason,
+          terminationMessage: result.terminationMessage,
+          quickRun,
+          analysisReceipt,
+          uiActionProposals,
+          smartScenePreview: result.smartScenePreview,
+          findings: clientFindings,
+          resultContract,
+          hypotheses: result.hypotheses.map((h: AgentRuntimeAnalysisResult['hypotheses'][number]) => ({
+            id: h.id,
+            description: h.description,
+            status: h.status,
+            confidence: h.confidence,
+            supportingEvidence: h.supportingEvidence,
+            contradictingEvidence: h.contradictingEvidence,
+          })),
+          agentDialogueCount: session.agentDialogue.length,
+          conversationTimelineCount: session.conversationSteps.length,
+          conversationTimeline: session.conversationSteps,
+          reportUrl: finalArtifacts.reportUrl,
+          reportError: finalArtifacts.reportError,
+          comparisonReportSection: session.comparisonReportSection
+            ? {
+                source: session.comparisonReportSection.source,
+                title: session.comparisonReportSection.title,
+                markdown: session.comparisonReportSection.markdown,
+                limitations: session.comparisonReportSection.limitations,
+                evidencePack: session.comparisonReportSection.evidencePack,
+              }
+            : undefined,
+          resultSnapshotId: finalArtifacts.resultSnapshotId,
+          observability,
+          terminalRunStatus: session.status === 'quota_exceeded' ? 'quota_exceeded' : 'completed',
+        },
+        timestamp: Date.now(),
+      },
+      completedRunId,
+    ),
+  );
 
   // Backward-compatible scene reconstruction payload (used by the legacy /scene-reconstruct clients).
   if ((session.scenes?.length || 0) > 0 || (session.trackEvents?.length || 0) > 0) {
-    events.push(appendAndPersistReplayableSessionEvent(session, 'scene_reconstruction_completed', {
-      type: 'scene_reconstruction_completed',
-      ...observability,
-      data: {
-        narrative: normalizedConclusion,
-        confidence: result.confidence,
-        executionTimeMs: result.totalDurationMs,
-        scenes: (session.scenes || []).map((s) => ({
-          type: s.type,
-          startTs: s.startTs,
-          endTs: s.endTs,
-          durationMs: s.durationMs,
-          confidence: s.confidence,
-          appPackage: s.appPackage,
-        })),
-        trackEvents: session.trackEvents || [],
-        findings: clientFindings.map((f) => ({
-          id: f.id,
-          category: f.category,
-          severity: f.severity,
-          title: f.title,
-          description: f.description,
-          timestampsNs: f.timestampsNs,
-        })),
-        suggestions: [],
-        observability,
-      },
-      timestamp: Date.now(),
-    }, runId));
+    events.push(
+      appendAndPersistReplayableSessionEvent(
+        session,
+        'scene_reconstruction_completed',
+        {
+          type: 'scene_reconstruction_completed',
+          ...observability,
+          data: {
+            narrative: normalizedConclusion,
+            confidence: result.confidence,
+            executionTimeMs: result.totalDurationMs,
+            scenes: (session.scenes || []).map((s) => ({
+              type: s.type,
+              startTs: s.startTs,
+              endTs: s.endTs,
+              durationMs: s.durationMs,
+              confidence: s.confidence,
+              appPackage: s.appPackage,
+            })),
+            trackEvents: session.trackEvents || [],
+            findings: clientFindings.map((f) => ({
+              id: f.id,
+              category: f.category,
+              severity: f.severity,
+              title: f.title,
+              description: f.description,
+              timestampsNs: f.timestampsNs,
+            })),
+            suggestions: [],
+            observability,
+          },
+          timestamp: Date.now(),
+        },
+        completedRunId,
+      ),
+    );
   }
 
-  events.push(appendAndPersistReplayableSessionEvent(session, 'end', {
-    timestamp: Date.now(),
-    ...observability,
-  }, runId));
-  if (runId) {
-    sseCache[runId] = {
+  events.push(
+    appendAndPersistReplayableSessionEvent(
+      session,
+      'end',
+      {
+        timestamp: Date.now(),
+        ...observability,
+      },
+      completedRunId,
+    ),
+  );
+  if (completedRunId) {
+    sseCache[completedRunId] = {
       events,
       qualityGateVersion: COMPLETED_ANALYSIS_SSE_EVENTS_QUALITY_GATE_VERSION,
     };
   } else {
     (session as any).completedAnalysisSseEvents = events;
-    (session as any).completedAnalysisSseEventsQualityGateVersion =
-      COMPLETED_ANALYSIS_SSE_EVENTS_QUALITY_GATE_VERSION;
+    (session as any).completedAnalysisSseEventsQualityGateVersion = COMPLETED_ANALYSIS_SSE_EVENTS_QUALITY_GATE_VERSION;
   }
   return events;
 }

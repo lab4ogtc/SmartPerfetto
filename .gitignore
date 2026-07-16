@@ -136,6 +136,7 @@ Feature-Dev/
 todo.md
 docs/superpowers/spark/
 docs/spark.md
+docs/archive/local-scratch/
 
 # ===================
 # Presentations (internal, not for public)
@@ -177,3 +178,11 @@ backend/data/self_improve/
 # ===================
 .superset/
 providers.json
+
+# Local E2E evidence (may contain Trace-derived data and machine paths)
+/output/
+.gstack/
+
+# Trace corpus private staging and materialized constructed outputs
+/Trace/real/.private/
+/Trace/.generated/

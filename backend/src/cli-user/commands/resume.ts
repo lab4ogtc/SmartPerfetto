@@ -38,8 +38,8 @@ export async function runResumeCommand(args: ResumeCommandArgs): Promise<number>
     await withConsoleLogToStderr(renderer.format !== 'text', async () => {
       const { config } = loadSession(paths, args.sessionId);
       assertAnalysisRuntimeReady(config
-        ? { providerId: config.providerId, runtimeOverride: config.agentRuntimeKind }
-        : {});
+        ? { providerId: config.providerId, runtimeOverride: config.agentRuntimeKind, aiFeature: 'agent_resume' }
+        : { aiFeature: 'agent_resume' });
       const turn = await continueSession({ paths, service, renderer }, {
         sessionId: args.sessionId,
         query: args.query,

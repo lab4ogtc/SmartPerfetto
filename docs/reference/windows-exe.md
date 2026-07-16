@@ -130,8 +130,9 @@ C:\SmartPerfettoSmoke\smartperfetto-v1.0.1-windows-x64\SmartPerfetto.exe
 - [http://localhost:3000/health](http://localhost:3000/health) 返回 `status: "OK"`。
 - 上传一条小 trace 后，后端日志里能看到 `trace_processor_shell.exe` 启动。
 
-如果默认端口被本机其他服务占用，启动可执行文件前设置
-`SMARTPERFETTO_BACKEND_PORT` 或 `SMARTPERFETTO_FRONTEND_PORT`。
+launcher 优先使用后端端口 `3000`、前端端口 `10000`，默认端口被占用时会自动选择其他可用端口。
+以 launcher 打印的 URL 为准。只有需要固定端口时才设置 `SMARTPERFETTO_BACKEND_PORT`
+或 `SMARTPERFETTO_FRONTEND_PORT`；显式配置的端口不可用时会快速失败。
 
 ## 限制
 

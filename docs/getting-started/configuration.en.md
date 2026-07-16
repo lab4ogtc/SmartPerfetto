@@ -95,7 +95,7 @@ Xiaomi MiMo Token Plan example. The two blocks below are alternatives; do not pa
 ANTHROPIC_BASE_URL=https://token-plan-sgp.xiaomimimo.com/anthropic
 ANTHROPIC_API_KEY=your_xiaomi_mimo_api_key_here
 CLAUDE_MODEL=mimo-v2.5-pro
-CLAUDE_LIGHT_MODEL=mimo-v2.5-pro
+CLAUDE_LIGHT_MODEL=mimo-v2.5
 ```
 
 ```bash
@@ -105,7 +105,7 @@ OPENAI_BASE_URL=https://token-plan-sgp.xiaomimimo.com/v1
 OPENAI_API_KEY=your_xiaomi_mimo_api_key_here
 OPENAI_AGENTS_PROTOCOL=chat_completions
 OPENAI_MODEL=mimo-v2.5-pro
-OPENAI_LIGHT_MODEL=mimo-v2.5-pro
+OPENAI_LIGHT_MODEL=mimo-v2.5
 ```
 
 Provider model catalogs, Base URLs, and plan permissions can change; if your account console lists a different model ID or dedicated domain, replace the corresponding fields.
@@ -115,21 +115,21 @@ The table below is a manual-env and troubleshooting reference, not a checklist y
 | Provider | Claude / Anthropic-compatible Base URL | OpenAI-compatible Base URL | Recommended main model | Recommended light model |
 |---|---|---|---|---|
 | DeepSeek | `https://api.deepseek.com/anthropic` | `https://api.deepseek.com/v1` | `deepseek-v4-pro` | `deepseek-v4-flash` |
-| GLM / Zhipu | `https://open.bigmodel.cn/api/anthropic` | `https://open.bigmodel.cn/api/paas/v4` | `glm-5.1` | `glm-4.5-air` |
-| Qwen / Bailian pay-as-you-go | `https://dashscope.aliyuncs.com/apps/anthropic` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3.6-plus` | `qwen3.6-flash` |
+| GLM / Zhipu | `https://open.bigmodel.cn/api/anthropic` | `https://open.bigmodel.cn/api/paas/v4` | `glm-5-turbo` | `glm-4.7-flashx` |
+| Qwen / Bailian pay-as-you-go | `https://dashscope.aliyuncs.com/apps/anthropic` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3.7-plus` | `qwen3.6-flash` |
 | Qwen Coding Plan | `https://coding-intl.dashscope.aliyuncs.com/apps/anthropic` | `https://coding-intl.dashscope.aliyuncs.com/v1` | `qwen3-coder-plus` | `qwen3-coder-plus` |
 | Kimi Code membership | `https://api.kimi.com/coding/` | `https://api.kimi.com/coding/v1` | `kimi-for-coding` | `kimi-for-coding` |
-| Kimi / Moonshot platform | `https://api.moonshot.cn/anthropic` | `https://api.moonshot.cn/v1` | `kimi-k2.5` | `kimi-k2.5` |
+| Kimi / Moonshot platform | `https://api.moonshot.cn/anthropic` | `https://api.moonshot.cn/v1` | `kimi-k2.7-code-highspeed` | `kimi-k2.7-code-highspeed` |
 | Doubao / Volcano Ark Coding Plan | `https://ark.cn-beijing.volces.com/api/coding` | `https://ark.cn-beijing.volces.com/api/coding/v3` | `doubao-seed-2.0-code` | `doubao-seed-2.0-code` |
-| MiniMax China | `https://api.minimaxi.com/anthropic` | `https://api.minimaxi.com/v1` | `MiniMax-M2.7` | `MiniMax-M2.7` |
-| Xiaomi MiMo Token Plan | `https://token-plan-sgp.xiaomimimo.com/anthropic` | `https://token-plan-sgp.xiaomimimo.com/v1` | `mimo-v2.5-pro` | `mimo-v2.5-pro` |
+| MiniMax China | `https://api.minimaxi.com/anthropic` | `https://api.minimaxi.com/v1` | `MiniMax-M3` | `MiniMax-M3` |
+| Xiaomi MiMo Token Plan | `https://token-plan-sgp.xiaomimimo.com/anthropic` | `https://token-plan-sgp.xiaomimimo.com/v1` | `mimo-v2.5-pro` | `mimo-v2.5` |
 | Tencent TokenHub Token Plan | `https://api.lkeap.cloud.tencent.com/plan/anthropic` | `https://api.lkeap.cloud.tencent.com/plan/v3` | `tc-code-latest` | `tc-code-latest` |
 | Tencent TokenHub Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/anthropic` | `https://api.lkeap.cloud.tencent.com/coding/v3` | `tc-code-latest` | `tc-code-latest` |
 | Tencent Hunyuan legacy | `https://api.hunyuan.cloud.tencent.com/anthropic` | `https://api.hunyuan.cloud.tencent.com/v1` | `hunyuan-2.0-thinking-20251109` | `hunyuan-2.0-instruct-20251111` |
 | Baidu Qianfan | `https://qianfan.baidubce.com/anthropic` | `https://qianfan.baidubce.com/v2` | `deepseek-v3.2` | `deepseek-v3.2` |
-| StepFun Step Plan | `https://api.stepfun.com/step_plan` | `https://api.stepfun.com/step_plan/v1` | `step-3.5-flash-2603` | `step-3.5-flash` |
-| SiliconFlow | `https://api.siliconflow.com/` | `https://api.siliconflow.com/v1` | `Qwen/Qwen3-235B-A22B-Thinking-2507` | `Qwen/Qwen3-30B-A3B-Instruct-2507` |
-| Huawei Cloud ModelArts MaaS | `https://api.modelarts-maas.com/anthropic` | `https://api.modelarts-maas.com/v1` | `deepseek-v3.2` | `qwen3-32b` |
+| StepFun Step Plan | `https://api.stepfun.com/step_plan` | `https://api.stepfun.com/step_plan/v1` | `step-3.7-flash` | `step-3.5-flash` |
+| SiliconFlow | `https://api.siliconflow.com/` | `https://api.siliconflow.com/v1` | `Qwen/Qwen3-235B-A22B-Instruct-2507` | `Qwen/Qwen3-30B-A3B-Instruct-2507` |
+| Huawei Cloud ModelArts MaaS | `https://api.modelarts-maas.com/anthropic` | `https://api.modelarts-maas.com/v1` | `deepseek-v4-pro` | `deepseek-v4-flash` |
 
 Provider docs may use `ANTHROPIC_MODEL` / `ANTHROPIC_DEFAULT_HAIKU_MODEL`, but SmartPerfetto uses `CLAUDE_MODEL` / `CLAUDE_LIGHT_MODEL`. Models must reliably support streaming output and tool/function calling.
 
@@ -140,7 +140,7 @@ SMARTPERFETTO_AGENT_RUNTIME=openai-agents-sdk
 OPENAI_API_KEY=sk-your-openai-key
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_AGENTS_PROTOCOL=responses
-OPENAI_MODEL=gpt-5.5
+OPENAI_MODEL=gpt-5.4-mini
 OPENAI_LIGHT_MODEL=gpt-5.4-mini
 ```
 
@@ -240,6 +240,7 @@ Read these `/health` fields before debugging provider complaints:
 | `aiEngine.providerOverridesEnv` | `true` means `.env` changes will not affect analysis until the active provider is disabled |
 | `aiEngine.runtime` | Must be `claude-agent-sdk`, `openai-agents-sdk`, `pi-agent-core`, or `opencode`, not a provider name |
 | `aiEngine.providerMode` | Shows the effective connection family, such as `anthropic_compatible_proxy` or `openai_chat_completions_compatible` |
+| `aiPolicy.aiEnabled` / `aiEngine.aiEnabled` | `false` means model-backed analysis is disabled; `aiPolicy.disabledReason` explains the source |
 
 `aiEngine.providerMode` can be:
 
@@ -254,6 +255,28 @@ Read these `/health` fields before debugging provider complaints:
 | `pi-agent-core` | Uses Pi Agent Core custom model JSON through the shared SmartPerfetto analysis pipeline |
 | `opencode` | Uses OpenCode custom model JSON or OpenAI-compatible fields through the shared SmartPerfetto analysis pipeline |
 | `unconfigured` | No explicit env credentials; if local `claude` works, the SDK can still use Claude Code local auth/config during analysis |
+
+### Temporarily Disable Model-Backed Analysis
+
+To keep trace reads, SQL, reports, Provider configuration, and deterministic
+Skills available while blocking all model calls, set:
+
+```bash
+SMARTPERFETTO_AI_ENABLED=false
+```
+
+When the variable is absent, AI is enabled by default. Explicit values accept
+`1/0`, `true/false`, `yes/no`, `on/off`, and `enabled/disabled`; invalid values
+fail closed and are reported through `/health.aiPolicy.env.valid=false` and
+`smp doctor`.
+
+Still available while disabled: trace upload/read, SQL queries, capture config
+proposals, Android capture without `--analyze`, report reads, Provider profile
+list/edit/activate/runtime switching, and deterministic Skills that do not call
+an LLM. Blocked: agent analyze/resume, cold scene reconstruction start,
+Provider connection tests, `smp provider test`, `smp capture android --analyze`,
+and LLM Skill steps. Blocked responses include `code: "AI_DISABLED"` and
+`retryable: false`.
 
 ## Budgets and Timeouts
 
@@ -334,6 +357,14 @@ TRACE_PROCESSOR_DOWNLOAD_URL=https://your-mirror/trace_processor_shell ./start.s
 ```
 
 Mirror downloads are still checked against the SHA256 pinned in `scripts/trace-processor-pin.env`.
+
+## Optional Android Internals Knowledge
+
+External Wiki paths are denied by default. `SMARTPERFETTO_KNOWLEDGE_ROOTS`
+only establishes the path allowlist; an operator must still acknowledge usage
+rights, grant provider-send consent, build the index through the API, and select
+the source in each analysis `knowledgeSourceIds` list. See
+[Android Internals External Knowledge](android-internals-knowledge.en.md).
 
 ## Rate Limiting
 

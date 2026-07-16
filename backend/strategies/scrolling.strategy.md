@@ -46,6 +46,9 @@ keywords:
   - frame drops
   - dropped frame
   - dropped frames
+  - resync
+  - resynced
+  - App Resynced Jitter
   - janky
   - 不流畅
   - impeller
@@ -116,10 +119,15 @@ phase_hints:
     critical_tools: ['scrolling_analysis', 'flutter_scrolling_analysis', 'textureview_producer_frame_timing', 'webview_drawfunctor_jank_chain', 'rn_bridge_to_frame_jank', 'rn_fabric_render_jank', 'gl_standalone_swap_jank', 'compose_recomposition_hotspot', 'surfaceflinger_analysis']
     critical: false
   - id: display_pipeline_boundary
-    keywords: ['BufferQueue', 'BLAST', 'dequeueBuffer', 'queueBuffer', 'SurfaceFlinger', 'HWC', 'acquire fence', 'present fence', 'release fence', 'refresh rate', '刷新率', 'ARR', 'VRR', 'FrameTimeline', 'sf_backpressure', 'gpu_fence_wait']
+    keywords: ['BufferQueue', 'BLAST', 'dequeueBuffer', 'queueBuffer', 'SurfaceFlinger', 'HWC', 'acquire fence', 'present fence', 'release fence', 'refresh rate', '刷新率', 'ARR', 'VRR', 'FrameTimeline', 'sf_backpressure', 'gpu_fence_wait', 'resync', 'resynced', 'App Resynced Jitter']
     constraints: '当掉帧证据涉及 BufferQueue、Fence、SF/HWC、Buffer Stuffing、隐形掉帧或刷新率变化时，必须把 App/RenderThread、BufferQueue queue/dequeue/latch、SF commit/composite/present、HWC/display 与 acquire/present/release fence 拆开。queueBuffer 快不等于已上屏；dequeueBuffer 等待更接近 release fence/backpressure；刷新率/ARR/VRR 要用实际 VSync 周期，不默认 16.6ms。'
     critical_tools: ['surfaceflinger_analysis', 'buffer_transaction_lifecycle', 'fence_wait_decomposition', 'present_fence_timing', 'vsync_config']
     critical: false
+  - id: resync_sf_backlog
+    keywords: ['resync', 'resynced', 'App Resynced Jitter', 'Choreographer#doFrame - resynced', 'SF没合成', '没有合成', '后面针堆积', '帧堆积', 'backlog']
+    constraints: '命中 Choreographer#doFrame - resynced 或 App Resynced Jitter 时，先把它当作 Choreographer 因回调迟到/相位漂移而切到后续 VSync 的 marker，不要当作独立 doFrame 或普通业务耗时重复计数。必须继续核对 FrameTimeline 的 jank_type、present_type、vsync_resynced_jitter_millis、同 layer display/surface frame token 连续性、present_ts 间隔和 SF actual/display frame；只有存在 SF actual frame 缺失/late、SF jank_type、present gap 或 dropped display frame 证据时，才能说 SF 未合成对应帧。否则按 App resync/jitter、BufferQueue 背压或 App 未按时产帧描述，并说明 SF 结论证据不足。'
+    critical_tools: ['scrolling_analysis', 'jank_frame_detail', 'consumer_jank_detection', 'frame_production_gap', 'surfaceflinger_analysis']
+    critical: true
   - id: conclusion
     keywords: ['结论', 'conclusion', '输出', 'output', '报告', 'report', '总结']
     constraints: '输出必须包含：全帧根因分布表（按 reason_code 聚合）+ 代表帧分析（含四象限+频率+根因推理链）+ 按优先级排序的优化建议。每个 CRITICAL/HIGH 必须有量化证据+因果链。若深钻证据纠正了 batch reason_code（例如 lock_binder_wait 但 binder_overlap_ms=0，render_slices_json 指向 cache_miss/makePipeline/shader 编译），最终结论必须使用纠正后的根因命名，并明确标注原 reason_code 为误分类。'
@@ -187,7 +195,7 @@ plan_template:
 2. Artifact read: 用 `fetch_artifact` 读取 batch/root-cause/代表帧 artifact；summary 或前 50 行不足以定根因。
 3. Root-cause drill: 对主要 reason_code 选最严重代表帧，执行 `jank_frame_detail` + `frame_blocking_calls` + `blocking_chain_analysis`；workload_heavy 只能最后兜底。
 4. Conditional branches: TextureView/WebView/RN/GL/Compose/Flutter/mixed 命中时，`submit_plan` 必须在 `expectedCalls` 写入对应 producer/embedded/SF skill（Flutter 用 `invoke_skill(flutter_scrolling_analysis)`）；缺信号时执行阶段再 `skipped + reason`，不能在 plan 阶段 waiver 掉。
-5. Display boundary: BufferQueue/Fence/SF/HWC/刷新率相关时拆 App/RT、queue/dequeue/latch、SF commit/composite/present、fence；不要默认 16.6ms。
+5. Display boundary: BufferQueue/Fence/SF/HWC/刷新率/resync 相关时拆 App/RT、queue/dequeue/latch、SF commit/composite/present、fence；不要默认 16.6ms。
 
 **Final report must include**
 - 必须显式出现 `### 全帧根因分布`：reason_code/责任方、帧数、占比。
@@ -230,6 +238,10 @@ plan_template:
    - `SF`：SurfaceFlinger 侧原因
    - `HIDDEN`：缓冲区枯竭但框架未标记（Perfetto 帧颜色为绿色）
    - `BUFFER_STUFFING`：Buffer Stuffing
+5. **Resync 判读边界**：
+   - `Choreographer#doFrame - resynced to <vsync> in <x>ms` 是 doFrame 内部 child marker，表示回调已经晚到至少一个 VSync，Choreographer 重新绑定到后续 frame timeline；它不是一帧新的 doFrame，也不是可直接归因给 SF 的合成 slice。
+   - `App Resynced Jitter` 属于 App 侧 FrameTimeline jank 类型；报告中应把它作为 App 相位重同步/回调迟到信号，并继续寻找导致迟到的主线程/RT/GPU/BufferQueue 证据。
+   - 用户怀疑“resync 后 SF 没合成对应帧、后面帧堆积”时，必须用同 layer token、present_ts 间隔、SF actual/display frame、present_type/dropped frame 或 SF jank_type 证明；不能仅凭 resync marker 下结论。
 
 **Phase 1 — 概览 + 掉帧列表 + 批量根因分类（1 次调用）：**
 
@@ -246,6 +258,7 @@ invoke_skill("scrolling_analysis", { start_ts: "<trace_start>", end_ts: "<trace_
   - `scroll_sessions`：滑动区间列表
   - `input_data_check` / `input_latency_summary`：可选的 android.input 证据源检测和输入分发/处理/ACK/跟手度概览。缺数据时只能说明 trace 未包含完整 input event 链路，不可据此否定输入延迟问题
   - `batch_frame_root_cause`（主掉帧列表）：所有掉帧帧的**完整分析**（frame_id + start_ts + jank_type + jank_responsibility + vsync_missed + reason_code + 四象限 MainThread/RenderThread + CPU 频率 + Binder/GC 重叠 + Input 处理证据 + 根因分类），覆盖所有掉帧帧
+    - 特别注意 `App Resynced Jitter` / `Choreographer#doFrame - resynced...`：它们只能说明 App doFrame 相位重同步；如果要声称 SF 未合成，必须补充 consumer/SF 侧证据
   - `get_app_jank_frames`（内部数据源，无独立显示）：掉帧帧列表，供 Agent 内部使用（焦点区间、帧实体捕获）
   - `scroll_sessions` 可展开：点击展开某个滑动区间，可查看该区间的**四象限分布、CPU 频率、关键线程大小核分布**（由 `session_stats_batch` 提供）
   - `session_quadrant_summary`（兼容数据源，不独立显示）：**滑动过程整体**四象限分布，Agent 可通过 save_as 引用

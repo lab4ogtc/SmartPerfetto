@@ -30,7 +30,6 @@ prerequisites:
     - thread_state
     - sched_slice
   modules:
-    - sched
     - sched.thread_level_parallelism
 
 inputs:

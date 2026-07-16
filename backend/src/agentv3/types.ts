@@ -133,9 +133,38 @@ export interface ClaudeAnalysisContext {
 /** Discriminator for which trace data belongs to in comparison mode. */
 export type TraceSource = 'current' | 'reference';
 
+export type TracePaneSide = 'left' | 'right' | 'top' | 'bottom';
+
+export type TracePairLayout = 'horizontal' | 'vertical';
+
+export interface TracePairPaneContext {
+  side: TracePaneSide;
+  traceSide: TraceSource;
+  traceId: string;
+  traceName?: string;
+  traceFingerprint?: string;
+  active?: boolean;
+  visualState?: 'live' | 'context_only';
+}
+
+export interface TracePairContext {
+  schemaVersion: 1;
+  layout: TracePairLayout;
+  primarySide: TracePaneSide;
+  referenceSide: TracePaneSide;
+  activeSide?: TracePaneSide;
+  workspaceOpen?: boolean;
+  splitPercent?: number;
+  maximizedTraceSide?: TraceSource;
+  minimizedTraceSides?: TraceSource[];
+  aliases?: Record<string, TraceSource>;
+  panes: TracePairPaneContext[];
+}
+
 /** Context for dual-trace comparison mode. Orthogonal to scene type. */
 export interface ComparisonContext {
   referenceTraceId: string;
+  tracePairContext?: TracePairContext;
   referencePackageName?: string;
   referenceFocusApps?: DetectedFocusApp[];
   referenceArchitecture?: ArchitectureInfo;
@@ -265,7 +294,7 @@ export interface AnalysisNote {
 export interface ExpectedCall {
   /** Short tool name without the MCP prefix (e.g. `invoke_skill`, `execute_sql`). */
   tool: string;
-  /** For `invoke_skill`, the required skillId. Other tools should leave this unset. */
+  /** For skill-like tools such as `invoke_skill` and `compare_skill`, the required skillId. */
   skillId?: string;
 }
 
@@ -422,7 +451,7 @@ export interface ToolCallRecord {
    * targets).
    */
   inputSummary?: string;
-  /** For `invoke_skill`: the skillId argument, lifted out for direct matching. */
+  /** For skill-like tools: the skillId argument, lifted out for direct matching. */
   skillId?: string;
   /** sha256(input) prefix — stable identifier across runs for the same call. */
   paramsHash?: string;

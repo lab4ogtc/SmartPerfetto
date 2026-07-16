@@ -11,6 +11,8 @@ import type {CodebaseRegistry} from '../codebase/codebaseRegistry';
 import type {CodeLookupLedger} from '../codebase/codeLookupLedger';
 import {redactSecrets} from '../security/secretPatterns';
 import {registerCodeAwareLookupForEcho} from '../security/codeAwareOutputRegistry';
+import type {ExternalKnowledgeScope} from '../externalKnowledgeSourceRegistry';
+import type {ExternalKnowledgeSourceRegistry} from '../externalKnowledgeSourceRegistry';
 
 export interface SanitizedRagHit {
   chunkId: string;
@@ -25,6 +27,16 @@ export interface SanitizedRagHit {
     commitHash?: string;
     vendor?: string;
     buildId?: string;
+    knowledgeSourceId?: string;
+    sourceGeneration?: string;
+    title?: string;
+    uri?: string;
+    license?: string;
+    attribution?: string;
+    sourceStatus?: string;
+    sourceConfidence?: string;
+    lastVerifiedAgainst?: string;
+    contentFingerprint?: string;
   };
   snippet?: string;
   unsupportedReason?: string;
@@ -48,6 +60,9 @@ export interface FilterContext {
   ledger?: CodeLookupLedger;
   allowProviderSend?: boolean;
   sessionId?: string;
+  externalKnowledgeRegistry?: ExternalKnowledgeSourceRegistry;
+  knowledgeSourceIds?: string[];
+  knowledgeScope?: ExternalKnowledgeScope;
 }
 
 function isUserCodebaseChunk(chunk: RagChunk): boolean {
@@ -69,6 +84,11 @@ function isLegacyChunk(chunk: RagChunk): boolean {
   return false;
 }
 
+function isExternalPrivateKnowledgeChunk(chunk: RagChunk): boolean {
+  return chunk.kind === 'android_internals_wiki' &&
+    chunk.registryOrigin === 'external_knowledge_registry';
+}
+
 function metadata(chunk: RagChunk): SanitizedRagHit['metadata'] {
   return {
     kind: chunk.kind,
@@ -80,6 +100,16 @@ function metadata(chunk: RagChunk): SanitizedRagHit['metadata'] {
     ...(chunk.commitHash ? {commitHash: chunk.commitHash} : {}),
     ...(chunk.vendor ? {vendor: chunk.vendor} : {}),
     ...(chunk.buildId ? {buildId: chunk.buildId} : {}),
+    ...(chunk.knowledgeSourceId ? {knowledgeSourceId: chunk.knowledgeSourceId} : {}),
+    ...(chunk.sourceGeneration ? {sourceGeneration: chunk.sourceGeneration} : {}),
+    ...(chunk.title ? {title: chunk.title} : {}),
+    ...(chunk.uri ? {uri: chunk.uri} : {}),
+    ...(chunk.license ? {license: chunk.license} : {}),
+    ...(chunk.attribution ? {attribution: chunk.attribution} : {}),
+    ...(chunk.sourceStatus ? {sourceStatus: chunk.sourceStatus} : {}),
+    ...(chunk.sourceConfidence ? {sourceConfidence: chunk.sourceConfidence} : {}),
+    ...(chunk.lastVerifiedAgainst ? {lastVerifiedAgainst: chunk.lastVerifiedAgainst} : {}),
+    ...(chunk.contentFingerprint ? {contentFingerprint: chunk.contentFingerprint} : {}),
   };
 }
 
@@ -128,6 +158,83 @@ export async function filterRagLookup(
     }
 
     allLegacy = false;
+    if (isExternalPrivateKnowledgeChunk(chunk)) {
+      const access = chunk.knowledgeSourceId && ctx.externalKnowledgeRegistry
+        ? ctx.externalKnowledgeRegistry.evaluateAccess(
+            chunk.knowledgeSourceId,
+            ctx.knowledgeScope ?? {},
+            ctx.knowledgeSourceIds ?? [],
+          )
+        : {allowed: false as const, reason: 'source_not_found_or_out_of_scope' as const};
+      const inactiveGeneration = access.allowed &&
+        access.source.activeGeneration !== chunk.sourceGeneration;
+      const blockedReason = !access.allowed
+        ? access.reason
+        : inactiveGeneration
+          ? 'inactive_source_generation'
+          : undefined;
+      if (blockedReason) {
+        hits.push({
+          chunkId: hit.chunkId,
+          score: hit.score,
+          metadata: metadata(chunk),
+          unsupportedReason: blockedReason,
+        });
+        ctx.ledger?.record({
+          turn: ctx.turn,
+          ts: Date.now(),
+          toolName: ctx.toolName,
+          chunkIds: [],
+          consentApplied: true,
+          tokensSpent: 0,
+          outcome: blockedReason === 'provider_send_not_consented'
+            ? 'consent_blocked'
+            : 'rejected',
+          legacyPath: false,
+        });
+        continue;
+      }
+      const redacted = redactSecrets(chunk.snippet);
+      const tokens = estimateTokens(chunk, redacted.text);
+      if (ctx.ledger && tokens > ctx.ledger.remainingTokens()) {
+        hits.push({
+          chunkId: hit.chunkId,
+          score: hit.score,
+          metadata: metadata(chunk),
+          unsupportedReason: 'budget_exceeded',
+          redactedCount: redacted.redactedCount,
+        });
+        ctx.ledger.record({
+          turn: ctx.turn,
+          ts: Date.now(),
+          toolName: ctx.toolName,
+          chunkIds: [],
+          consentApplied: true,
+          tokensSpent: 0,
+          outcome: 'budget_exceeded',
+          legacyPath: false,
+        });
+        continue;
+      }
+      hits.push({
+        chunkId: hit.chunkId,
+        score: hit.score,
+        metadata: metadata(chunk),
+        snippet: redacted.text,
+        redactedCount: redacted.redactedCount,
+      });
+      ctx.ledger?.record({
+        turn: ctx.turn,
+        ts: Date.now(),
+        toolName: ctx.toolName,
+        chunkIds: [chunk.chunkId],
+        consentApplied: true,
+        tokensSpent: tokens,
+        outcome: 'success',
+        legacyPath: false,
+      });
+      continue;
+    }
     if (!isUserCodebaseChunk(chunk)) {
       hits.push({
         chunkId: hit.chunkId,

@@ -6,7 +6,7 @@ import type { CaseEvolutionConfig } from '../../types/caseEvolution';
 import { backendLogPath } from '../../runtimePaths';
 import { CaseGraph } from '../caseGraph';
 import { CaseLibrary } from '../caseLibrary';
-import { RagStore } from '../ragStore';
+import { getDefaultRagStore } from '../ragStore';
 import type { LeasedCaseCandidate, CaseCandidateOutboxHandle } from './caseCandidateOutbox';
 import { anonymizeCaseReview } from './caseAnonymizer';
 import { loadCaseEvolutionConfig } from './caseEvolutionConfig';
@@ -236,7 +236,7 @@ export class CaseEvolutionWorker {
             review: cleanReview,
             library: new CaseLibrary(backendLogPath('case_library.json')),
             graph: new CaseGraph(backendLogPath('case_graph.json')),
-            ragStore: new RagStore(backendLogPath('rag_store.json')),
+            ragStore: getDefaultRagStore(),
             sidecarRelativePath: notePath?.path,
           });
           learnedCaseId = ingestResult.learnedCaseId;

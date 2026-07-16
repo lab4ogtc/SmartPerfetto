@@ -84,7 +84,7 @@ export function extractFindingsFromText(text: string): Finding[] {
     const sectionEnd = findNextSeverityMarkerIndex(scanText, afterTitleStart) ?? text.length;
     const afterTitle = text.substring(afterTitleStart, Math.min(sectionEnd, afterTitleStart + 1600));
     const afterTitleWithoutCode = stripCodeBlocks(afterTitle);
-    const evidence = extractEvidence(afterTitle) ?? extractInlineHeadingEvidence(title);
+    const evidence = extractEvidence(afterTitle) ?? extractInlineHeadingEvidence(title) ?? extractQuantifiedRecommendationEvidence(afterTitle);
 
     findings.push({
       id: `claude-${uuidv4().slice(0, 8)}`,
@@ -228,6 +228,31 @@ function extractMarkdownTableEvidence(text: string): string | undefined {
 
   const evidence = evidenceLines.join('\n').trim();
   if (!looksLikeEvidenceMetricBlock(evidence)) return undefined;
+  return evidence.substring(0, 500);
+}
+
+function extractQuantifiedRecommendationEvidence(text: string): string | undefined {
+  const lines = text
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  const evidenceLines: string[] = [];
+  for (const line of lines) {
+    if (/^(?:#{1,6}\s+|\*{0,2}\[(?:CRITICAL|HIGH|MEDIUM|LOW|INFO)\])/.test(line)) break;
+    const content = line.replace(/^[-*+]\s*/, '');
+    if (/^\*{0,2}(?:收益|影响|WHY|为什么|依据|证据|Evidence|Impact|Why)\*{0,2}\s*[：:]/i.test(content)) {
+      evidenceLines.push(content);
+      continue;
+    }
+    if (evidenceLines.length > 0 && /^[-*+]\s+/.test(line) && looksLikeEvidenceMetricBlock(content)) {
+      evidenceLines.push(content);
+    }
+    if (evidenceLines.length >= 4) break;
+  }
+
+  const evidence = evidenceLines.join('\n').trim();
+  if (!evidence || !looksLikeEvidenceMetricBlock(evidence)) return undefined;
   return evidence.substring(0, 500);
 }
 

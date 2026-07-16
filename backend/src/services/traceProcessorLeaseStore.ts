@@ -24,6 +24,7 @@ export type TraceProcessorHolderType =
   | 'frontend_http_rpc'
   | 'agent_run'
   | 'report_generation'
+  | 'batch_trace_run'
   | 'metric_backfill'
   | 'manual_register';
 
@@ -187,6 +188,13 @@ export function resolveHolderTtlPolicy(holder: TraceProcessorHolderInput): Trace
     return {
       heartbeatTtlMs: 5 * 60 * 1000,
       idleTtlMs: 30 * 60 * 1000,
+    };
+  }
+
+  if (holder.holderType === 'batch_trace_run') {
+    return {
+      heartbeatTtlMs: 5 * 60 * 1000,
+      idleTtlMs: 24 * 60 * 60 * 1000,
     };
   }
 
@@ -641,6 +649,13 @@ export function getTraceProcessorLeaseStore(): TraceProcessorLeaseStore {
 }
 
 export function setTraceProcessorLeaseStoreForTests(store: TraceProcessorLeaseStore | null): void {
+  if (singleton && singleton !== store) {
+    try {
+      singleton.close();
+    } catch {
+      // The test may already have closed its store explicitly.
+    }
+  }
   singleton = store;
   singletonDbPath = store ? resolveEnterpriseDbPath() : null;
 }

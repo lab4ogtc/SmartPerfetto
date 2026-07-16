@@ -30,7 +30,7 @@ const suites = {
       '--provider-id',
       'env',
       '--trace',
-      '../test-traces/lacunh_heavy.pftrace',
+      '../Trace/real/android-startup-heavy/trace.pftrace',
       '--query',
       '分析启动性能',
       '--output',
@@ -68,7 +68,7 @@ const suites = {
       '--provider-id',
       'env',
       '--trace',
-      '../test-traces/scroll-demo-customer-scroll.pftrace',
+      '../Trace/real/android-scroll-customer/trace.pftrace',
       '--query',
       '分析滑动性能',
       '--output',
@@ -89,6 +89,45 @@ const suites = {
       'verification_failed',
     ],
   },
+  'dual-trace': {
+    label: 'raw dual-trace comparison gate',
+    output: 'test-output/e2e-deepseek-dual-trace-real.json',
+    args: [
+      '--mode',
+      'full',
+      '--provider-id',
+      'env',
+      '--trace',
+      '../Trace/real/android-startup-heavy/trace.pftrace',
+      '--reference-trace',
+      '../Trace/real/android-startup-light/trace.pftrace',
+      '--query',
+      '对比左右两个 Trace 的启动速度差异。请先读取窗口映射，然后用 compare_skill 跑 startup_analysis 对比冷启动阶段，最后用证据说明哪边更慢。',
+      '--output',
+      'test-output/e2e-deepseek-dual-trace-real.json',
+      '--keep-session',
+      '--require-claim-verifier-ok',
+      '--require-non-partial',
+      '--require-tool',
+      'get_comparison_context',
+      '--require-tool',
+      'compare_skill',
+      '--require-data-envelope',
+      '--require-text',
+      'com.example.launch.aosp.heavy',
+      '--require-text',
+      'com.example.androidappdemo',
+      '--forbid-degraded-fallback',
+      'verification_failed',
+      '--trace-pair-layout',
+      'horizontal',
+      '--trace-pair-workspace-open',
+      '--trace-pair-split',
+      '58',
+      '--trace-pair-active',
+      'current',
+    ],
+  },
 };
 
 main();
@@ -104,7 +143,7 @@ function main() {
   assertFile(verifierPath, 'Agent SSE verifier');
 
   const credential = resolveDeepseekCredential();
-  const suiteNames = options.suite === 'all' ? ['startup', 'scrolling'] : [options.suite];
+  const suiteNames = options.suite === 'all' ? ['startup', 'scrolling', 'dual-trace'] : [options.suite];
   const runtimeKinds = resolveRuntimeKinds(options.runtime);
 
   for (const runtimeKind of runtimeKinds) {
@@ -127,7 +166,7 @@ function parseArgs(argv) {
     }
     if (arg === '--suite') {
       const value = argv[i + 1];
-      if (!value) throw new Error('--suite requires a value: all, startup, or scrolling');
+      if (!value) throw new Error('--suite requires a value: all, startup, scrolling, or dual-trace');
       suite = parseSuite(value);
       i += 1;
       continue;
@@ -152,8 +191,8 @@ function parseArgs(argv) {
 }
 
 function parseSuite(value) {
-  if (value === 'all' || value === 'startup' || value === 'scrolling') return value;
-  throw new Error(`Invalid suite: ${value}. Expected all, startup, or scrolling.`);
+  if (value === 'all' || value === 'startup' || value === 'scrolling' || value === 'dual-trace') return value;
+  throw new Error(`Invalid suite: ${value}. Expected all, startup, scrolling, or dual-trace.`);
 }
 
 function parseRuntime(value) {
@@ -181,7 +220,7 @@ function resolveRuntimeKinds(value) {
 }
 
 function printUsage() {
-  console.log('Usage: node scripts/run-deepseek-agent-e2e.cjs [--suite all|startup|scrolling] [--runtime openai-agents-sdk|pi-agent-core|opencode|all-deepseek]');
+  console.log('Usage: node scripts/run-deepseek-agent-e2e.cjs [--suite all|startup|scrolling|dual-trace] [--runtime openai-agents-sdk|pi-agent-core|opencode|all-deepseek]');
   console.log('');
   console.log('Runs SmartPerfetto Agent SSE E2E with Deepseek-backed SmartPerfetto runtimes.');
   console.log('');

@@ -33,7 +33,7 @@ export async function runCompareCommand(args: CompareCommandArgs): Promise<numbe
 
   try {
     await withConsoleLogToStderr(renderer.format !== 'text', async () => {
-      assertAnalysisRuntimeReady();
+      assertAnalysisRuntimeReady({ aiFeature: 'agent_analyze' });
       const turn = await startSession({ paths, service, renderer }, {
         tracePath: currentTracePath,
         referenceTracePath,

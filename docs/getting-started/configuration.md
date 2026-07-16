@@ -95,7 +95,7 @@ CLAUDE_LIGHT_MODEL=deepseek-v4-flash
 ANTHROPIC_BASE_URL=https://token-plan-sgp.xiaomimimo.com/anthropic
 ANTHROPIC_API_KEY=your_xiaomi_mimo_api_key_here
 CLAUDE_MODEL=mimo-v2.5-pro
-CLAUDE_LIGHT_MODEL=mimo-v2.5-pro
+CLAUDE_LIGHT_MODEL=mimo-v2.5
 ```
 
 ```bash
@@ -105,7 +105,7 @@ OPENAI_BASE_URL=https://token-plan-sgp.xiaomimimo.com/v1
 OPENAI_API_KEY=your_xiaomi_mimo_api_key_here
 OPENAI_AGENTS_PROTOCOL=chat_completions
 OPENAI_MODEL=mimo-v2.5-pro
-OPENAI_LIGHT_MODEL=mimo-v2.5-pro
+OPENAI_LIGHT_MODEL=mimo-v2.5
 ```
 
 当前模板内置的国内主流 Anthropic-compatible / Claude Code-compatible 和 OpenAI-compatible 入口只是公共信息 preset。Provider 模型目录、Base URL 和套餐权限会变化；如果你的账号控制台列出的模型 ID 或专属域名不同，以控制台为准替换对应字段。
@@ -115,21 +115,21 @@ OPENAI_LIGHT_MODEL=mimo-v2.5-pro
 | Provider | Claude / Anthropic-compatible Base URL | OpenAI-compatible Base URL | 推荐主模型 | 推荐轻模型 |
 |---|---|---|---|---|
 | DeepSeek | `https://api.deepseek.com/anthropic` | `https://api.deepseek.com/v1` | `deepseek-v4-pro` | `deepseek-v4-flash` |
-| GLM / 智谱 | `https://open.bigmodel.cn/api/anthropic` | `https://open.bigmodel.cn/api/paas/v4` | `glm-5.1` | `glm-4.5-air` |
-| Qwen / 百炼按量 | `https://dashscope.aliyuncs.com/apps/anthropic` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3.6-plus` | `qwen3.6-flash` |
+| GLM / 智谱 | `https://open.bigmodel.cn/api/anthropic` | `https://open.bigmodel.cn/api/paas/v4` | `glm-5-turbo` | `glm-4.7-flashx` |
+| Qwen / 百炼按量 | `https://dashscope.aliyuncs.com/apps/anthropic` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3.7-plus` | `qwen3.6-flash` |
 | Qwen Coding Plan | `https://coding-intl.dashscope.aliyuncs.com/apps/anthropic` | `https://coding-intl.dashscope.aliyuncs.com/v1` | `qwen3-coder-plus` | `qwen3-coder-plus` |
 | Kimi Code 会员 | `https://api.kimi.com/coding/` | `https://api.kimi.com/coding/v1` | `kimi-for-coding` | `kimi-for-coding` |
-| Kimi / Moonshot 平台 | `https://api.moonshot.cn/anthropic` | `https://api.moonshot.cn/v1` | `kimi-k2.5` | `kimi-k2.5` |
+| Kimi / Moonshot 平台 | `https://api.moonshot.cn/anthropic` | `https://api.moonshot.cn/v1` | `kimi-k2.7-code-highspeed` | `kimi-k2.7-code-highspeed` |
 | Doubao / 火山方舟 Coding Plan | `https://ark.cn-beijing.volces.com/api/coding` | `https://ark.cn-beijing.volces.com/api/coding/v3` | `doubao-seed-2.0-code` | `doubao-seed-2.0-code` |
-| MiniMax 国内 | `https://api.minimaxi.com/anthropic` | `https://api.minimaxi.com/v1` | `MiniMax-M2.7` | `MiniMax-M2.7` |
-| 小米 MiMo Token Plan | `https://token-plan-sgp.xiaomimimo.com/anthropic` | `https://token-plan-sgp.xiaomimimo.com/v1` | `mimo-v2.5-pro` | `mimo-v2.5-pro` |
+| MiniMax 国内 | `https://api.minimaxi.com/anthropic` | `https://api.minimaxi.com/v1` | `MiniMax-M3` | `MiniMax-M3` |
+| 小米 MiMo Token Plan | `https://token-plan-sgp.xiaomimimo.com/anthropic` | `https://token-plan-sgp.xiaomimimo.com/v1` | `mimo-v2.5-pro` | `mimo-v2.5` |
 | 腾讯 TokenHub Token Plan | `https://api.lkeap.cloud.tencent.com/plan/anthropic` | `https://api.lkeap.cloud.tencent.com/plan/v3` | `tc-code-latest` | `tc-code-latest` |
 | 腾讯 TokenHub Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/anthropic` | `https://api.lkeap.cloud.tencent.com/coding/v3` | `tc-code-latest` | `tc-code-latest` |
 | 腾讯混元 legacy | `https://api.hunyuan.cloud.tencent.com/anthropic` | `https://api.hunyuan.cloud.tencent.com/v1` | `hunyuan-2.0-thinking-20251109` | `hunyuan-2.0-instruct-20251111` |
 | 百度千帆 | `https://qianfan.baidubce.com/anthropic` | `https://qianfan.baidubce.com/v2` | `deepseek-v3.2` | `deepseek-v3.2` |
-| 阶跃星辰 Step Plan | `https://api.stepfun.com/step_plan` | `https://api.stepfun.com/step_plan/v1` | `step-3.5-flash-2603` | `step-3.5-flash` |
-| 硅基流动 | `https://api.siliconflow.com/` | `https://api.siliconflow.com/v1` | `Qwen/Qwen3-235B-A22B-Thinking-2507` | `Qwen/Qwen3-30B-A3B-Instruct-2507` |
-| 华为云 ModelArts MaaS | `https://api.modelarts-maas.com/anthropic` | `https://api.modelarts-maas.com/v1` | `deepseek-v3.2` | `qwen3-32b` |
+| 阶跃星辰 Step Plan | `https://api.stepfun.com/step_plan` | `https://api.stepfun.com/step_plan/v1` | `step-3.7-flash` | `step-3.5-flash` |
+| 硅基流动 | `https://api.siliconflow.com/` | `https://api.siliconflow.com/v1` | `Qwen/Qwen3-235B-A22B-Instruct-2507` | `Qwen/Qwen3-30B-A3B-Instruct-2507` |
+| 华为云 ModelArts MaaS | `https://api.modelarts-maas.com/anthropic` | `https://api.modelarts-maas.com/v1` | `deepseek-v4-pro` | `deepseek-v4-flash` |
 
 Provider 官方文档可能写 `ANTHROPIC_MODEL` / `ANTHROPIC_DEFAULT_HAIKU_MODEL`，但 SmartPerfetto 后端使用 `CLAUDE_MODEL` / `CLAUDE_LIGHT_MODEL`。模型必须稳定支持流式输出和 tool/function calling。
 如果百度千帆的自定义应用要求额外 `appid` header，请使用千帆默认 appid，或在前面加一层自定义网关；SmartPerfetto env 文件目前不会注入任意 provider header。
@@ -141,7 +141,7 @@ SMARTPERFETTO_AGENT_RUNTIME=openai-agents-sdk
 OPENAI_API_KEY=sk-your-openai-key
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_AGENTS_PROTOCOL=responses
-OPENAI_MODEL=gpt-5.5
+OPENAI_MODEL=gpt-5.4-mini
 OPENAI_LIGHT_MODEL=gpt-5.4-mini
 ```
 
@@ -247,6 +247,7 @@ curl http://localhost:3000/health
 | `aiEngine.providerOverridesEnv` | `true` 表示 `.env` 修改不会影响当前分析，除非停用 active provider |
 | `aiEngine.runtime` | 只能是 `claude-agent-sdk`、`openai-agents-sdk`、`pi-agent-core` 或 `opencode`，不是 provider 名称 |
 | `aiEngine.providerMode` | 显示实际连接族，例如 `anthropic_compatible_proxy` 或 `openai_chat_completions_compatible` |
+| `aiPolicy.aiEnabled` / `aiEngine.aiEnabled` | `false` 表示后端禁止模型分析；`aiPolicy.disabledReason` 会说明来源 |
 
 响应中的 `aiEngine.providerMode` 会显示：
 
@@ -261,6 +262,18 @@ curl http://localhost:3000/health
 | `pi-agent-core` | 使用 Pi Agent Core custom model JSON 和共享 SmartPerfetto 分析管线 |
 | `opencode` | 使用 OpenCode custom model JSON 或 OpenAI-compatible 字段，并复用共享 SmartPerfetto 分析管线 |
 | `unconfigured` | 没有显式 env 凭证；如果本机 `claude` 已经能正常请求，SDK 仍可在分析时走 Claude Code 本地 auth/config 路径 |
+
+### 临时禁用模型分析
+
+需要保留 trace 读取、SQL、报告、Provider 配置和确定性 Skill，但禁止所有模型调用时，设置：
+
+```bash
+SMARTPERFETTO_AI_ENABLED=false
+```
+
+未设置该变量时默认启用 AI。显式值接受 `1/0`、`true/false`、`yes/no`、`on/off`、`enabled/disabled`；无效值会 fail closed，也就是按禁用处理，并在 `/health.aiPolicy.env.valid=false` 和 `smp doctor` 中暴露原因。
+
+禁用后仍可用：trace 上传/读取、SQL 查询、capture config proposal、Android capture（不带 `--analyze`）、报告读取、Provider profile 列表/编辑/激活/runtime 切换，以及不调用 LLM 的确定性 Skill。会被阻断：agent analyze/resume、场景还原冷启动、Provider connection test、`smp provider test`、`smp capture android --analyze`、LLM Skill step。阻断响应统一包含 `code: "AI_DISABLED"` 和 `retryable: false`。
 
 ## 分析预算与超时
 
@@ -361,6 +374,13 @@ macOS 如果拦截 `trace_processor_shell`，可能会看到 `cannot be opened b
 xattr -dr com.apple.quarantine /absolute/path/to/trace_processor_shell
 chmod +x /absolute/path/to/trace_processor_shell
 ```
+
+## 可选 Android Internals 外部知识
+
+外部 Wiki 路径默认拒绝。配置 `SMARTPERFETTO_KNOWLEDGE_ROOTS` 只建立路径
+allowlist；仍需通过 API 独立确认使用权、provider-send 同意、建立索引，并在每次
+分析的 `knowledgeSourceIds` 中显式选择。完整流程见
+[Android Internals 外部知识库](android-internals-knowledge.md)。
 
 ## 请求限流
 

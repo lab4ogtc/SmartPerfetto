@@ -51,6 +51,30 @@ describe('summarizeToolCallInput', () => {
     });
   });
 
+  describe('compare_skill', () => {
+    it('lifts skillId so raw trace comparison calls satisfy structured expectedCalls', () => {
+      const result = summarizeToolCallInput('compare_skill', {
+        skillId: 'startup_analysis',
+        params: { currentTraceId: 'left', referenceTraceId: 'right' },
+      });
+      expect(result.skillId).toBe('startup_analysis');
+      expect(result.inputSummary).toBe('startup_analysis(currentTraceId,referenceTraceId)');
+      expect(result.paramsHash).toMatch(/^[a-f0-9]{8}$/);
+    });
+
+    it('summarizes side-specific params for live dual-trace comparisons', () => {
+      const result = summarizeToolCallInput('compare_skill', {
+        skillId: 'startup_detail',
+        params: { process_name: 'com.example.current' },
+        currentParams: { start_ts: 100 },
+        referenceParams: { start_ts: 500 },
+      });
+
+      expect(result.skillId).toBe('startup_detail');
+      expect(result.inputSummary).toBe('startup_detail(process_name,current.start_ts,reference.start_ts)');
+    });
+  });
+
   describe('fetch_artifact', () => {
     it('formats artifactId and level', () => {
       const result = summarizeToolCallInput('fetch_artifact', { artifactId: 'art-42', level: 'rows' });

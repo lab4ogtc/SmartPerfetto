@@ -1,0 +1,4 @@
+interface:
+  display_name: "SmartPerfetto Sync Upstream"
+  short_description: "Sync SmartPerfetto and Perfetto upstream"
+  default_prompt: "Use $smartperfetto-sync-upstream to sync SmartPerfetto and Perfetto upstream, refresh and runtime-check the paired frontend artifacts, then commit or push only as requested."

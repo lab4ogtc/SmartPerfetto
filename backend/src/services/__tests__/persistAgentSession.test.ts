@@ -214,9 +214,12 @@ describe('persistAgentTurn', () => {
       title: 'thread states in range',
       layer: 'list',
       format: 'table',
-      evidenceRefId: 'data:frontend_prequery:current:abc123',
+      evidenceRefId: 'data:frontend_prequery:reference:abc123',
       sourceToolCallId: 'frontend-prequery:abc123',
       queryHash: 'abc123',
+      traceSide: 'reference',
+      paneSide: 'right',
+      traceId: 'trace-reference',
     });
 
     persistAgentTurn({
@@ -252,9 +255,12 @@ describe('persistAgentTurn', () => {
       resultCount: 1,
       results: [{
         title: 'thread states in range',
-        evidenceRefId: 'data:frontend_prequery:current:abc123',
+        evidenceRefId: 'data:frontend_prequery:reference:abc123',
         sourceToolCallId: 'frontend-prequery:abc123',
         queryHash: 'abc123',
+        traceSide: 'reference',
+        paneSide: 'right',
+        traceId: 'trace-reference',
         data: {
           columns: ['thread_name', 'state', 'total_ms'],
           rows: [

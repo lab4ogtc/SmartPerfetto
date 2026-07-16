@@ -216,6 +216,22 @@ describe('createQuickConfig', () => {
       CLAUDE_QUICK_TARGET_TURNS: '4',
     }).quickTargetTurns).toBe(4);
   });
+
+  it('uses the light model for quick calls from an isolated SDK env', () => {
+    const config = createQuickConfig(
+      {
+        ...loadClaudeConfig({
+          maxTurns: 60,
+          model: 'deepseek-v4-pro',
+        }),
+        lightModel: 'base-light-model',
+      },
+      { CLAUDE_LIGHT_MODEL: 'deepseek-v4-flash' },
+    );
+
+    expect(config.model).toBe('deepseek-v4-flash');
+    expect(config.lightModel).toBe('deepseek-v4-flash');
+  });
 });
 
 describe('getClaudeRuntimeDiagnostics', () => {

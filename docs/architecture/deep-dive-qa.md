@@ -611,7 +611,10 @@ keywords:
 | WebView | CrRendererMain → Viz Compositor | Chromium 渲染管线，线程名不同 |
 | Compose | UI Thread (Composition) → RenderThread | 和 Standard 类似但有 Composition 阶段 |
 
-架构检测委托给 YAML skill `rendering_pipeline_detection`——它在 SQL 层做线程/Slice 信号采集、管线打分、子变体判定，支持 24 种细粒度渲染架构。TypeScript 侧（`architectureDetector.ts`）只负责调用 skill 和映射结果，不做直接的 if/else 判断：
+架构检测委托给生成的 YAML skill `rendering_pipeline_detection`——它从
+catalog 与 31 个 YAML 检测项生成线程/Slice 信号采集、子路径评分和
+S02-S14 出图类型聚合。TypeScript 侧（`architectureDetector.ts`）从同一
+catalog 读取 architecture metadata，不维护 pipeline ID 分支表：
 
 ```
 rendering_pipeline_detection skill (SQL)
@@ -1266,7 +1269,7 @@ rg --files backend/skills | rg '\.skill\.yaml$' | wc -l
 | app_lifecycle_in_range | 追踪 Activity/Fragment 生命周期事件 |
 | compose_recomposition_hotspot | 检测 Jetpack Compose 重组热点 |
 | webview_v8_analysis | 分析 WebView V8 引擎：GC、脚本编译、执行时间 |
-| rendering_pipeline_detection | 识别应用渲染管线类型（24 种细粒度检测） |
+| rendering_pipeline_detection | 识别 13 个具体出图类型、31 个检测子路径/feature，并保留细粒度证据 |
 | pipeline_key_slices_overlay | 查询管线关键 Slice 的 ts/dur 用于时间线 overlay |
 
 ---

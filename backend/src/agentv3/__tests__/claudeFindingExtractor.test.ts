@@ -185,6 +185,25 @@ Binder: 0ms / GC: 0ms / IO: 0ms
     expect(findings[0].evidence?.[0]?.text).toContain('86%');
   });
 
+  it('should use quantified impact bullets as evidence for severity-tagged recommendations', () => {
+    const text = `
+### 优化建议
+#### [App 层]
+
+1. **[CRITICAL] 将 \`CustomScroll_longFrameLoad\` 移出 ANIMATION 回调**
+- **收益**：消除 **6 帧掉帧（86%）**，帧耗时从 50–63ms 降至 <8ms
+- **方案**：ANIMATION 回调仅做轻量状态更新，计算逻辑从回调中剥离
+- **WHY**：ANIMATION 回调在 \`Choreographer#doFrame\` 的同步阶段执行，阻塞整帧管线
+`;
+
+    const findings = extractFindingsFromText(text);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].severity).toBe('critical');
+    expect(findings[0].evidence?.[0]?.text).toContain('6 帧掉帧');
+    expect(findings[0].evidence?.[0]?.text).toContain('50–63ms');
+    expect(findings[0].evidence?.[0]?.text).toContain('WHY');
+  });
+
   it('should still extract severity headings whose title contains pipe characters', () => {
     const text = `
 ### [HIGH] UI | Render | CPU stall

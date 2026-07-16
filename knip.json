@@ -25,7 +25,7 @@
       ],
       "project": ["package.json", "src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"],
       "ignoreDependencies": ["@earendil-works/pi-agent-core", "jest", "tsx"],
-      "ignoreBinaries": ["jest", "tsx"]
+      "ignoreBinaries": ["jest", "pgrep", "ps", "secret-tool", "sqlite3", "tsx"]
     }
   },
   "ignore": [

@@ -5,11 +5,11 @@
  * and does not rank launcher/system context above the traced app by default.
  */
 
-import path from 'node:path';
 import { describe, expect, it, beforeAll } from '@jest/globals';
 import { ensureSkillRegistryInitialized, skillRegistry } from '../../src/services/skillEngine/skillLoader';
 import { createSkillExecutor, SkillExecutor } from '../../src/services/skillEngine/skillExecutor';
 import { getTraceProcessorService, TraceProcessorService } from '../../src/services/traceProcessorService';
+import { resolveTraceCase } from '../../src/utils/traceCorpus';
 
 const TRACE_CASES = [
   { file: 'lacunh_heavy.pftrace', expectedTop: /^com\.example\./ },
@@ -35,7 +35,7 @@ async function withTrace<T>(
   traceFile: string,
   callback: (traceId: string) => Promise<T>,
 ): Promise<T> {
-  const tracePath = path.resolve(process.cwd(), '..', 'test-traces', traceFile);
+  const tracePath = resolveTraceCase(traceFile);
   const traceId = await traceProcessor.loadTraceFromFilePath(tracePath);
   try {
     return await callback(traceId);

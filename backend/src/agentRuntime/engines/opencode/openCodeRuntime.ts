@@ -13,7 +13,7 @@ import type {
   AnalysisResult,
   IOrchestrator,
 } from '../../../agent/core/orchestratorTypes';
-import type { Finding, StreamingUpdate } from '../../../agent/types';
+import type { ConversationTurn, Finding, StreamingUpdate } from '../../../agent/types';
 import type { ArchitectureInfo } from '../../../agent/detectors/types';
 import { createArchitectureDetector } from '../../../agent/detectors/architectureDetector';
 import { sessionContextManager } from '../../../agent/context/enhancedSessionContext';
@@ -35,8 +35,8 @@ import {
   buildSystemPrompt,
 } from '../../../agentv3/claudeSystemPrompt';
 import { extractFindingsFromText } from '../../../agentv3/claudeFindingExtractor';
-import { detectFocusApps } from '../../../agentv3/focusAppDetector';
-import { localize, parseOutputLanguage } from '../../../agentv3/outputLanguage';
+import { detectFocusApps, focusAppTimeRangeFromSelection } from '../../../agentv3/focusAppDetector';
+import { localize, parseOutputLanguage, type OutputLanguage } from '../../../agentv3/outputLanguage';
 import { classifyScene, type SceneType } from '../../../agentv3/sceneClassifier';
 import { probeTraceCompleteness } from '../../../agentv3/traceCompletenessProber';
 import type {
@@ -54,7 +54,7 @@ import {
 import { isConclusionLikePlanPhase } from '../../../agentv3/planPhaseSemantics';
 import {
   formatPlanEvidenceGap,
-  recordPlanToolCall,
+  recordPlanOrPrePlanToolCall,
 } from '../../../agentv3/planToolCallRecorder';
 import {
   createOpenCodeSnapshotEngineState,
@@ -73,11 +73,13 @@ import {
 import { verifyConclusion } from '../claude/claudeVerifier';
 import { getExtendedKnowledgeBase } from '../../../services/sqlKnowledgeBase';
 import { sanitizeCodeAwareText } from '../../../services/security/codeAwareOutputRegistry';
+import {projectPrivateKnowledgeToolResult} from '../../../services/rag/toolResultProjectionFilter';
 import { getProviderService, type ProviderConfig, type ProviderScope } from '../../../services/providerManager';
 import type { RuntimeSelection } from '../../runtimeSelection';
 import type { EngineCapabilities } from '../../runtimeDescriptorTypes';
 import type { RuntimeEngineDefinition, RuntimeFactoryInput } from '../../runtimeRegistry';
 import { createAnalysisRunSpec, type AnalysisRunSpec } from '../../analysisRunSpec';
+import { buildRuntimeTracePairComparisonContext } from '../../runtimePromptContext';
 import {
   buildQuickRunReceipt,
   buildEntityContext,
@@ -92,6 +94,19 @@ import {
   toProtocolHypothesis as toRuntimeProtocolHypothesis,
 } from '../../runtimeCommon';
 import { buildCaseBackgroundContext } from '../../../services/caseEvolution/caseBackgroundContext';
+import { resolveRuntimeQuickMode } from '../../quickModeResolution';
+import {
+  buildRuntimeQuickEvidenceDirectAnswer,
+  type RuntimeQuickEvidenceCounts,
+  type RuntimeQuickEvidenceDirectAnswer,
+} from '../../quickEvidenceDirectAnswer';
+import {
+  buildQuickDirectAcknowledgementAnalysisResult,
+  buildQuickDirectEvidenceAnalysisResult,
+  countCompletedQuickConversationTurns,
+  emitQuickDirectAnswerEvents,
+  emitQuickDirectQualityGateIssue,
+} from '../../quickDirectResult';
 import {
   createJsonSchemaFromZodRawShape,
   normalizeRuntimeToolArgs,
@@ -261,7 +276,7 @@ interface OpenCodeAnalysisPreparation {
   packageName?: string;
   architecture?: ArchitectureInfo;
   sessionContext: ReturnType<typeof sessionContextManager.getOrCreate>;
-  previousTurns: any[];
+  previousTurns: ConversationTurn[];
   analysisPlan: { current: AnalysisPlanV3 | null; history: AnalysisPlanV3[] };
   notes: AnalysisNote[];
   hypotheses: Hypothesis[];
@@ -733,16 +748,18 @@ export async function dispatchOpenCodeBridgeRequest(
           signal: options.getSignal?.(),
         }),
       );
-      recordPlanToolCall(options.analysisPlan?.current, {
+      const projected = projectPrivateKnowledgeToolResult(definition.name, result);
+      const resultText = summarizeOpenCodeToolResult(projected ?? result);
+      recordPlanOrPrePlanToolCall(options.analysisPlan, {
         toolName: definition.name,
         input: args,
-        resultText: summarizeOpenCodeToolResult(result),
+        resultText,
       });
       emitUpdate?.({
         type: 'agent_response',
         content: {
           taskId,
-          result: summarizeOpenCodeToolResult(result),
+          result: resultText,
         },
         timestamp: Date.now(),
       });
@@ -1569,6 +1586,89 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
     options: AnalysisOptions,
   ): Promise<AnalysisResult> {
     const startedAt = Date.now();
+    const outputLanguage = parseOutputLanguage(this.env.SMARTPERFETTO_OUTPUT_LANGUAGE);
+    const sceneType = classifyScene(query);
+    const sessionContext = sessionContextManager.getOrCreate(sessionId, traceId);
+    const previousTurns = sessionContext.getAllTurns?.() || [];
+    const quickResolution = resolveRuntimeQuickMode({
+      query,
+      sceneType,
+      analysisMode: options.analysisMode,
+      selectionContext: options.selectionContext,
+      packageName: options.packageName,
+      hasReferenceTrace: Boolean(options.referenceTraceId),
+      previousTurns,
+    });
+    if (quickResolution.quickMode && quickResolution.quickAcknowledgementDirectAnswer) {
+      const analysisRunSpec = createAnalysisRunSpec({
+        query,
+        sessionId,
+        traceId,
+        options,
+        runtimeSelection: this.selection,
+        engineCapabilities: getOpenCodeEngineCapabilities(this.selection.kind),
+        sceneType,
+        outputLanguage,
+      });
+      return this.buildDirectQuickAcknowledgementResult({
+        query,
+        sessionId,
+        options,
+        startedAt,
+        sceneType,
+        outputLanguage,
+        sessionContext,
+        previousTurns,
+        analysisRunSpec,
+      });
+    }
+
+    const directEvidenceAnswer = quickResolution.quickMode
+      ? await buildRuntimeQuickEvidenceDirectAnswer({
+          query,
+          traceId,
+          packageName: options.packageName,
+          selectionContext: options.selectionContext,
+          traceProcessorService: this.input.traceProcessorService,
+          outputLanguage,
+          quickFocusAppPreEvidence: quickResolution.quickFocusAppPreEvidence,
+          quickProcessIdentityPreEvidence: quickResolution.quickProcessIdentityPreEvidence,
+          quickTraceFactPreEvidence: quickResolution.quickTraceFactPreEvidence,
+          quickScrollingTriagePreEvidence: quickResolution.quickScrollingTriagePreEvidence,
+          emitUpdate: update => this.emitUpdate(update),
+        })
+      : undefined;
+    if (directEvidenceAnswer) {
+      const analysisRunSpec = createAnalysisRunSpec({
+        query,
+        sessionId,
+        traceId,
+        options: {
+          ...options,
+          ...(directEvidenceAnswer.effectivePackageName ? {
+            packageName: directEvidenceAnswer.effectivePackageName,
+          } : {}),
+        },
+        runtimeSelection: this.selection,
+        engineCapabilities: getOpenCodeEngineCapabilities(this.selection.kind),
+        sceneType,
+        outputLanguage,
+      });
+      return this.buildDirectQuickEvidenceResult({
+        query,
+        sessionId,
+        options,
+        startedAt,
+        sceneType,
+        outputLanguage,
+        sessionContext,
+        previousTurns,
+        analysisRunSpec,
+        directAnswer: directEvidenceAnswer.directAnswer,
+        evidenceCounts: directEvidenceAnswer.evidenceCounts,
+      });
+    }
+
     const sdk = await this.moduleLoader(this.env);
     const modelConfig = resolveOpenCodeModelConfig(this.env, this.selection, this.input.providerScope);
     const prep = await this.prepareAnalysis(query, sessionId, traceId, options);
@@ -1728,7 +1828,7 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
               enforcement: 'timeout_only',
             });
             return buildQuickRunReceipt({
-              requestedMode: 'fast',
+              requestedMode: options.analysisMode ?? 'auto',
               profile: shouldMarkQuickRunTriage(query) ? 'triage' : undefined,
               budget: quickBudget,
               actualTurns: 1,
@@ -1744,7 +1844,7 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
                 frontendPrequeryInjected: prep.analysisRunSpec.traceContext.datasetCount,
               },
               contextInjected: {
-                conversationTurns: prep.previousTurns.filter((turn: any) => turn?.completed).slice(-3).length,
+                conversationTurns: countCompletedQuickConversationTurns(prep.previousTurns),
                 ...(prep.quickMemoryContextCounts ?? {
                   recentSqlResults: 0,
                   sqlPitfallPairs: 0,
@@ -1868,6 +1968,134 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
     return result;
   }
 
+  private buildDirectQuickEvidenceResult(input: {
+    query: string;
+    sessionId: string;
+    options: AnalysisOptions;
+    startedAt: number;
+    sceneType: SceneType;
+    outputLanguage: OutputLanguage;
+    sessionContext: ReturnType<typeof sessionContextManager.getOrCreate>;
+    previousTurns: ConversationTurn[];
+    analysisRunSpec: AnalysisRunSpec;
+    directAnswer: RuntimeQuickEvidenceDirectAnswer;
+    evidenceCounts: RuntimeQuickEvidenceCounts;
+  }): AnalysisResult {
+    const quickBudget = resolveQuickTurnBudget({
+      env: this.env,
+      targetEnvKeys: ['AGENT_QUICK_TARGET_TURNS'],
+      hardCapEnvKeys: ['AGENT_QUICK_MAX_TURNS'],
+      enforcement: 'timeout_only',
+    });
+    const result = buildQuickDirectEvidenceAnalysisResult({
+      query: input.query,
+      sessionId: input.sessionId,
+      options: input.options,
+      startedAt: input.startedAt,
+      analysisRunSpec: input.analysisRunSpec,
+      budget: quickBudget,
+      directAnswer: input.directAnswer,
+      evidenceCounts: input.evidenceCounts,
+      previousTurns: input.previousTurns,
+    });
+    emitQuickDirectQualityGateIssue({
+      emitUpdate: update => this.emitUpdate(update),
+      module: 'openCodeRuntime',
+      result,
+      query: input.query,
+      sceneType: input.sceneType,
+    });
+    input.sessionContext.addTurn(
+      input.query,
+      {
+        primaryGoal: input.query,
+        aspects: [],
+        expectedOutputType: 'diagnosis',
+        complexity: 'simple',
+        followUpType: input.previousTurns.length > 0 ? 'extend' : 'initial',
+      },
+      {
+        agentId: 'opencode',
+        success: result.success,
+        findings: result.findings,
+        confidence: result.confidence,
+        message: result.conclusion,
+      },
+      result.findings,
+    );
+    emitQuickDirectAnswerEvents({
+      emitUpdate: update => this.emitUpdate(update),
+      result,
+      startedAt: input.startedAt,
+      outputLanguage: input.outputLanguage,
+      runtime: this.selection.kind,
+      model: 'runtime-pre-evidence',
+    });
+    return result;
+  }
+
+  private buildDirectQuickAcknowledgementResult(input: {
+    query: string;
+    sessionId: string;
+    options: AnalysisOptions;
+    startedAt: number;
+    sceneType: SceneType;
+    outputLanguage: OutputLanguage;
+    sessionContext: ReturnType<typeof sessionContextManager.getOrCreate>;
+    previousTurns: ConversationTurn[];
+    analysisRunSpec: AnalysisRunSpec;
+  }): AnalysisResult {
+    const quickBudget = resolveQuickTurnBudget({
+      env: this.env,
+      targetEnvKeys: ['AGENT_QUICK_TARGET_TURNS'],
+      hardCapEnvKeys: ['AGENT_QUICK_MAX_TURNS'],
+      enforcement: 'timeout_only',
+    });
+    const result = buildQuickDirectAcknowledgementAnalysisResult({
+      sessionId: input.sessionId,
+      options: input.options,
+      outputLanguage: input.outputLanguage,
+      startedAt: input.startedAt,
+      analysisRunSpec: input.analysisRunSpec,
+      budget: quickBudget,
+      previousTurns: input.previousTurns,
+    });
+    emitQuickDirectQualityGateIssue({
+      emitUpdate: update => this.emitUpdate(update),
+      module: 'openCodeRuntime',
+      result,
+      query: input.query,
+      sceneType: input.sceneType,
+    });
+    input.sessionContext.addTurn(
+      input.query,
+      {
+        primaryGoal: input.query,
+        aspects: [],
+        expectedOutputType: 'diagnosis',
+        complexity: 'simple',
+        followUpType: input.previousTurns.length > 0 ? 'extend' : 'initial',
+      },
+      {
+        agentId: 'opencode',
+        success: result.success,
+        findings: result.findings,
+        confidence: result.confidence,
+        message: result.conclusion,
+      },
+      result.findings,
+    );
+    emitQuickDirectAnswerEvents({
+      emitUpdate: update => this.emitUpdate(update),
+      result,
+      startedAt: input.startedAt,
+      outputLanguage: input.outputLanguage,
+      runtime: this.selection.kind,
+      model: 'runtime-acknowledgement',
+    });
+    return result;
+  }
+
   private async prepareAnalysis(
     query: string,
     sessionId: string,
@@ -1876,8 +2104,23 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
   ): Promise<OpenCodeAnalysisPreparation> {
     const outputLanguage = parseOutputLanguage(this.env.SMARTPERFETTO_OUTPUT_LANGUAGE);
     const sceneType = classifyScene(query);
-    const quickMode = options.analysisMode === 'fast';
-    const focusResult = await detectFocusApps(this.input.traceProcessorService, traceId);
+    const sessionContext = sessionContextManager.getOrCreate(sessionId, traceId);
+    const previousTurns = sessionContext.getAllTurns?.() || [];
+    const quickResolution = resolveRuntimeQuickMode({
+      query,
+      sceneType,
+      analysisMode: options.analysisMode,
+      selectionContext: options.selectionContext,
+      packageName: options.packageName,
+      hasReferenceTrace: Boolean(options.referenceTraceId),
+      previousTurns,
+    });
+    const quickMode = quickResolution.quickMode;
+    const focusResult = quickResolution.skipFocusDetection
+      ? { apps: [], method: 'none' as const }
+      : await detectFocusApps(this.input.traceProcessorService, traceId, {
+          timeRange: focusAppTimeRangeFromSelection(options.selectionContext),
+        });
     const effectivePackageName = options.packageName || focusResult.primaryApp;
     const analysisRunSpec = createAnalysisRunSpec({
       query,
@@ -1896,7 +2139,7 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
     skillExecutor.setFragmentRegistry(skillRegistry.getFragmentCache());
 
     let architecture = this.architectureCache.get(traceId);
-    if (!architecture) {
+    if (!architecture && !quickResolution.skipTracePreflightDetection) {
       try {
         architecture = await createArchitectureDetector().detect({
           traceId,
@@ -1917,21 +2160,21 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
     }
 
     let traceCompleteness: Awaited<ReturnType<typeof probeTraceCompleteness>> | undefined;
-    try {
-      traceCompleteness = await probeTraceCompleteness(
-        this.input.traceProcessorService,
-        traceId,
-        architecture?.type,
-      );
-    } catch (err) {
-      console.warn('[OpenCodeRuntime] Trace completeness probe failed:', (err as Error).message);
+    if (!quickMode) {
+      try {
+        traceCompleteness = await probeTraceCompleteness(
+          this.input.traceProcessorService,
+          traceId,
+          architecture?.type,
+        );
+      } catch (err) {
+        console.warn('[OpenCodeRuntime] Trace completeness probe failed:', (err as Error).message);
+      }
     }
 
-    const sessionContext = sessionContextManager.getOrCreate(sessionId, traceId);
-    const previousTurns = sessionContext.getAllTurns?.() || [];
     const previousFindings = previousTurns
       .slice(-3)
-      .flatMap((turn: any) => Array.isArray(turn?.findings) ? turn.findings : []);
+      .flatMap(turn => turn.findings);
     const conversationSummary = previousTurns.length > 0
       ? sessionContext.generatePromptContext(2000)
       : undefined;
@@ -1968,6 +2211,10 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
     const knowledgeScope = analysisRunSpec.scopes.knowledge;
     const recentSqlErrors = loadLearnedSqlFixPairs(5, knowledgeScope);
     const skillNotesBudget = createRuntimeSkillNotesBudget(quickMode);
+    const comparisonContext = buildRuntimeTracePairComparisonContext({
+      ...(options.referenceTraceId ? { referenceTraceId: options.referenceTraceId } : {}),
+      ...(options.tracePairContext ? { tracePairContext: options.tracePairContext } : {}),
+    });
     const { toolDefinitions } = createClaudeMcpServer({
       sessionId,
       traceId,
@@ -1994,7 +2241,9 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
       knowledgeScope,
       codeAwareMode: options.codeAwareMode,
       codebaseIds: options.codebaseIds,
+      knowledgeSourceIds: options.knowledgeSourceIds,
       referenceTraceId: options.referenceTraceId,
+      ...(comparisonContext ? { comparisonContext } : {}),
     });
     const allowedToolNames = new Set(toolDefinitions.map(definition => definition.name));
 
@@ -2092,6 +2341,7 @@ export class OpenCodeRuntime extends EventEmitter implements IOrchestrator {
       outputLanguage,
       codeAwareMode: options.codeAwareMode,
       codebaseIds: options.codebaseIds,
+      ...(comparisonContext ? { comparison: comparisonContext } : {}),
     };
     const sharedSystemPrompt = buildSystemPrompt(analysisContext);
     const extraSystemPrompt = normalizeOptionalString(

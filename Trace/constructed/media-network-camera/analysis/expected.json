@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "case_id": "media-network-camera",
+  "marker": "SmartPerfetto::CASE::media-network-camera",
+  "expectations": [
+    {
+      "id": "execute-camera_trace_evidence",
+      "type": "skill",
+      "target": "camera_trace_evidence",
+      "mode": "semantic",
+      "source_file": "backend/skills/composite/camera_trace_evidence.skill.yaml",
+      "parameters": {
+        "max_rows": 20
+      },
+      "required_steps": [
+        "evidence_coverage"
+      ],
+      "semantic_step": "evidence_coverage",
+      "required_marker": "SmartPerfetto::CASE::media-network-camera"
+    },
+    {
+      "id": "execute-media_codec_activity",
+      "type": "skill",
+      "target": "media_codec_activity",
+      "mode": "semantic",
+      "source_file": "backend/skills/atomic/media_codec_activity.skill.yaml",
+      "parameters": {},
+      "required_steps": [
+        "codec_activity_summary"
+      ],
+      "semantic_step": "codec_activity_summary",
+      "required_marker": "SmartPerfetto::CASE::media-network-camera"
+    },
+    {
+      "id": "execute-modem_network_correlation_summary",
+      "type": "skill",
+      "target": "modem_network_correlation_summary",
+      "mode": "semantic",
+      "source_file": "backend/skills/atomic/modem_network_correlation_summary.skill.yaml",
+      "parameters": {
+        "top_n": 20
+      },
+      "required_steps": [
+        "modem_network_correlation"
+      ],
+      "semantic_step": "modem_network_correlation",
+      "required_marker": "SmartPerfetto::CASE::media-network-camera"
+    },
+    {
+      "id": "execute-network_analysis",
+      "type": "skill",
+      "target": "network_analysis",
+      "mode": "semantic",
+      "source_file": "backend/skills/composite/network_analysis.skill.yaml",
+      "parameters": {
+        "heavy_traffic_critical_mb": 100,
+        "heavy_traffic_warning_mb": 10,
+        "frequent_active_periods": 20
+      },
+      "required_steps": [
+        "check_network_data",
+        "check_network_slices",
+        "evidence_scope",
+        "network_overview",
+        "traffic_by_interface",
+        "app_traffic_ranking",
+        "transport_distribution",
+        "port_analysis",
+        "traffic_timeline",
+        "large_transfers",
+        "network_power_cost",
+        "network_slice_overview"
+      ],
+      "semantic_step": "network_slice_overview",
+      "required_marker": "SmartPerfetto::CASE::media-network-camera"
+    },
+    {
+      "id": "definition-pipeline_camera_pipeline",
+      "type": "skill",
+      "target": "pipeline_camera_pipeline",
+      "mode": "definition",
+      "source_file": "backend/skills/pipelines/camera_pipeline.skill.yaml",
+      "required_marker": "SmartPerfetto::CASE::media-network-camera"
+    },
+    {
+      "id": "execute-webview_v8_analysis",
+      "type": "skill",
+      "target": "webview_v8_analysis",
+      "mode": "semantic",
+      "source_file": "backend/skills/atomic/webview_v8_analysis.skill.yaml",
+      "parameters": {},
+      "required_steps": [
+        "v8_gc_events"
+      ],
+      "semantic_step": "v8_gc_events",
+      "required_marker": "SmartPerfetto::CASE::media-network-camera"
+    },
+    {
+      "id": "strategy-media",
+      "type": "strategy",
+      "target": "media",
+      "query": "视频",
+      "expected_strategy": "media",
+      "source_file": "backend/strategies/media.strategy.md",
+      "required_marker": "SmartPerfetto::CASE::media-network-camera"
+    },
+    {
+      "id": "strategy-network",
+      "type": "strategy",
+      "target": "network",
+      "query": "网络",
+      "expected_strategy": "network",
+      "source_file": "backend/strategies/network.strategy.md",
+      "required_marker": "SmartPerfetto::CASE::media-network-camera"
+    }
+  ]
+}

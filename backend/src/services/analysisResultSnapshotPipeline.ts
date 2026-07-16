@@ -38,6 +38,8 @@ export interface CompletedAnalysisSnapshotInput {
   terminationReason?: string;
   terminationMessage?: string;
   dataEnvelopes?: DataEnvelope[];
+  analysisReceipt?: import('../types/dataContract').AnalysisReceiptV1;
+  uiActionProposals?: import('../types/dataContract').UiActionProposalV1[];
   createdAt?: number;
 }
 
@@ -82,7 +84,7 @@ function stableEnvelopeContentHash(env: DataEnvelope): string {
 
 function envelopeTraceValue(
   env: DataEnvelope,
-  key: 'traceSide' | 'traceId',
+  key: 'traceSide' | 'traceId' | 'paneSide',
 ): string | undefined {
   const envelopeAny = env as any;
   const metaValue = env.meta?.[key];
@@ -253,6 +255,7 @@ function evidenceRefsFromInput(input: CompletedAnalysisSnapshotInput): EvidenceR
         stepId: env.meta?.stepId,
         evidenceRefId: env.meta?.evidenceRefId,
         traceSide: envelopeTraceValue(env, 'traceSide'),
+        paneSide: envelopeTraceValue(env, 'paneSide'),
         traceId: envelopeTraceValue(env, 'traceId'),
         queryHash: env.meta?.queryHash,
         sourceToolCallId: env.meta?.sourceToolCallId,
@@ -441,6 +444,8 @@ export function buildCompletedAnalysisResultSnapshot(
       headline,
       ...(input.confidence !== undefined ? { confidence: input.confidence } : {}),
       ...(partialReasons.length > 0 ? { partialReasons } : {}),
+      ...(input.analysisReceipt ? { analysisReceipt: input.analysisReceipt } : {}),
+      ...(input.uiActionProposals && input.uiActionProposals.length > 0 ? { uiActionProposals: input.uiActionProposals } : {}),
     },
     ...(input.conclusionContract ? { conclusionContract: input.conclusionContract } : {}),
     ...(input.claimSupport ? { claimSupport: input.claimSupport } : {}),

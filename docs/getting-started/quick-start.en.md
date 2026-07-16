@@ -88,3 +88,13 @@ and [Testing Rules](../../.claude/rules/testing.md):
 Release, npm, Docker, or portable-package changes also need the
 [Release Runbook](../reference/release.en.md) and
 [Release Rules](../../.claude/rules/release.md).
+
+## 7. Trace Corpus
+
+The repository's [Trace corpus](../../Trace/README.md) separates real cases from reproducible constructed cases. Each real case keeps its trace, analysis results, logs, provenance, and Android/API metadata in one directory. Constructed cases store deterministic overlays on real base traces and cover the current Skill and Strategy inventory.
+
+- Check indexes, hashes, publication approvals, and exact coverage: `npm run trace:validate`
+- Build every combined trace: `npm run trace:build`
+- Run the full release regression: `npm run trace:regression`
+
+New captures must enter the ignored `.private/` staging area through `import-real`. Run `promote-real` only after recording license, consent, privacy review, and sanitization review. See [Trace/README.md](../../Trace/README.md) for complete commands, the constructed-scenario template, coverage quality levels, and Android-version conventions.

@@ -29,7 +29,7 @@ describe('ProviderService', () => {
     name: 'My Anthropic',
     category: 'official',
     type: 'anthropic',
-    models: { primary: 'claude-sonnet-4-6', light: 'claude-haiku-4-5' },
+    models: { primary: 'claude-sonnet-5', light: 'claude-haiku-4-5' },
     connection: { apiKey: 'sk-ant-test123456' },
   };
 
@@ -151,7 +151,7 @@ describe('ProviderService', () => {
       svc.activate(p.id);
       const env = svc.getEffectiveEnv()!;
       expect(env.ANTHROPIC_API_KEY).toBe('sk-ant-test123456');
-      expect(env.CLAUDE_MODEL).toBe('claude-sonnet-4-6');
+      expect(env.CLAUDE_MODEL).toBe('claude-sonnet-5');
       expect(env.CLAUDE_LIGHT_MODEL).toBe('claude-haiku-4-5');
     });
 
@@ -169,7 +169,7 @@ describe('ProviderService', () => {
     });
 
     it('normalizes short Anthropic model IDs to Bedrock cross-region IDs', () => {
-      // Bedrock rejects 'claude-sonnet-4-6' with 400 invalid model identifier.
+      // Bedrock rejects 'claude-sonnet-5' with 400 invalid model identifier.
       // An existing bedrock provider that still holds a short name must be
       // normalized at env-build time. See GitHub issue #179.
       const p = svc.create({
@@ -179,7 +179,7 @@ describe('ProviderService', () => {
       });
       svc.activate(p.id);
       const env = svc.getEffectiveEnv()!;
-      expect(env.CLAUDE_MODEL).toBe('us.anthropic.claude-sonnet-4-5-20250929-v1:0');
+      expect(env.CLAUDE_MODEL).toBe('us.anthropic.claude-sonnet-5');
       expect(env.CLAUDE_LIGHT_MODEL).toBe('us.anthropic.claude-haiku-4-5-20251001-v1:0');
     });
 

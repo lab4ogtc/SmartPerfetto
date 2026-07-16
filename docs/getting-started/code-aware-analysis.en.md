@@ -33,7 +33,7 @@ npm run cli -- codebase symbols MainActivity --codebase-id cb_xxx
 npm run cli -- run --format json \
   --code-aware metadata_only \
   --codebase-id cb_xxx \
-  ../test-traces/lacunh_heavy.pftrace \
+  ../Trace/real/android-startup-heavy/trace.pftrace \
   "Find the startup bottleneck and map it to source code"
 ```
 
@@ -67,8 +67,8 @@ npm run verify:codebase-aware
 
 The local full E2E uses:
 
-- `test-traces/lacunh_heavy.pftrace`
-- `test-traces/launch_light.pftrace`
+- `Trace/real/android-startup-heavy/trace.pftrace`
+- `Trace/real/android-startup-light/trace.pftrace`
 - `/Users/chris/Code/HighPerformanceFriendsCircle`
 
 The E2E covers both paths:

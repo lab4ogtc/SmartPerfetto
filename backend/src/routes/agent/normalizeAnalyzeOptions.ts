@@ -3,7 +3,13 @@
 // This file is part of SmartPerfetto. See LICENSE for details.
 
 import type { CodeAwareMode } from '../../services/codebase/codeAwareFeature';
-import type { SelectionContext } from '../../agentv3/types';
+import type {
+  SelectionContext,
+  TracePairContext,
+  TracePairLayout,
+  TracePaneSide,
+  TraceSource,
+} from '../../agentv3/types';
 import type {
   SceneAnalysisSelection,
   SceneAnalysisSelectionScope,
@@ -19,9 +25,11 @@ export interface NormalizedAnalyzeOptions {
   preset?: AnalyzePreset;
   codeAwareMode?: CodeAwareMode;
   codebaseIds?: string[];
+  knowledgeSourceIds?: string[];
   generateTracks?: boolean;
   forceRefresh?: boolean;
   selectionContext?: SelectionContext;
+  tracePairContext?: TracePairContext;
   blockedStrategyIds?: string[];
   maxRounds?: number;
   confidenceThreshold?: number;
@@ -51,12 +59,16 @@ export class AnalyzeOptionsError extends Error {
   }
 }
 
+export interface NormalizeAnalyzeOptionsContext {
+  readonly endpoint: AnalyzeEndpointKind;
+  readonly hasReferenceTraceId: boolean;
+  readonly traceId?: string;
+  readonly referenceTraceId?: string;
+}
+
 export function normalizeAnalyzeOptions(
   rawOptions: unknown,
-  ctx: {
-    endpoint: AnalyzeEndpointKind;
-    hasReferenceTraceId: boolean;
-  },
+  ctx: NormalizeAnalyzeOptionsContext,
 ): NormalizedAnalyzeOptions {
   const raw = rawOptions && typeof rawOptions === 'object' && !Array.isArray(rawOptions)
     ? rawOptions as Record<string, unknown>
@@ -98,6 +110,9 @@ export function normalizeAnalyzeOptions(
   const codebaseIds = normalizeStringArray(raw.codebaseIds);
   if (codebaseIds.length > 0) normalized.codebaseIds = codebaseIds;
 
+  const knowledgeSourceIds = normalizeStringArray(raw.knowledgeSourceIds);
+  if (knowledgeSourceIds.length > 0) normalized.knowledgeSourceIds = knowledgeSourceIds;
+
   const blockedStrategyIds = normalizeStringArray(raw.blockedStrategyIds);
   if (blockedStrategyIds.length > 0) normalized.blockedStrategyIds = blockedStrategyIds;
 
@@ -117,6 +132,13 @@ export function normalizeAnalyzeOptions(
 
   if (raw.selectionContext && typeof raw.selectionContext === 'object') {
     normalized.selectionContext = raw.selectionContext as SelectionContext;
+  }
+  if (ctx.hasReferenceTraceId) {
+    const tracePairContext = normalizeTracePairContext(
+      raw.tracePairContext,
+      tracePairIdentityFromContext(ctx),
+    );
+    if (tracePairContext) normalized.tracePairContext = tracePairContext;
   }
   if (raw.timeRange && typeof raw.timeRange === 'object') {
     normalized.timeRange = raw.timeRange;
@@ -240,35 +262,268 @@ function normalizeStringArray(value: unknown): string[] {
   return out;
 }
 
+const TRACE_PANE_SIDES = new Set<TracePaneSide>(['left', 'right', 'top', 'bottom']);
+const TRACE_PAIR_LAYOUTS = new Set<TracePairLayout>(['horizontal', 'vertical']);
+const TRACE_SOURCES = new Set<TraceSource>(['current', 'reference']);
+const HORIZONTAL_TRACE_PANE_SIDES = new Set<TracePaneSide>(['left', 'right']);
+const VERTICAL_TRACE_PANE_SIDES = new Set<TracePaneSide>(['top', 'bottom']);
+
+interface TracePairIdentity {
+  readonly currentTraceId?: string;
+  readonly referenceTraceId?: string;
+}
+
+function tracePairIdentityFromContext(ctx: NormalizeAnalyzeOptionsContext): TracePairIdentity {
+  return {
+    ...(ctx.traceId ? { currentTraceId: ctx.traceId } : {}),
+    ...(ctx.referenceTraceId ? { referenceTraceId: ctx.referenceTraceId } : {}),
+  };
+}
+
+function normalizeTracePairContext(
+  value: unknown,
+  identity: TracePairIdentity,
+): TracePairContext | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  if (raw.schemaVersion !== 1) return undefined;
+
+  const layout = normalizeTracePairLayout(raw.layout);
+  const primarySide = normalizeTracePaneSide(raw.primarySide);
+  const referenceSide = normalizeTracePaneSide(raw.referenceSide);
+  if (!layout || !primarySide || !referenceSide) return undefined;
+  if (primarySide === referenceSide) return undefined;
+  if (!tracePaneSideMatchesLayout(layout, primarySide)) return undefined;
+  if (!tracePaneSideMatchesLayout(layout, referenceSide)) return undefined;
+
+  const panes = Array.isArray(raw.panes)
+    ? raw.panes
+        .slice(0, 4)
+        .map(normalizeTracePairPane)
+        .filter((pane): pane is TracePairContext['panes'][number] => pane !== undefined)
+    : [];
+  const currentPane = panes.find(pane => pane.traceSide === 'current');
+  const referencePane = panes.find(pane => pane.traceSide === 'reference');
+  if (!currentPane || !referencePane) return undefined;
+  if (currentPane.side !== primarySide || referencePane.side !== referenceSide) return undefined;
+  if (!tracePairPaneMatchesIdentity(currentPane, identity.currentTraceId)) return undefined;
+  if (!tracePairPaneMatchesIdentity(referencePane, identity.referenceTraceId)) return undefined;
+
+  const activeSide = normalizeTracePaneSide(raw.activeSide);
+  const layoutActiveSide = activeSide && tracePaneSideMatchesLayout(layout, activeSide)
+    ? activeSide
+    : undefined;
+  const workspaceOpen = typeof raw.workspaceOpen === 'boolean'
+    ? raw.workspaceOpen
+    : undefined;
+  const splitPercent = normalizeTracePairSplitPercent(raw.splitPercent);
+  const maximizedTraceSide = normalizeTraceSource(raw.maximizedTraceSide);
+  const minimizedTraceSides = normalizeTraceSources(raw.minimizedTraceSides);
+  return {
+    schemaVersion: 1,
+    layout,
+    primarySide,
+    referenceSide,
+    ...(layoutActiveSide ? { activeSide: layoutActiveSide } : {}),
+    ...(workspaceOpen !== undefined ? { workspaceOpen } : {}),
+    ...(splitPercent !== undefined ? { splitPercent } : {}),
+    ...(maximizedTraceSide ? { maximizedTraceSide } : {}),
+    ...(minimizedTraceSides.length > 0 ? { minimizedTraceSides } : {}),
+    ...normalizeTracePairAliases(raw.aliases),
+    panes,
+  };
+}
+
+function tracePaneSideMatchesLayout(layout: TracePairLayout, side: TracePaneSide): boolean {
+  return layout === 'horizontal'
+    ? HORIZONTAL_TRACE_PANE_SIDES.has(side)
+    : VERTICAL_TRACE_PANE_SIDES.has(side);
+}
+
+function tracePairPaneMatchesIdentity(
+  pane: TracePairContext['panes'][number],
+  expectedTraceId: string | undefined,
+): boolean {
+  return expectedTraceId === undefined || pane.traceId === expectedTraceId;
+}
+
+function normalizeTracePairPane(value: unknown): TracePairContext['panes'][number] | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const side = normalizeTracePaneSide(raw.side);
+  const traceSide = normalizeTraceSource(raw.traceSide);
+  const traceId = normalizeOptionalString(raw.traceId, 256);
+  if (!side || !traceSide || !traceId) return undefined;
+
+  const traceName = normalizeOptionalString(raw.traceName, 256);
+  const traceFingerprint = normalizeOptionalString(raw.traceFingerprint, 256);
+  const active = typeof raw.active === 'boolean' ? raw.active : undefined;
+  const visualState = raw.visualState === 'live' || raw.visualState === 'context_only'
+    ? raw.visualState
+    : undefined;
+
+  return {
+    side,
+    traceSide,
+    traceId,
+    ...(traceName ? { traceName } : {}),
+    ...(traceFingerprint ? { traceFingerprint } : {}),
+    ...(active !== undefined ? { active } : {}),
+    ...(visualState ? { visualState } : {}),
+  };
+}
+
+function normalizeTracePaneSide(value: unknown): TracePaneSide | undefined {
+  return typeof value === 'string' && TRACE_PANE_SIDES.has(value as TracePaneSide)
+    ? value as TracePaneSide
+    : undefined;
+}
+
+function normalizeTracePairLayout(value: unknown): TracePairLayout | undefined {
+  return typeof value === 'string' && TRACE_PAIR_LAYOUTS.has(value as TracePairLayout)
+    ? value as TracePairLayout
+    : undefined;
+}
+
+function normalizeTraceSource(value: unknown): TraceSource | undefined {
+  return typeof value === 'string' && TRACE_SOURCES.has(value as TraceSource)
+    ? value as TraceSource
+    : undefined;
+}
+
+function normalizeTraceSources(value: unknown): TraceSource[] {
+  if (!Array.isArray(value)) return [];
+  const out: TraceSource[] = [];
+  for (const item of value.slice(0, 2)) {
+    const traceSource = normalizeTraceSource(item);
+    if (traceSource && !out.includes(traceSource)) out.push(traceSource);
+  }
+  return out;
+}
+
+function normalizeTracePairSplitPercent(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return Math.min(82, Math.max(18, Math.round(value)));
+}
+
+function normalizeTracePairAliases(value: unknown): { aliases?: Record<string, TraceSource> } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const raw = value as Record<string, unknown>;
+  const aliases: Record<string, TraceSource> = {};
+  for (const [key, rawTraceSide] of Object.entries(raw).slice(0, 24)) {
+    const alias = normalizeOptionalString(key, 32);
+    const traceSide = normalizeTraceSource(rawTraceSide);
+    if (!alias || !traceSide) continue;
+    aliases[alias] = traceSide;
+  }
+  return Object.keys(aliases).length > 0 ? { aliases } : {};
+}
+
+type BooleanAnalyzeOptionKey = 'generateTracks' | 'forceRefresh' | 'heavySkill' | 'longTask';
+type NumberAnalyzeOptionKey =
+  | 'maxRounds'
+  | 'confidenceThreshold'
+  | 'maxNoProgressRounds'
+  | 'maxFailureRounds'
+  | 'maxConcurrentTasks'
+  | 'taskTimeoutMs'
+  | 'estimatedSqlMs'
+  | 'traceSizeBytes';
+type StringAnalyzeOptionKey = 'packageName';
+
 function copyBoolean(
   raw: Record<string, unknown>,
   out: NormalizedAnalyzeOptions,
-  key: keyof NormalizedAnalyzeOptions & string,
+  key: BooleanAnalyzeOptionKey,
 ): void {
-  if (typeof raw[key] === 'boolean') {
-    (out as any)[key] = raw[key];
-  }
+  const value = raw[key];
+  if (typeof value !== 'boolean') return;
+  assignBooleanOption(out, key, value);
 }
 
 function copyNumber(
   raw: Record<string, unknown>,
   out: NormalizedAnalyzeOptions,
-  key: keyof NormalizedAnalyzeOptions & string,
+  key: NumberAnalyzeOptionKey,
 ): void {
   const value = raw[key];
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    (out as any)[key] = value;
-  }
+  if (typeof value !== 'number' || !Number.isFinite(value)) return;
+  assignNumberOption(out, key, value);
 }
 
 function copyString(
   raw: Record<string, unknown>,
   out: NormalizedAnalyzeOptions,
-  key: keyof NormalizedAnalyzeOptions & string,
+  key: StringAnalyzeOptionKey,
 ): void {
   const value = raw[key];
-  if (typeof value === 'string' && value.trim()) {
-    (out as any)[key] = value.trim();
+  if (typeof value !== 'string' || !value.trim()) return;
+  assignStringOption(out, key, value.trim());
+}
+
+function assignBooleanOption(
+  out: NormalizedAnalyzeOptions,
+  key: BooleanAnalyzeOptionKey,
+  value: boolean,
+): void {
+  switch (key) {
+    case 'generateTracks':
+      out.generateTracks = value;
+      return;
+    case 'forceRefresh':
+      out.forceRefresh = value;
+      return;
+    case 'heavySkill':
+      out.heavySkill = value;
+      return;
+    case 'longTask':
+      out.longTask = value;
+      return;
+  }
+}
+
+function assignNumberOption(
+  out: NormalizedAnalyzeOptions,
+  key: NumberAnalyzeOptionKey,
+  value: number,
+): void {
+  switch (key) {
+    case 'maxRounds':
+      out.maxRounds = value;
+      return;
+    case 'confidenceThreshold':
+      out.confidenceThreshold = value;
+      return;
+    case 'maxNoProgressRounds':
+      out.maxNoProgressRounds = value;
+      return;
+    case 'maxFailureRounds':
+      out.maxFailureRounds = value;
+      return;
+    case 'maxConcurrentTasks':
+      out.maxConcurrentTasks = value;
+      return;
+    case 'taskTimeoutMs':
+      out.taskTimeoutMs = value;
+      return;
+    case 'estimatedSqlMs':
+      out.estimatedSqlMs = value;
+      return;
+    case 'traceSizeBytes':
+      out.traceSizeBytes = value;
+      return;
+  }
+}
+
+function assignStringOption(
+  out: NormalizedAnalyzeOptions,
+  key: StringAnalyzeOptionKey,
+  value: string,
+): void {
+  switch (key) {
+    case 'packageName':
+      out.packageName = value;
+      return;
   }
 }
 

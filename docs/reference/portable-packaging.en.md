@@ -112,9 +112,11 @@ AI analysis should normally use Provider profiles configured in the UI. For env
 credentials, create an `env` file in the platform user data directory and
 restart the launcher.
 
-The bundled launcher defaults to backend `3000` and frontend `10000`. Override
-them with `SMARTPERFETTO_BACKEND_PORT` and `SMARTPERFETTO_FRONTEND_PORT` before
-starting the launcher.
+The bundled launcher prefers backend `3000` and frontend `10000`. If a preferred
+default port is already occupied, the launcher automatically selects the next
+available port and prints the actual URLs. Set `SMARTPERFETTO_BACKEND_PORT` or
+`SMARTPERFETTO_FRONTEND_PORT` only when a fixed port is required; explicitly
+configured ports fail fast when unavailable.
 
 ## Verification
 
@@ -123,7 +125,7 @@ native dependencies, and the `trace_processor_shell` pin. Before a public
 release, still run a target-platform smoke test:
 
 1. Start the bundled launcher.
-2. Open [http://localhost:10000](http://localhost:10000).
-3. Check [http://localhost:3000/health](http://localhost:3000/health).
+2. Open the printed frontend URL, usually [http://localhost:10000](http://localhost:10000).
+3. Check the printed backend health URL, usually [http://localhost:3000/health](http://localhost:3000/health).
 4. Upload a small trace and confirm the platform `trace_processor_shell` starts
    in backend logs.

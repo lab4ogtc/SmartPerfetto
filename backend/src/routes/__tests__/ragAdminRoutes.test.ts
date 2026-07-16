@@ -15,22 +15,78 @@ import {RagStore} from '../../services/ragStore';
 import type {RagChunk} from '../../types/sparkContracts';
 import {CodebaseRegistry} from '../../services/codebase/codebaseRegistry';
 import {PathSecurityGate} from '../../services/codebase/pathSecurityGate';
+import {ExternalKnowledgeSourceRegistry} from '../../services/externalKnowledgeSourceRegistry';
+import {AndroidInternalsWikiIngester} from '../../services/androidInternalsWiki/androidInternalsWikiIngester';
 
 let tmpDir: string;
 let store: RagStore;
 let registry: CodebaseRegistry;
+let externalKnowledgeRegistry: ExternalKnowledgeSourceRegistry;
 let app: express.Express;
+const DEFAULT_SCOPE = {
+  tenantId: 'default-dev-tenant',
+  workspaceId: 'default-workspace',
+  userId: 'dev-user-123',
+};
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rag-admin-test-'));
   store = new RagStore(path.join(tmpDir, 'rag.json'));
   registry = new CodebaseRegistry(path.join(tmpDir, 'codebases.json'));
+  externalKnowledgeRegistry = new ExternalKnowledgeSourceRegistry(
+    path.join(tmpDir, 'external-knowledge-sources.json'),
+  );
+  const gate = new PathSecurityGate({allowlistRoots: [tmpDir]});
+  const wikiGate = new PathSecurityGate({
+    allowlistRoots: [tmpDir],
+    allowedExtensions: ['.md'],
+  });
+  const skillsPath = path.join(tmpDir, 'audit-skills');
+  fs.mkdirSync(skillsPath, {recursive: true});
+  fs.writeFileSync(path.join(skillsPath, 'handler.skill.yaml'), [
+    'name: handler_callbacks',
+    'meta:',
+    '  tags: [handler]',
+    'triggers:',
+    '  keywords: [Handler]',
+  ].join('\n'));
+  const fixtureManifestPath = path.join(tmpDir, 'public-fixtures.yaml');
+  fs.writeFileSync(fixtureManifestPath, [
+    'fixtures:',
+    '  - id: fixture-a',
+    '    assertions:',
+    '      - query_id: handler_callbacks/callbacks',
+  ].join('\n'));
+  const capabilityMapPath = path.join(tmpDir, 'capability-map.yaml');
+  fs.writeFileSync(capabilityMapPath, [
+    'version: 1',
+    'domains:',
+    '  - id: handler',
+    '    terms: [handler]',
+    '    skill_tags: [handler]',
+    '    validations:',
+    '      - skill_id: handler_callbacks',
+    '        observable_claim: callback slices are observable',
+    '        assertion_ref: backend/skills/public-fixtures.yaml#fixture-a:handler_callbacks/callbacks',
+    '        article_paths: [src/article.md]',
+  ].join('\n'));
   app = express();
   app.use(express.json({limit: '5mb'}));
   app.use('/api/rag', createRagAdminRoutes(store, {
     registry,
-    gate: new PathSecurityGate({allowlistRoots: [tmpDir]}),
-  }));
+    gate,
+    externalKnowledgeRegistry,
+    androidInternalsWikiIngester: new AndroidInternalsWikiIngester(
+      store,
+      externalKnowledgeRegistry,
+      wikiGate,
+    ),
+    androidInternalsWikiAuditPaths: {
+      capabilityMapPath,
+      skillsPath,
+      fixtureManifestPath,
+    },
+  } as any));
 });
 
 afterEach(() => {
@@ -48,6 +104,27 @@ function makeChunk(overrides: Partial<RagChunk> = {}): RagChunk {
     indexedAt: 1714600000000,
     ...overrides,
   };
+}
+
+function createCommittedWiki(rootName: string, body = 'Handler callback details'): string {
+  const root = path.join(tmpDir, rootName);
+  fs.mkdirSync(path.join(root, 'src'), {recursive: true});
+  fs.writeFileSync(path.join(root, 'src', 'article.md'), [
+    '---',
+    'title: Android internals',
+    'status: finalized',
+    'confidence: high',
+    'tags: [handler]',
+    '---',
+    '# Android internals',
+    body,
+  ].join('\n'));
+  require('child_process').execFileSync('git', ['init', '-q', root]);
+  require('child_process').execFileSync('git', ['-C', root, 'config', 'user.email', 'test@example.com']);
+  require('child_process').execFileSync('git', ['-C', root, 'config', 'user.name', 'Test']);
+  require('child_process').execFileSync('git', ['-C', root, 'add', '.']);
+  require('child_process').execFileSync('git', ['-C', root, 'commit', '-qm', 'fixture']);
+  return root;
 }
 
 describe('GET /api/rag/stats', () => {
@@ -97,6 +174,32 @@ describe('GET / DELETE /api/rag/chunks/:chunkId', () => {
     expect(JSON.stringify(res.body)).not.toContain('secretLaunch');
   });
 
+  it('keeps private wiki chunks off generic admin chunk and search endpoints', async () => {
+    store.addChunk(makeChunk({
+      chunkId: 'wiki-private',
+      kind: 'android_internals_wiki',
+      uri: 'android-internals-wiki://source-a/article',
+      title: 'PRIVATE_WIKI_TITLE',
+      snippet: 'PRIVATE_WIKI_SNIPPET Handler queue',
+      license: 'CC-BY-NC-SA-4.0',
+      registryOrigin: 'external_knowledge_registry',
+      knowledgeSourceId: 'source-a',
+      sourceGeneration: 'generation-a',
+      filePath: 'src/article.md',
+    }), DEFAULT_SCOPE);
+
+    const chunkResponse = await request(app).get('/api/rag/chunks/wiki-private');
+    const searchResponse = await request(app)
+      .post('/api/rag/search')
+      .send({query: 'Handler queue', kinds: ['android_internals_wiki']});
+
+    expect(chunkResponse.status).toBe(404);
+    expect(searchResponse.status).toBe(200);
+    expect(searchResponse.body.result.results).toEqual([]);
+    expect(JSON.stringify({chunkResponse: chunkResponse.body, searchResponse: searchResponse.body}))
+      .not.toMatch(/PRIVATE_WIKI|knowledgeScopeFingerprint|src\/article\.md/);
+  });
+
   it('404 on missing chunkId', async () => {
     const res = await request(app).get('/api/rag/chunks/missing');
     expect(res.status).toBe(404);
@@ -144,6 +247,219 @@ describe('POST /api/rag/search', () => {
   it('400 on missing query', async () => {
     const res = await request(app).post('/api/rag/search').send({});
     expect(res.status).toBe(400);
+  });
+});
+
+describe('Android Internals Wiki routes', () => {
+  it('previews the official article inventory without returning corpus prose', async () => {
+    const root = path.join(tmpDir, 'wiki');
+    fs.mkdirSync(path.join(root, 'src'), {recursive: true});
+    fs.writeFileSync(path.join(root, 'src', 'handler.md'), [
+      '---',
+      'title: Handler internals',
+      'status: finalized',
+      '---',
+      '# Handler internals',
+      'PRIVATE_WIKI_CANARY message queue details',
+    ].join('\n'));
+    require('child_process').execFileSync('git', ['init', '-q', root]);
+    require('child_process').execFileSync('git', ['-C', root, 'config', 'user.email', 'test@example.com']);
+    require('child_process').execFileSync('git', ['-C', root, 'config', 'user.name', 'Test']);
+    require('child_process').execFileSync('git', ['-C', root, 'add', '.']);
+    require('child_process').execFileSync('git', ['-C', root, 'commit', '-qm', 'fixture']);
+
+    const response = await request(app)
+      .post('/api/rag/android-internals/preview')
+      .send({rootPath: root});
+
+    expect(response.status).toBe(200);
+    expect(response.body.preview).toEqual(expect.objectContaining({
+      totalArticles: 1,
+      metadataErrorCount: 0,
+      dirtyAcceptedArticleCount: 0,
+      contentFingerprint: expect.any(String),
+      revision: expect.any(String),
+    }));
+    expect(JSON.stringify(response.body)).not.toContain('PRIVATE_WIKI_CANARY');
+  });
+
+  it('registers a scoped source only after rights and provider consent are explicit', async () => {
+    const root = path.join(tmpDir, 'registered-wiki');
+    fs.mkdirSync(path.join(root, 'src'), {recursive: true});
+    fs.writeFileSync(path.join(root, 'src', 'handler.md'), [
+      '---',
+      'title: Handler internals',
+      'status: finalized',
+      '---',
+      '# Handler internals',
+      'Message queue details',
+    ].join('\n'));
+    require('child_process').execFileSync('git', ['init', '-q', root]);
+    require('child_process').execFileSync('git', ['-C', root, 'config', 'user.email', 'test@example.com']);
+    require('child_process').execFileSync('git', ['-C', root, 'config', 'user.name', 'Test']);
+    require('child_process').execFileSync('git', ['-C', root, 'add', '.']);
+    require('child_process').execFileSync('git', ['-C', root, 'commit', '-qm', 'fixture']);
+
+    const response = await request(app)
+      .post('/api/rag/android-internals/sources')
+      .send({
+        rootPath: root,
+        displayName: 'Android Internals Wiki',
+        rightsAcknowledged: true,
+        sendToProvider: true,
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body.source).toEqual(expect.objectContaining({
+      sourceId: expect.any(String),
+      kind: 'android_internals_wiki',
+      license: 'CC-BY-NC-SA-4.0',
+      rightsAcknowledged: true,
+      sendToProvider: true,
+      revision: expect.any(String),
+      contentFingerprint: expect.any(String),
+    }));
+    expect(response.body.source.rootRealpath).toBeUndefined();
+
+    const listed = await request(app).get('/api/rag/android-internals/sources');
+    expect(listed.status).toBe(200);
+    expect(listed.body.sources).toEqual([
+      expect.objectContaining({sourceId: response.body.source.sourceId}),
+    ]);
+    expect(JSON.stringify(listed.body)).not.toContain(root);
+  });
+
+  it('reindexes a registered source and atomically activates its generation', async () => {
+    const root = path.join(tmpDir, 'indexed-wiki');
+    fs.mkdirSync(path.join(root, 'src'), {recursive: true});
+    fs.writeFileSync(path.join(root, 'src', 'handler.md'), [
+      '---',
+      'title: Handler internals',
+      'status: finalized',
+      'confidence: high',
+      'tags: [handler]',
+      '---',
+      '# Handler internals',
+      '消息队列 Handler callback execution details',
+    ].join('\n'));
+    require('child_process').execFileSync('git', ['init', '-q', root]);
+    require('child_process').execFileSync('git', ['-C', root, 'config', 'user.email', 'test@example.com']);
+    require('child_process').execFileSync('git', ['-C', root, 'config', 'user.name', 'Test']);
+    require('child_process').execFileSync('git', ['-C', root, 'add', '.']);
+    require('child_process').execFileSync('git', ['-C', root, 'commit', '-qm', 'fixture']);
+    const registered = await request(app)
+      .post('/api/rag/android-internals/sources')
+      .send({rootPath: root, rightsAcknowledged: true, sendToProvider: true});
+    const sourceId = registered.body.source.sourceId;
+
+    const response = await request(app)
+      .post(`/api/rag/android-internals/sources/${sourceId}/reindex`)
+      .send({});
+
+    expect(response.status).toBe(200);
+    expect(response.body.result).toEqual(expect.objectContaining({
+      sourceId,
+      indexedArticleCount: 1,
+      indexedChunkCount: expect.any(Number),
+      generation: expect.any(String),
+    }));
+    expect(response.body.result.indexedChunkCount).toBeGreaterThan(0);
+    expect(store.getStats(DEFAULT_SCOPE).android_internals_wiki.chunkCount).toBeGreaterThan(0);
+  });
+
+  it('revokes provider consent immediately for subsequent indexing', async () => {
+    const root = createCommittedWiki('revoked-wiki');
+    const registered = await request(app)
+      .post('/api/rag/android-internals/sources')
+      .send({rootPath: root, rightsAcknowledged: true, sendToProvider: true});
+    const sourceId = registered.body.source.sourceId;
+
+    const revoked = await request(app)
+      .patch(`/api/rag/android-internals/sources/${sourceId}/consent`)
+      .send({sendToProvider: false});
+    const reindex = await request(app)
+      .post(`/api/rag/android-internals/sources/${sourceId}/reindex`)
+      .send({});
+
+    expect(revoked.status).toBe(200);
+    expect(revoked.body.source).toEqual(expect.objectContaining({
+      sourceId,
+      sendToProvider: false,
+    }));
+    expect(reindex.status).toBe(400);
+    expect(reindex.body.error).toBe('provider_send_not_consented');
+  });
+
+  it('clears every index generation without deleting source registration', async () => {
+    const root = createCommittedWiki('cleared-wiki');
+    const registered = await request(app)
+      .post('/api/rag/android-internals/sources')
+      .send({rootPath: root, rightsAcknowledged: true, sendToProvider: true});
+    const sourceId = registered.body.source.sourceId;
+    await request(app)
+      .post(`/api/rag/android-internals/sources/${sourceId}/reindex`)
+      .send({});
+
+    const cleared = await request(app)
+      .delete(`/api/rag/android-internals/sources/${sourceId}/index`);
+
+    expect(cleared.status).toBe(200);
+    expect(cleared.body).toEqual({
+      success: true,
+      removedChunkCount: expect.any(Number),
+      source: expect.objectContaining({
+        sourceId,
+        indexedArticleCount: 0,
+        indexedChunkCount: 0,
+      }),
+    });
+    expect(cleared.body.removedChunkCount).toBeGreaterThan(0);
+    expect(store.listChunks({kind: 'android_internals_wiki', scope: DEFAULT_SCOPE})).toHaveLength(0);
+    expect(cleared.body.source.activeGeneration).toBeUndefined();
+  });
+
+  it('audits every registered article without returning article prose', async () => {
+    const root = createCommittedWiki('audited-wiki', 'AUDIT_PRIVATE_WIKI_CANARY Handler details');
+    const registered = await request(app)
+      .post('/api/rag/android-internals/sources')
+      .send({rootPath: root, rightsAcknowledged: true, sendToProvider: false});
+    const sourceId = registered.body.source.sourceId;
+
+    const audited = await request(app)
+      .get(`/api/rag/android-internals/sources/${sourceId}/audit`);
+
+    expect(audited.status).toBe(200);
+    expect(audited.body.audit.report).toEqual(expect.objectContaining({
+      totalArticles: 1,
+      counts: expect.objectContaining({validated_trace_skill: 1}),
+      rows: [expect.objectContaining({
+        relativePath: 'src/article.md',
+        disposition: 'validated_trace_skill',
+        observableClaim: 'callback slices are observable',
+      })],
+    }));
+    expect(JSON.stringify(audited.body)).not.toContain('AUDIT_PRIVATE_WIKI_CANARY');
+  });
+
+  it('blocks audit when a registered root is replaced by a different realpath', async () => {
+    const root = createCommittedWiki('audit-root-before-swap');
+    const registered = await request(app)
+      .post('/api/rag/android-internals/sources')
+      .send({rootPath: root, rightsAcknowledged: true, sendToProvider: false});
+    const sourceId = registered.body.source.sourceId;
+    const replacement = createCommittedWiki(
+      'audit-root-replacement',
+      'AUDIT_REALPATH_DRIFT_PRIVATE_CANARY',
+    );
+    fs.rmSync(root, {recursive: true, force: true});
+    fs.symlinkSync(replacement, root, 'dir');
+
+    const audited = await request(app)
+      .get(`/api/rag/android-internals/sources/${sourceId}/audit`);
+
+    expect(audited.status).toBe(400);
+    expect(audited.body.error).toBe('knowledge_root_realpath_drift');
+    expect(JSON.stringify(audited.body)).not.toContain('AUDIT_REALPATH_DRIFT_PRIVATE_CANARY');
   });
 });
 

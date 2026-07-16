@@ -56,6 +56,7 @@ boundaries. The LLM/agent checklist is in
 | Skills | `backend/skills/` | Atomic, composite, deep, and rendering-pipeline analysis |
 | Strategies | `backend/strategies/` | Scene strategies, prompt templates, knowledge templates |
 | Code-aware analysis | `backend/src/services/codebase/`, `backend/src/services/rag/`, `backend/src/services/symbol/` | Local codebase registry, source ingestion, symbol resolution, lookup filtering, and patch status verification |
+| External Android knowledge | `backend/src/services/androidInternalsWiki/`, `externalKnowledgeSourceRegistry.ts`, `ragStore.ts` | Full-corpus Wiki audit, version/fingerprint identity, generation indexing, license/consent/scope, and private-content projection |
 | Trace processor | `backend/src/services/traceProcessorService.ts` | Trace loading, RPC management, SQL query execution |
 | Reports | `backend/src/services/htmlReportGenerator.ts` | HTML report generation |
 | Result quality pipeline | `backend/src/services/agentResultNormalizer.ts`, `finalReportContractGate.ts`, `evidence/`, `verifier/`, `analysisResultSnapshotPipeline.ts` | final report contract, evidence/claim verification, identity resolution, snapshots |
@@ -78,6 +79,9 @@ boundaries. The LLM/agent checklist is in
       -> execute_sql -> trace_processor_shell
       -> invoke_skill -> SkillExecutor -> SQL / DataEnvelope
       -> lookup_knowledge / lookup_sql_schema / fetch_artifact
+      -> lookup_blog_knowledge(source=android_internals_wiki)
+         -> request source allowlist + live registry consent/scope check
+         -> active RAG generation -> bounded attributed background context
       -> resolve_symbol / lookup_app_source / lookup_aosp_source / lookup_kernel_source
          -> LookupResponseFilter -> CodeRef metadata
       -> propose_patch -> PatchProposer -> verified / sketch / unverified
@@ -100,6 +104,12 @@ boundaries. The LLM/agent checklist is in
 CLI `smp run` / `smp ask` / `smp compare` reuse the same session, runtime,
 Skill, report, and trace-processor path. The difference is local storage under
 `~/.smartperfetto/` and terminal output as `text`, `json`, or `ndjson`.
+
+External Wiki context and trace evidence remain separate data flows. Prose can
+enter the active provider tool result only under an explicit request capability;
+runtime bridges project it to chunk references, hashes, licenses, and attribution
+before SSE, logs, reports, or snapshots. The claim verifier must not treat Wiki
+background as a measurement from the current trace.
 
 ## Runtime And Provider Boundaries
 
@@ -138,16 +148,27 @@ reports or snapshots.
 | Raw Trace Compare | frontend reference trace, CLI `smp compare` | live current trace + reference trace queries | shared comparison identity, evidence pack, session snapshot, and report section |
 | Analysis Result Compare | frontend multi-result comparison API | persisted completed-analysis snapshots | keeps workspace/RBAC/matrix behavior and reuses the shared report section |
 
+For the Web UI dual trace workspace state machine, see
+[Dual Trace Workspace Operation Model](dual-trace-workspace.en.md).
+
 ## Content Boundaries
 
 | Content | Location | Runtime role |
 |---|---|---|
 | Strategy / prompt template | `backend/strategies/*.strategy.md`, `*.template.md` | Enters the system prompt and constrains agent behavior |
 | YAML Skill | `backend/skills/**/*.skill.yaml` | Invoked through MCP `invoke_skill` for deterministic SQL analysis |
-| Rendering pipeline docs | `docs/rendering_pipelines/*.md` | Knowledge source for teaching mode and pipeline results |
+| Rendering pipeline catalog | `backend/skills/pipelines/index.yaml` | Pins the upstream commit and 14 document hashes, and classifies 31 detector entries as primary variants or supporting features |
+| Rendering pipeline docs | `docs/rendering_pipelines/S01-S14*.md` | Authoritative Android 17 teaching material synchronized from `Gracker/rendering_pipelines`; copied to `backend/dist/rendering_pipelines/` during builds |
 | Normal docs | Other files under `docs/` | User and contributor documentation |
 
 Do not hardcode prompt content in TypeScript. TypeScript should load, substitute, and structurally orchestrate prompts and Skills.
 Do not hardcode MCP tool counts, Skill counts, or scene counts in code or
 durable docs; those come from the tool registry, `backend/skills/` tree, and
 strategy frontmatter.
+
+Rendering-pipeline results preserve two identities: S02-S14 are the teaching
+`rendering type`, while the 31 pipeline entries are trace-detection subpaths or
+features. Only entries marked `classification_role: variant` and
+`primary_eligible: true` in the catalog may become the primary classification.
+Run `npm run check:rendering-pipelines` to verify the upstream pin, hashes, and
+all active references.

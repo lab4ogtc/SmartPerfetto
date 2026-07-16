@@ -20,6 +20,36 @@ Provider Base URL notice: the prefilled Claude/Anthropic-compatible and OpenAI-c
 
 The project is open source and in active development. The UI, backend runtime, and skill system are usable today, but public APIs and internal contracts may still change.
 
+<!-- android-performance-ecosystem:start -->
+## Android performance ecosystem
+
+This repository is one part of the [Android Performance Ecosystem](https://github.com/Gracker/android-performance-ecosystem): an optional path from instrumentation and capture to analysis, system knowledge, and reproducible cases.
+
+| Stage | Project | Purpose | Address |
+| --- | --- | --- | --- |
+| Instrument | [TraceFix](https://github.com/Gracker/TraceFix) | Inject app-side android.os.Trace sections at build time so method work is visible at runtime. | [GitHub](https://github.com/Gracker/TraceFix) |
+| Capture and measure | [Perfetto Tools](https://github.com/Gracker/perfetto-tools) | Capture repeatable Perfetto traces and collect FPS or Simpleperf measurements. | [GitHub](https://github.com/Gracker/perfetto-tools) |
+| Analyze | [SmartPerfetto](https://github.com/Gracker/SmartPerfetto) | Investigate traces with an AI-assisted Web UI, CLI, reports, sessions, comparisons, and evidence workflow. | [GitHub](https://github.com/Gracker/SmartPerfetto) |
+| Agent analysis | [Perfetto Skills](https://github.com/Gracker/Perfetto-Skills) | Give agents a portable Perfetto analysis Skill for Android, Linux, and Chromium, with selected assets synchronized through pinned workflows. | [GitHub](https://github.com/Gracker/Perfetto-Skills) |
+| Learn | [Android Performance Blog](https://github.com/Gracker/Gracker.github.io) | Teach Perfetto and Systrace analysis through articles, system explanations, and case studies. | [AndroidPerformance.com](https://www.androidperformance.com/) · [GitHub](https://github.com/Gracker/Gracker.github.io) |
+| System knowledge | Android Internal Wiki | An alpha knowledge base for Android mechanisms from App to Framework, Native, and Kernel. | **Coming soon** |
+| Reproduce | [Trace for Blog (SystraceForBlog)](https://github.com/Gracker/SystraceForBlog) | Provide the Perfetto, Systrace, and related case files used by articles for hands-on reproduction. | [GitHub](https://github.com/Gracker/SystraceForBlog) |
+<!-- android-performance-ecosystem:end -->
+
+## Choose the right Perfetto project
+
+These projects are complementary. Pick the smallest surface that matches how
+you want to work; none is a prerequisite for another.
+
+| Project | Form | Best for | Main boundary | Choose it when |
+|---|---|---|---|---|
+| [SmartPerfetto](https://github.com/Gracker/SmartPerfetto) | Full Web UI, CLI, and backend | End-to-end interactive Android investigations | Managed Skill runtime, reports, sessions, comparisons, and provider integration | You want a complete analysis product |
+| [Perfetto Skills](https://github.com/Gracker/Perfetto-Skills) | Portable standard Agent Skill | Local agents with filesystem and terminal access | Deterministic local runner, evidence contracts, and broad analysis workflows | You want trace analysis inside Codex, Claude Code, or OpenCode |
+| [Google official Perfetto Skill](https://github.com/google/perfetto/tree/main/ai/skills/perfetto) | Official upstream Agent Skill bundle | Upstream-first trace recording and analysis | Official recording, memory, GPU, and ad-hoc PerfettoSQL guidance | You want the smallest upstream-maintained starting point |
+
+See Google's [official Perfetto AI usage guide](https://perfetto.dev/docs/getting-started/using-ai)
+for the upstream Skill installation and release model.
+
 ## Configure Your AI Provider First
 
 SmartPerfetto uses exactly one active model-provider source at runtime. Pick one path and avoid mixing them during first setup:
@@ -295,6 +325,8 @@ smp report <sessionId> --open
 
 # Record an Android trace from a connected device, then analyze it.
 smp capture presets
+smp capture suggest "Analyze Camera open-to-first-preview latency" --app com.example.camera
+smp capture config --preset camera --app com.example.camera --duration 20
 smp capture android --preset startup --app com.example.app --duration 10 --out launch.perfetto-trace
 smp capture android --preset cpu --app '*' --duration 30 --categories dalvikviktime my_custom_tag --out cpu-custom.perfetto-trace
 smp capture android --preset power --app com.example.app --duration 60 --out power.perfetto-trace
@@ -303,6 +335,14 @@ smp capture android --config ~/tools/perfetto_shell/perfetto.config --out ~/tool
 # Or run the interactive SmartPerfetto REPL.
 smp repl
 ```
+
+The `camera` preset collects Camera/HAL/vendor atrace candidates, Binder and
+scheduler context, FrameTimeline, and DMA-BUF or legacy ION ftrace events. The
+atrace candidates and memory ftrace events are optional; availability depends
+on the Android release, device/vendor implementation, and kernel support. A
+trace may still lack portable Camera open, request/result, buffer, or preview
+presentation anchors; SmartPerfetto reports that evidence gap instead of
+fabricating an open-to-first-frame number.
 
 The npm CLI package is the supported standalone terminal product. It does not start or bundle the Web UI launcher; use Docker or a GitHub portable package when you need the browser experience. The first analysis uses the bundled pinned `trace_processor_shell` binary when available, and can download the pinned binary automatically on unsupported targets. Android capture itself never downloads tools at runtime: `adb` is resolved from `ADB_PATH`, an approved bundled slot, then `PATH`; pre-Android Q or `--sideload` tracebox capture requires an approved bundled `tracebox` or `--tracebox /path/to/tracebox`. If your network cannot reach Google's artifact bucket, set `TRACE_PROCESSOR_PATH=/path/to/trace_processor_shell` to use a local binary, or set `TRACE_PROCESSOR_DOWNLOAD_BASE` / `TRACE_PROCESSOR_DOWNLOAD_URL` to a trusted mirror; downloaded binaries are still checked against the pinned SHA256. `smartperfetto` remains available as the long command name; source checkout scripts are only for maintainers debugging the CLI. See [CLI Reference](docs/reference/cli.en.md) for all commands, capture presets, REPL slash commands, storage layout, and resume behavior.
 
@@ -399,7 +439,7 @@ Do not hardcode prompt content in TypeScript. Put scene logic in `backend/strate
 - [MCP Tools Reference](docs/reference/mcp-tools.en.md)
 - [Skill System Guide](docs/reference/skill-system.en.md)
 - [Data Contract](backend/docs/DATA_CONTRACT_DESIGN.en.md)
-- [Rendering Pipeline References](docs/rendering_pipelines/index.en.md)
+- [Android 17 Rendering Type References](docs/rendering_pipelines/S01_rendering_types_overview.md)
 - [Security Policy](SECURITY.md)
 
 ## Contributing

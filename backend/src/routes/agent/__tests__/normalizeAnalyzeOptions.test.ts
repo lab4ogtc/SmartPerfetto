@@ -65,6 +65,23 @@ describe('normalizeAnalyzeOptions', () => {
     });
   });
 
+  it('preserves authorized knowledge sources for smart deep-dive requests', () => {
+    expect(normalizeAnalyzeOptions(
+      {
+        preset: 'smart',
+        smartAction: 'analyze',
+        knowledgeSourceIds: ['wiki-a', 'wiki-a', 'wiki-b'],
+      },
+      { endpoint: '/analyze', hasReferenceTraceId: false },
+    )).toEqual({
+      analysisMode: 'auto',
+      preset: 'smart',
+      smartAction: 'analyze',
+      smartSelection: { scope: 'all' },
+      knowledgeSourceIds: ['wiki-a', 'wiki-b'],
+    });
+  });
+
   it('defaults smart analyze selection to all scenes', () => {
     expect(normalizeAnalyzeOptions(
       { preset: 'smart', smartAction: 'analyze' },
@@ -103,13 +120,263 @@ describe('normalizeAnalyzeOptions', () => {
 
   it('accepts normal continuation runs and comparison options', () => {
     expect(normalizeAnalyzeOptions(
-      { analysisMode: 'fast', codeAwareMode: 'metadata_only', codebaseIds: ['a', 'a', 'b'] },
+      {
+        analysisMode: 'fast',
+        codeAwareMode: 'metadata_only',
+        codebaseIds: ['a', 'a', 'b'],
+        knowledgeSourceIds: ['wiki-a', 'wiki-a', 'wiki-b'],
+      },
       { endpoint: '/sessions/:id/runs', hasReferenceTraceId: true },
     )).toEqual({
       analysisMode: 'fast',
       codeAwareMode: 'metadata_only',
       codebaseIds: ['a', 'b'],
+      knowledgeSourceIds: ['wiki-a', 'wiki-b'],
     });
+  });
+
+  it('normalizes trace pair context only for comparison requests', () => {
+    const tracePairContext = {
+      schemaVersion: 1,
+      layout: 'horizontal',
+      primarySide: 'left',
+      referenceSide: 'right',
+      activeSide: 'left',
+      workspaceOpen: true,
+      splitPercent: 67.8,
+      maximizedTraceSide: 'other',
+      minimizedTraceSides: ['reference', 'other', 'reference'],
+      aliases: {
+        '左侧': 'current',
+        '右侧': 'reference',
+        invalid: 'other',
+      },
+      panes: [
+        {
+          side: 'left',
+          traceSide: 'current',
+          traceId: 'trace-current',
+          traceName: 'Current Trace',
+          traceFingerprint: 'fingerprint-current',
+          active: true,
+          visualState: 'live',
+          ignored: 'field',
+        },
+        {
+          side: 'right',
+          traceSide: 'reference',
+          traceId: 'trace-reference',
+          traceName: 'Reference Trace',
+          visualState: 'context_only',
+        },
+      ],
+    };
+
+    expect(normalizeAnalyzeOptions(
+      { tracePairContext },
+      { endpoint: '/analyze', hasReferenceTraceId: false },
+    ).tracePairContext).toBeUndefined();
+
+    expect(normalizeAnalyzeOptions(
+      { tracePairContext },
+      { endpoint: '/analyze', hasReferenceTraceId: true },
+    ).tracePairContext).toEqual({
+      schemaVersion: 1,
+      layout: 'horizontal',
+      primarySide: 'left',
+      referenceSide: 'right',
+      activeSide: 'left',
+      workspaceOpen: true,
+      splitPercent: 68,
+      minimizedTraceSides: ['reference'],
+      aliases: {
+        '左侧': 'current',
+        '右侧': 'reference',
+      },
+      panes: [
+        {
+          side: 'left',
+          traceSide: 'current',
+          traceId: 'trace-current',
+          traceName: 'Current Trace',
+          traceFingerprint: 'fingerprint-current',
+          active: true,
+          visualState: 'live',
+        },
+        {
+          side: 'right',
+          traceSide: 'reference',
+          traceId: 'trace-reference',
+          traceName: 'Reference Trace',
+          visualState: 'context_only',
+        },
+      ],
+    });
+  });
+
+  it('preserves same-page vertical dual-trace workspace state for comparison requests', () => {
+    const tracePairContext = {
+      schemaVersion: 1,
+      layout: 'vertical',
+      primarySide: 'top',
+      referenceSide: 'bottom',
+      activeSide: 'bottom',
+      workspaceOpen: true,
+      splitPercent: 65.5,
+      maximizedTraceSide: 'reference',
+      minimizedTraceSides: ['current'],
+      aliases: {
+        top: 'current',
+        bottom: 'reference',
+        '上方': 'current',
+        '下方': 'reference',
+      },
+      panes: [
+        {
+          side: 'top',
+          traceSide: 'current',
+          traceId: 'trace-current',
+          traceName: 'current.trace',
+          active: false,
+          visualState: 'context_only',
+        },
+        {
+          side: 'bottom',
+          traceSide: 'reference',
+          traceId: 'trace-reference',
+          traceName: 'reference.trace',
+          active: true,
+          visualState: 'live',
+        },
+      ],
+    };
+
+    expect(normalizeAnalyzeOptions(
+      { tracePairContext },
+      {
+        endpoint: '/analyze',
+        hasReferenceTraceId: true,
+        traceId: 'trace-current',
+        referenceTraceId: 'trace-reference',
+      },
+    ).tracePairContext).toEqual({
+      schemaVersion: 1,
+      layout: 'vertical',
+      primarySide: 'top',
+      referenceSide: 'bottom',
+      activeSide: 'bottom',
+      workspaceOpen: true,
+      splitPercent: 66,
+      maximizedTraceSide: 'reference',
+      minimizedTraceSides: ['current'],
+      aliases: {
+        top: 'current',
+        bottom: 'reference',
+        '上方': 'current',
+        '下方': 'reference',
+      },
+      panes: [
+        {
+          side: 'top',
+          traceSide: 'current',
+          traceId: 'trace-current',
+          traceName: 'current.trace',
+          active: false,
+          visualState: 'context_only',
+        },
+        {
+          side: 'bottom',
+          traceSide: 'reference',
+          traceId: 'trace-reference',
+          traceName: 'reference.trace',
+          active: true,
+          visualState: 'live',
+        },
+      ],
+    });
+  });
+
+  it('drops trace pair context when pane identity does not match the requested traces', () => {
+    const tracePairContext = {
+      schemaVersion: 1,
+      layout: 'horizontal',
+      primarySide: 'left',
+      referenceSide: 'right',
+      panes: [
+        {
+          side: 'left',
+          traceSide: 'current',
+          traceId: 'trace-current',
+        },
+        {
+          side: 'right',
+          traceSide: 'reference',
+          traceId: 'trace-reference',
+        },
+      ],
+    };
+
+    expect(normalizeAnalyzeOptions(
+      { tracePairContext },
+      {
+        endpoint: '/analyze',
+        hasReferenceTraceId: true,
+        traceId: 'trace-current',
+        referenceTraceId: 'trace-reference',
+      },
+    ).tracePairContext).toBeDefined();
+
+    expect(normalizeAnalyzeOptions(
+      { tracePairContext },
+      {
+        endpoint: '/analyze',
+        hasReferenceTraceId: true,
+        traceId: 'stale-current',
+        referenceTraceId: 'trace-reference',
+      },
+    ).tracePairContext).toBeUndefined();
+
+    expect(normalizeAnalyzeOptions(
+      { tracePairContext },
+      {
+        endpoint: '/analyze',
+        hasReferenceTraceId: true,
+        traceId: 'trace-current',
+        referenceTraceId: 'stale-reference',
+      },
+    ).tracePairContext).toBeUndefined();
+  });
+
+  it('drops trace pair context when pane sides do not match the declared layout', () => {
+    expect(normalizeAnalyzeOptions(
+      {
+        tracePairContext: {
+          schemaVersion: 1,
+          layout: 'horizontal',
+          primarySide: 'top',
+          referenceSide: 'bottom',
+          activeSide: 'top',
+          panes: [
+            {
+              side: 'top',
+              traceSide: 'current',
+              traceId: 'trace-current',
+            },
+            {
+              side: 'bottom',
+              traceSide: 'reference',
+              traceId: 'trace-reference',
+            },
+          ],
+        },
+      },
+      {
+        endpoint: '/analyze',
+        hasReferenceTraceId: true,
+        traceId: 'trace-current',
+        referenceTraceId: 'trace-reference',
+      },
+    ).tracePairContext).toBeUndefined();
   });
 
   it('rejects unknown presets instead of passing them through', () => {

@@ -32,6 +32,10 @@ function printTextReport(report: DoctorReport): void {
   console.log(`generated  ${report.generatedAt}`);
   console.log(`home       ${report.cliHome}`);
   console.log(`runtime    ${report.runtime.kind} (${report.runtime.source})`);
+  console.log(`ai         ${report.aiPolicy.aiEnabled ? 'enabled' : 'disabled'} (${report.aiPolicy.source})`);
+  if (report.aiPolicy.disabledReason) {
+    console.log(`           ${report.aiPolicy.disabledReason}`);
+  }
   if (report.runtime.providerName) {
     console.log(`provider   ${report.runtime.providerName} (${report.runtime.providerType}, ${report.runtime.providerId})`);
   }

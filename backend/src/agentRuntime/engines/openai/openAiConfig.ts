@@ -25,7 +25,7 @@ export interface OpenAIAgentConfig {
   outputLanguage: OutputLanguage;
 }
 
-const DEFAULT_MODEL = 'gpt-5.5';
+const DEFAULT_MODEL = 'gpt-5.4-mini';
 const DEFAULT_LIGHT_MODEL = 'gpt-5.4-mini';
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_MAX_OUTPUT_TOKENS = 2048;

@@ -134,6 +134,24 @@ const server = http.createServer((req, res) => {
   });
 });
 
+server.on('error', (err) => {
+  if (err && err.code === 'EADDRINUSE') {
+    console.error(`[Frontend] Port ${PORT} is already in use.`);
+    console.error(
+      '[Frontend] Close the existing SmartPerfetto/frontend process, or set SMARTPERFETTO_FRONTEND_PORT to a free port before starting.',
+    );
+    process.exit(1);
+  }
+  if (err && err.code === 'EACCES') {
+    console.error(`[Frontend] Permission denied while listening on port ${PORT}.`);
+    console.error(
+      '[Frontend] Set SMARTPERFETTO_FRONTEND_PORT to an allowed port and restart SmartPerfetto.',
+    );
+    process.exit(1);
+  }
+  throw err;
+});
+
 server.listen(PORT, () => {
   console.log(`[Frontend] Serving Perfetto UI on http://localhost:${PORT}`);
 });

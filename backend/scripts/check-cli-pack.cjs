@@ -4,8 +4,12 @@
 // This file is part of SmartPerfetto. See LICENSE for details.
 
 const { execFileSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const yaml = require('js-yaml');
 
-const raw = execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
+const raw = execFileSync(process.execPath, [process.env.npm_execpath, 'pack', '--dry-run', '--json', '--ignore-scripts'], {
   encoding: 'utf-8',
 });
 const pack = JSON.parse(raw)[0];
@@ -16,6 +20,11 @@ if (!packageJsonEntry) {
   failures.push('missing required package file: package.json');
 }
 const packageJson = require('../package.json');
+const backendRoot = path.resolve(__dirname, '..');
+const repoRoot = path.resolve(backendRoot, '..');
+const pipelineCatalog = yaml.load(
+  fs.readFileSync(path.join(backendRoot, 'skills', 'pipelines', 'index.yaml'), 'utf8'),
+);
 
 const requiredFiles = [
   'LICENSE',
@@ -37,6 +46,20 @@ const requiredFiles = [
 
 for (const file of requiredFiles) {
   if (!files.has(file)) failures.push(`missing required package file: ${file}`);
+}
+
+for (const document of pipelineCatalog.documents) {
+  const packedPath = `dist/rendering_pipelines/${document.file}`;
+  if (!files.has(packedPath)) {
+    failures.push(`missing rendering pipeline runtime asset: ${packedPath}`);
+    continue;
+  }
+  const source = fs.readFileSync(path.join(repoRoot, 'docs', 'rendering_pipelines', document.file));
+  const runtime = fs.readFileSync(path.join(backendRoot, packedPath));
+  const sourceHash = crypto.createHash('sha256').update(source).digest('hex');
+  if (sourceHash !== document.sha256 || !source.equals(runtime)) {
+    failures.push(`rendering pipeline runtime asset drift: ${document.file}`);
+  }
 }
 
 for (const [name, binPath] of Object.entries(packageJson.bin ?? {})) {

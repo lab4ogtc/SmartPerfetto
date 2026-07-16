@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -50,27 +51,58 @@ type serviceProcess struct {
 	log  *os.File
 }
 
+type portSetting struct {
+	value    string
+	envKey   string
+	explicit bool
+}
+
 func resolveServicePorts() (string, string, error) {
-	backendPort, err := resolvePortEnv("SMARTPERFETTO_BACKEND_PORT", "PORT", defaultBackendPort)
+	backend, err := resolvePortSetting("SMARTPERFETTO_BACKEND_PORT", "PORT", defaultBackendPort)
 	if err != nil {
 		return "", "", err
 	}
-	frontendPort, err := resolvePortEnv("SMARTPERFETTO_FRONTEND_PORT", "", defaultFrontendPort)
+	frontend, err := resolvePortSetting("SMARTPERFETTO_FRONTEND_PORT", "", defaultFrontendPort)
 	if err != nil {
 		return "", "", err
 	}
-	if backendPort == frontendPort {
-		return "", "", fmt.Errorf("backend and frontend ports must be different (both are %s)", backendPort)
+	if backend.value == frontend.value {
+		if backend.explicit && frontend.explicit {
+			return "", "", fmt.Errorf("backend and frontend ports must be different (both are %s)", backend.value)
+		}
+		if !frontend.explicit {
+			port, err := resolveAvailablePort("frontend", frontend, map[string]bool{backend.value: true})
+			if err != nil {
+				return "", "", err
+			}
+			frontend.value = port
+		} else {
+			port, err := resolveAvailablePort("backend", backend, map[string]bool{frontend.value: true})
+			if err != nil {
+				return "", "", err
+			}
+			backend.value = port
+		}
+	}
+	backendPort, err := resolveAvailablePort("backend", backend, map[string]bool{frontend.value: true})
+	if err != nil {
+		return "", "", err
+	}
+	frontendPort, err := resolveAvailablePort("frontend", frontend, map[string]bool{backendPort: true})
+	if err != nil {
+		return "", "", err
 	}
 	return backendPort, frontendPort, nil
 }
 
-func resolvePortEnv(primaryKey string, fallbackKey string, defaultValue string) (string, error) {
+func resolvePortSetting(primaryKey string, fallbackKey string, defaultValue string) (portSetting, error) {
 	value := os.Getenv(primaryKey)
 	key := primaryKey
+	explicit := value != ""
 	if value == "" && fallbackKey != "" {
 		value = os.Getenv(fallbackKey)
 		key = fallbackKey
+		explicit = value != ""
 	}
 	if value == "" {
 		value = defaultValue
@@ -78,9 +110,50 @@ func resolvePortEnv(primaryKey string, fallbackKey string, defaultValue string) 
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed < 1 || parsed > 65535 {
-		return "", fmt.Errorf("%s must be a TCP port in the range 1..65535, got %q", key, value)
+		return portSetting{}, fmt.Errorf("%s must be a TCP port in the range 1..65535, got %q", key, value)
 	}
-	return strconv.Itoa(parsed), nil
+	return portSetting{value: strconv.Itoa(parsed), envKey: key, explicit: explicit}, nil
+}
+
+func resolveAvailablePort(serviceName string, setting portSetting, reserved map[string]bool) (string, error) {
+	if !reserved[setting.value] && isPortAvailable(setting.value) {
+		return setting.value, nil
+	}
+	if setting.explicit {
+		return "", fmt.Errorf(
+			"%s port %s is already in use or unavailable. Close the existing SmartPerfetto process, or set %s to a free port before launching",
+			serviceName, setting.value, setting.envKey,
+		)
+	}
+	port, err := findAvailablePort(setting.value, reserved)
+	if err != nil {
+		return "", fmt.Errorf("%s default port %s is unavailable and no fallback port could be found: %w", serviceName, setting.value, err)
+	}
+	fmt.Printf("%s default port %s is unavailable; using %s instead.\n", serviceName, setting.value, port)
+	return port, nil
+}
+
+func findAvailablePort(preferred string, reserved map[string]bool) (string, error) {
+	start, err := strconv.Atoi(preferred)
+	if err != nil {
+		return "", err
+	}
+	for port := start + 1; port <= 65535; port++ {
+		candidate := strconv.Itoa(port)
+		if reserved[candidate] || !isPortAvailable(candidate) {
+			continue
+		}
+		return candidate, nil
+	}
+	return "", fmt.Errorf("exhausted TCP port range above %s", preferred)
+}
+
+func isPortAvailable(port string) bool {
+	listener, err := net.Listen("tcp", ":"+port)
+	if err != nil {
+		return false
+	}
+	return listener.Close() == nil
 }
 
 func main() {

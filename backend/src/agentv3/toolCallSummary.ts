@@ -50,12 +50,23 @@ export function summarizeToolCallInput(toolName: string, input: unknown): ToolCa
       const sql = typeof obj.sql === 'string' ? obj.sql : '';
       return { inputSummary: shorten(sql) || undefined, paramsHash };
     }
-    case 'invoke_skill': {
+    case 'invoke_skill':
+    case 'compare_skill': {
       const skillId = typeof obj.skillId === 'string' ? obj.skillId : undefined;
       const params = obj.params && typeof obj.params === 'object'
         ? obj.params as Record<string, unknown>
         : {};
-      const paramKeys = Object.keys(params).sort().join(',');
+      const currentParams = obj.currentParams && typeof obj.currentParams === 'object'
+        ? obj.currentParams as Record<string, unknown>
+        : {};
+      const referenceParams = obj.referenceParams && typeof obj.referenceParams === 'object'
+        ? obj.referenceParams as Record<string, unknown>
+        : {};
+      const paramKeys = [
+        ...Object.keys(params).sort(),
+        ...Object.keys(currentParams).sort().map(key => `current.${key}`),
+        ...Object.keys(referenceParams).sort().map(key => `reference.${key}`),
+      ].join(',');
       const inputSummary = skillId
         ? (paramKeys ? `${skillId}(${paramKeys})` : skillId)
         : undefined;
@@ -63,7 +74,7 @@ export function summarizeToolCallInput(toolName: string, input: unknown): ToolCa
     }
     case 'fetch_artifact': {
       const id = obj.artifactId ?? obj.id ?? '?';
-      const detail = obj.detail ?? '?';
+      const detail = obj.detail ?? obj.level ?? '?';
       const purpose = typeof obj.purpose === 'string' ? ` ${shorten(obj.purpose)}` : '';
       return { inputSummary: `${id}@${detail}${purpose}`, paramsHash };
     }

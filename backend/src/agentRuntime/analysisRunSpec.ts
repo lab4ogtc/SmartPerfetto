@@ -80,6 +80,7 @@ export interface AnalysisRunSpec {
     };
     codeAwareMode: CodeAwareMode;
     codebaseIds: string[];
+    knowledgeSourceIds: string[];
   };
   budget: RuntimeBudgetInputs;
 }
@@ -118,6 +119,7 @@ export function createAnalysisRunSpec(input: CreateAnalysisRunSpecInput): Analys
   const engineCapabilities = resolveEngineCapabilities(input);
   const codeAwareMode = normalizeCodeAwareMode(options.codeAwareMode);
   const codebaseIds = compactCodebaseIds(options.codebaseIds);
+  const knowledgeSourceIds = compactCodebaseIds(options.knowledgeSourceIds);
   const providerScope = providerScopeFromAnalysisOptions(options);
   const knowledgeScope = knowledgeScopeFromAnalysisOptions(options);
   const classifierInput = buildComplexityClassifierInput({
@@ -174,6 +176,7 @@ export function createAnalysisRunSpec(input: CreateAnalysisRunSpecInput): Analys
       },
       codeAwareMode,
       codebaseIds,
+      knowledgeSourceIds,
     },
     budget: input.budget ?? {},
   };

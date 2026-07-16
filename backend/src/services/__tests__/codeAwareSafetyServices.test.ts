@@ -14,8 +14,10 @@ import {CodeLookupLedger} from '../codebase/codeLookupLedger';
 import {filterRagLookup} from '../rag/lookupResponseFilter';
 import {SessionToolResultRegistry, projectedSidecarMissing} from '../rag/sessionToolResultRegistry';
 import {projectRagResultForSseAndLog} from '../rag/toolResultProjectionFilter';
+import * as toolResultProjection from '../rag/toolResultProjectionFilter';
 import {clearCodeAwareOutputGuards, sanitizeCodeAwareText} from '../security/codeAwareOutputRegistry';
 import {LLMEchoOutputStream, type CodeRef} from '../security/llmEchoOutputFilter';
+import {ExternalKnowledgeSourceRegistry} from '../externalKnowledgeSourceRegistry';
 
 let tmpDir: string;
 
@@ -192,6 +194,72 @@ describe('filterRagLookup', () => {
       consentApplied: false,
     }));
   });
+
+  it('rechecks private knowledge consent and returns attributed redacted snippets', async () => {
+    const registry = new ExternalKnowledgeSourceRegistry(path.join(tmpDir, 'external-sources.json'));
+    const root = path.join(tmpDir, 'wiki');
+    fs.mkdirSync(root);
+    const scope = {tenantId: 'tenant-a', workspaceId: 'workspace-a', userId: 'user-a'};
+    const source = registry.register({
+      kind: 'android_internals_wiki',
+      displayName: 'Android Internals Wiki',
+      rootRealpath: root,
+      revision: 'a'.repeat(40),
+      contentFingerprint: 'b'.repeat(64),
+      dirty: false,
+      license: 'CC-BY-NC-SA-4.0',
+      rightsAcknowledged: true,
+      sendToProvider: true,
+      consentedBy: 'user-a',
+      scope,
+    });
+    await registry.withIngestLease(source.sourceId, scope, lease =>
+      lease.activateGeneration({
+        generation: 'generation-a',
+        revision: source.revision,
+        contentFingerprint: source.contentFingerprint,
+        dirty: false,
+        indexedArticleCount: 1,
+        indexedChunkCount: 1,
+      }));
+    const chunk = makeChunk({
+      chunkId: 'wiki-1',
+      kind: 'android_internals_wiki',
+      registryOrigin: 'external_knowledge_registry',
+      knowledgeSourceId: source.sourceId,
+      sourceGeneration: 'generation-a',
+      uri: `android-internals-wiki://${source.sourceId}/article`,
+      title: 'Handler internals',
+      snippet: 'Handler callback with api_key = "1234567890"',
+      filePath: 'src/handler.md',
+      license: 'CC-BY-NC-SA-4.0',
+      attribution: 'Android Internals Wiki by Gracker (CC BY-NC-SA 4.0)',
+      sourceStatus: 'finalized',
+      sourceConfidence: 'high',
+      commitHash: source.revision,
+      contentFingerprint: source.contentFingerprint,
+      codebaseId: undefined,
+    });
+
+    const result = await filterRagLookup(makeRawResult(chunk), {
+      toolName: 'lookup_blog_knowledge',
+      turn: 1,
+      externalKnowledgeRegistry: registry,
+      knowledgeSourceIds: [source.sourceId],
+      knowledgeScope: scope,
+    } as any);
+
+    expect(result.legacyPath).toBe(false);
+    expect(result.hits[0]?.snippet).toContain('[REDACTED_SECRET]');
+    expect(result.hits[0]?.metadata).toEqual(expect.objectContaining({
+      kind: 'android_internals_wiki',
+      title: 'Handler internals',
+      license: 'CC-BY-NC-SA-4.0',
+      attribution: 'Android Internals Wiki by Gracker (CC BY-NC-SA 4.0)',
+      sourceStatus: 'finalized',
+      sourceConfidence: 'high',
+    }));
+  });
 });
 
 describe('tool result projection and session registry', () => {
@@ -218,6 +286,52 @@ describe('tool result projection and session registry', () => {
       snippetLength: 18,
     }));
     expect(JSON.stringify(projected)).not.toContain('secret source line');
+  });
+
+  it('extracts a private wiki MCP result into a snippet-free shared sidecar', () => {
+    const project = (toolResultProjection as any).projectPrivateKnowledgeToolResult;
+    const raw = {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          success: true,
+          result: {
+            query: 'Handler',
+            probed: ['android_internals_wiki'],
+            retrievedAt: 1714600000000,
+            legacyPath: false,
+            hits: [{
+              chunkId: 'wiki-1',
+              score: 0.9,
+              metadata: {
+                kind: 'android_internals_wiki',
+                knowledgeSourceId: 'source-a',
+                title: 'PRIVATE_WIKI_TITLE_CANARY',
+                uri: 'android-internals-wiki://source-a/PRIVATE_WIKI_PATH_CANARY',
+                attribution: 'Android Internals Wiki (CC BY-NC-SA 4.0)',
+              },
+              snippet: 'PRIVATE_WIKI_TOOL_RESULT',
+            }],
+          },
+        }),
+      }],
+    };
+
+    const sidecar = project('lookup_blog_knowledge', raw);
+
+    expect(sidecar).toEqual(expect.objectContaining({
+      toolName: 'lookup_blog_knowledge',
+      chunkRefs: [expect.objectContaining({
+        chunkId: 'wiki-1',
+        kind: 'android_internals_wiki',
+        snippetHash: expect.any(String),
+        snippetLength: 24,
+      })],
+    }));
+    expect(JSON.stringify(sidecar)).not.toContain('PRIVATE_WIKI_TOOL_RESULT');
+    expect(JSON.stringify(sidecar)).not.toContain('PRIVATE_WIKI_TITLE_CANARY');
+    expect(JSON.stringify(sidecar)).not.toContain('PRIVATE_WIKI_PATH_CANARY');
+    expect(sidecar.chunkRefs[0].attribution).toContain('CC BY-NC-SA');
   });
 
   it('keeps runtime tool results namespaced by session/run/runtime/invocation', () => {

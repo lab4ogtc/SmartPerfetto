@@ -34,6 +34,7 @@ import {
   supportsTraceProcessorCorsOriginsFlag,
 } from '../workingTraceProcessor';
 import { isTraceProcessorQueryCancelledError } from '../traceProcessorCancellation';
+import { listTraceCases, resolveTraceCase } from '../../utils/traceCorpus';
 
 // =============================================================================
 // Test Environment Detection
@@ -77,9 +78,6 @@ describe('TraceProcessorService cancellation', () => {
 const TRACE_PROCESSOR_PATH = process.env.TRACE_PROCESSOR_PATH ||
   path.resolve(__dirname, '../../../../perfetto/out/ui/trace_processor_shell');
 
-// Path to test traces directory
-const TEST_TRACES_DIR = path.resolve(__dirname, '../../../../../test-traces');
-
 // Check if trace_processor_shell is available
 function isTraceProcessorAvailable(): boolean {
   return fs.existsSync(TRACE_PROCESSOR_PATH);
@@ -87,16 +85,19 @@ function isTraceProcessorAvailable(): boolean {
 
 // Check if test traces are available
 function isTestTracesAvailable(): boolean {
-  return fs.existsSync(TEST_TRACES_DIR);
+  try {
+    return listTraceCases().some(entry => entry.trace.materialization === 'committed');
+  } catch {
+    return false;
+  }
 }
 
 // Get a test trace file path
 function getTestTracePath(): string | null {
   if (!isTestTracesAvailable()) return null;
 
-  const files = fs.readdirSync(TEST_TRACES_DIR);
-  const traceFile = files.find(f => f.endsWith('.pftrace') || f.endsWith('.perfetto-trace'));
-  return traceFile ? path.join(TEST_TRACES_DIR, traceFile) : null;
+  const traceCase = listTraceCases().find(entry => entry.trace.materialization === 'committed');
+  return traceCase ? resolveTraceCase(traceCase.id) : null;
 }
 
 // =============================================================================

@@ -40,6 +40,7 @@ type PersistableSqlEnvelope = DataEnvelope & {
   sql?: string;
   traceId?: string;
   traceSide?: string;
+  paneSide?: string;
   stdlibInjectedModules?: string[];
 };
 
@@ -66,6 +67,7 @@ export interface PersistAgentTurnInput {
     totalDurationMs: number;
     partial?: boolean;
     terminationMessage?: string;
+    analysisReceipt?: import('../types/dataContract').AnalysisReceiptV1;
   };
   /** Optional structured logger (HTTP route provides SessionLogger; CLI
    *  currently doesn't wire one through — `console` fallback is fine). */
@@ -146,6 +148,7 @@ function buildSqlResultEntry(envelope: PersistableSqlEnvelope): SqlResultMessage
     queryHash: envelope.meta?.queryHash,
     traceId: envelope.meta?.traceId ?? envelope.traceId,
     traceSide: envelope.meta?.traceSide ?? envelope.traceSide,
+    paneSide: envelope.meta?.paneSide ?? envelope.paneSide,
     sql: typeof envelope.sql === 'string'
       ? truncateString(envelope.sql, MAX_TRUNCATED_SQL_CHARS)
       : undefined,
@@ -163,6 +166,7 @@ function buildSqlResultEntry(envelope: PersistableSqlEnvelope): SqlResultMessage
     queryHash: entry.queryHash,
     traceId: entry.traceId,
     traceSide: entry.traceSide,
+    paneSide: entry.paneSide,
     sql: entry.sql,
     data: compactSqlDataForPreview(envelope.data),
     display: entry.display,
@@ -208,6 +212,7 @@ export function persistAgentTurn(input: PersistAgentTurnInput): void {
           claimSupport: session.result?.claimSupport || (session as any).claimSupport,
           claimVerificationResult: session.result?.claimVerificationResult || (session as any).claimVerificationResult,
           identityResolutions: session.result?.identityResolutions || (session as any).identityResolutions,
+          analysisReceipt: session.result?.analysisReceipt,
           hypotheses: session.hypotheses || [],
             agentRuntimeProviderId: session.providerId,
             agentRuntimeProviderSnapshotHash: session.providerSnapshotHash,

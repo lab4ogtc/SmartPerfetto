@@ -7,8 +7,8 @@ import path from 'path';
 import { ENTERPRISE_SECURITY_AUDIT_CHECKLIST } from '../enterpriseSecurityAuditChecklist';
 
 const REPO_ROOT = path.resolve(__dirname, '../../../..');
-const README_PATH = 'docs/features/enterprise-multi-tenant/README.md';
-const SECURITY_AUDIT_DOC_PATH = 'docs/features/enterprise-multi-tenant/security-audit.md';
+const README_PATH = 'docs/archive/features/enterprise-multi-tenant/README.md';
+const SECURITY_AUDIT_DOC_PATH = 'docs/archive/features/enterprise-multi-tenant/security-audit.md';
 
 const EXPECTED_IDS = [
   'id-enumeration-trace-session-report',

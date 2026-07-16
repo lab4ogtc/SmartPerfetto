@@ -12,7 +12,7 @@
  *
  * Prerequisites:
  * - Backend running with trace_processor_shell available
- * - Test traces in ../test-traces/ directory
+ * - Trace fixtures registered in ../Trace/catalog.json
  * - AI service configured in .env (or tests will use degraded/fallback mode)
  *
  * Run with:

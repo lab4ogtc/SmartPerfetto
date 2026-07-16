@@ -33,7 +33,7 @@ npm run cli -- codebase symbols MainActivity --codebase-id cb_xxx
 npm run cli -- run --format json \
   --code-aware metadata_only \
   --codebase-id cb_xxx \
-  ../test-traces/lacunh_heavy.pftrace \
+  ../Trace/real/android-startup-heavy/trace.pftrace \
   "结合源码定位启动慢原因"
 ```
 
@@ -67,8 +67,8 @@ npm run verify:codebase-aware
 
 本机完整 E2E 会使用：
 
-- `test-traces/lacunh_heavy.pftrace`
-- `test-traces/launch_light.pftrace`
+- `Trace/real/android-startup-heavy/trace.pftrace`
+- `Trace/real/android-startup-light/trace.pftrace`
 - `/Users/chris/Code/HighPerformanceFriendsCircle`
 
 E2E 覆盖两条路径：

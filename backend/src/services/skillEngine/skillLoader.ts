@@ -20,11 +20,13 @@ import { SkillDefinition, ModuleLayer, DialogueCapability } from './types';
 import { generateRenderingPipelineDetectionSkill } from '../renderingPipelineDetectionSkillGenerator';
 import logger from '../../utils/logger';
 import { validateSkillConditions, validateFragmentReferences } from './skillValidator';
+import { validateSkillBatchAnalysis } from './skillBatchAnalysis';
 import {
   DisplayContractIssue,
   formatDisplayContractIssue,
   validateSkillDisplayContract,
 } from './displayContractValidator';
+import type { SkillOriginMetadata, SkillPackTrustState } from '../skillPacks/skillPackTypes';
 
 // =============================================================================
 // Skill Normalization (Backward Compatibility)
@@ -303,6 +305,15 @@ export interface VendorOverride {
   overrideParams?: Record<string, any>;
 }
 
+export interface SkillRootDescriptor {
+  rootPath: string;
+  origin: 'built_in' | 'external_pack';
+  packId?: string;
+  packVersion?: string;
+  trustState?: SkillPackTrustState;
+  sourcePath?: string;
+}
+
 // =============================================================================
 // Skill Registry
 // =============================================================================
@@ -313,6 +324,7 @@ export class SkillRegistry {
   private fragmentCache: Map<string, string> = new Map();  // SQL fragment path → content
   /** Vendor overrides keyed by base skill ID (from `extends` field) */
   private vendorOverrides: Map<string, VendorOverride[]> = new Map();
+  private skillOrigins: Map<string, SkillOriginMetadata> = new Map();
   private displayContractIssues: DisplayContractIssue[] = [];
   private displayContractIssueKeys: Set<string> = new Set();
   private initialized = false;
@@ -323,67 +335,14 @@ export class SkillRegistry {
   async loadSkills(skillsDir: string): Promise<void> {
     if (this.initialized) return;
 
-    logger.info('SkillLoader', `Loading skills from: ${skillsDir}`);
+    await this.loadSkillRoots([{ rootPath: skillsDir, origin: 'built_in' }]);
+  }
 
-    // Load SQL fragments first (before skills, so fragment references can be validated)
-    this.loadFragments(skillsDir);
+  async loadSkillRoots(roots: SkillRootDescriptor[]): Promise<void> {
+    if (this.initialized) return;
 
-    // 加载原子 skills
-    const atomicDir = path.join(skillsDir, 'atomic');
-    if (fs.existsSync(atomicDir)) {
-      await this.loadSkillsFromDir(atomicDir);
-    }
-
-    // 加载组合 skills
-    const compositeDir = path.join(skillsDir, 'composite');
-    if (fs.existsSync(compositeDir)) {
-      await this.loadSkillsFromDir(compositeDir);
-    }
-
-    // 加载本地 custom skills. Enterprise v1 disables write endpoints, but
-    // non-enterprise admin writes must be readable after reload.
-    const customDir = path.join(skillsDir, 'custom');
-    if (fs.existsSync(customDir)) {
-      await this.loadSkillsFromDir(customDir);
-    }
-
-    // 加载深度分析 skills (Phase 6)
-    const deepDir = path.join(skillsDir, 'deep');
-    if (fs.existsSync(deepDir)) {
-      await this.loadSkillsFromDir(deepDir);
-    }
-
-    // 加载系统分析 skills (Phase 6)
-    const systemDir = path.join(skillsDir, 'system');
-    if (fs.existsSync(systemDir)) {
-      await this.loadSkillsFromDir(systemDir);
-    }
-
-    // 加载结果对比 skills。它们描述 analysis_result_snapshot 的对比能力，
-    // 由 comparison services 执行，不进入单 Trace SQL executor。
-    const comparisonDir = path.join(skillsDir, 'comparison');
-    if (fs.existsSync(comparisonDir)) {
-      await this.loadSkillsFromDir(comparisonDir);
-    }
-
-    // 加载模块专家 skills (Cross-Domain Expert System)
-    const modulesDir = path.join(skillsDir, 'modules');
-    if (fs.existsSync(modulesDir)) {
-      await this.loadModuleSkillsRecursively(modulesDir);
-    }
-
-    // 加载 pipeline skills (Pipeline Skill Architecture)
-    // Note: Pipeline skills are loaded separately by PipelineSkillLoader
-    // but we register them here for skill discovery
-    const pipelinesDir = path.join(skillsDir, 'pipelines');
-    if (fs.existsSync(pipelinesDir)) {
-      await this.loadPipelineSkills(pipelinesDir);
-    }
-
-    // 加载 vendor overrides (厂商适配覆盖)
-    const vendorsDir = path.join(skillsDir, 'vendors');
-    if (fs.existsSync(vendorsDir)) {
-      this.loadVendorOverrides(vendorsDir);
+    for (const root of roots) {
+      await this.loadSkillRoot(root);
     }
 
     this.initialized = true;
@@ -391,11 +350,49 @@ export class SkillRegistry {
     logger.info('SkillLoader', `Loaded ${this.skills.size} skills (${this.moduleSkills.size} module experts, ${this.vendorOverrides.size} vendor-overridden skills)`);
   }
 
+  private async loadSkillRoot(root: SkillRootDescriptor): Promise<void> {
+    const skillsDir = root.rootPath;
+    logger.info('SkillLoader', `Loading skills from: ${skillsDir}`);
+
+    this.loadFragments(skillsDir, root);
+
+    for (const dirName of ['atomic', 'composite', 'deep', 'system', 'comparison']) {
+      const skillDir = path.join(skillsDir, dirName);
+      if (fs.existsSync(skillDir)) {
+        await this.loadSkillsFromDir(skillDir, root);
+      }
+    }
+
+    if (root.origin === 'built_in') {
+      const customDir = path.join(skillsDir, 'custom');
+      if (fs.existsSync(customDir)) {
+        await this.loadSkillsFromDir(customDir, root);
+      }
+    }
+
+    const modulesDir = path.join(skillsDir, 'modules');
+    if (fs.existsSync(modulesDir)) {
+      await this.loadModuleSkillsRecursively(modulesDir, root);
+    }
+
+    const pipelinesDir = path.join(skillsDir, 'pipelines');
+    if (fs.existsSync(pipelinesDir)) {
+      await this.loadPipelineSkills(pipelinesDir, root);
+    }
+
+    if (root.origin === 'built_in') {
+      const vendorsDir = path.join(skillsDir, 'vendors');
+      if (fs.existsSync(vendorsDir)) {
+        this.loadVendorOverrides(vendorsDir);
+      }
+    }
+  }
+
   /**
    * Load SQL fragments from skills/fragments/ directory.
    * Fragments are reusable CTE definitions that can be injected into step SQL.
    */
-  private loadFragments(skillsDir: string): void {
+  private loadFragments(skillsDir: string, root?: SkillRootDescriptor): void {
     const fragmentsDir = path.join(skillsDir, 'fragments');
     if (!fs.existsSync(fragmentsDir)) return;
 
@@ -406,9 +403,16 @@ export class SkillRegistry {
       try {
         const content = fs.readFileSync(filePath, 'utf-8').trim();
         const key = `fragments/${file}`;
+        const existing = this.fragmentCache.get(key);
+        if (root?.origin === 'external_pack' && existing !== undefined && existing !== content) {
+          throw new Error(`fragment_key_collision:${key}`);
+        }
         this.fragmentCache.set(key, content);
         logger.debug('SkillLoader', `Loaded SQL fragment: ${key}`);
       } catch (error: any) {
+        if (root?.origin === 'external_pack') {
+          throw error;
+        }
         logger.error('SkillLoader', `Failed to load fragment ${file}: ${error.message}`);
       }
     }
@@ -433,7 +437,12 @@ export class SkillRegistry {
   /**
    * Run all load-time validations on a skill and log warnings.
    */
-  private validateAndLogWarnings(skill: SkillDefinition, filePath?: string): DisplayContractIssue[] {
+  private validateAndLogWarnings(skill: SkillDefinition, filePath?: string): {
+    displayIssues: DisplayContractIssue[];
+    conditionIssueCount: number;
+    fragmentIssueCount: number;
+    batchAnalysisIssueCount: number;
+  } {
     const displayWarnings = this.validateAndLogDisplayWarnings(skill, filePath);
 
     const condWarnings = validateSkillConditions(skill);
@@ -446,7 +455,60 @@ export class SkillRegistry {
       logger.warn('SkillLoader', `[${skill.name}.${w.stepId}] ${w.message}`);
     }
 
-    return displayWarnings;
+    const batchAnalysisIssues = validateSkillBatchAnalysis(skill);
+    for (const validationIssue of batchAnalysisIssues) {
+      logger.warn('SkillLoader', `[${skill.name}.${validationIssue.path}] ${validationIssue.message}`);
+    }
+
+    return {
+      displayIssues: displayWarnings,
+      conditionIssueCount: condWarnings.length,
+      fragmentIssueCount: fragWarnings.length,
+      batchAnalysisIssueCount: batchAnalysisIssues.length,
+    };
+  }
+
+  private originForRoot(root?: SkillRootDescriptor): SkillOriginMetadata {
+    if (root?.origin === 'external_pack') {
+      return {
+        origin: 'external_pack',
+        packId: root.packId,
+        packVersion: root.packVersion,
+        trustState: root.trustState,
+        sourcePath: root.sourcePath ?? root.rootPath,
+      };
+    }
+    return { origin: 'built_in' };
+  }
+
+  private registerLoadedSkill(
+    skill: SkillDefinition,
+    filePath: string | undefined,
+    root?: SkillRootDescriptor,
+  ): void {
+    if (root?.origin === 'external_pack' && this.skills.has(skill.name)) {
+      throw new Error(`skill_id_collision:${skill.name}`);
+    }
+    const validation = this.validateAndLogWarnings(skill, filePath);
+    if (
+      root?.origin === 'external_pack'
+      && (
+        validation.displayIssues.length > 0
+        || validation.conditionIssueCount > 0
+        || validation.fragmentIssueCount > 0
+        || validation.batchAnalysisIssueCount > 0
+      )
+    ) {
+      throw new Error(`skill_validation_failed:${skill.name}`);
+    }
+    this.skills.set(skill.name, skill);
+    this.skillOrigins.set(skill.name, this.originForRoot(root));
+
+    if (skill.module) {
+      this.moduleSkills.set(skill.name, skill);
+    } else {
+      this.moduleSkills.delete(skill.name);
+    }
   }
 
   /**
@@ -504,14 +566,14 @@ export class SkillRegistry {
    *   ├── kernel/
    *   └── hardware/
    */
-  private async loadModuleSkillsRecursively(dir: string): Promise<void> {
+  private async loadModuleSkillsRecursively(dir: string, root?: SkillRootDescriptor): Promise<void> {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
 
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
 
       if (entry.isDirectory()) {
-        await this.loadModuleSkillsRecursively(fullPath);
+        await this.loadModuleSkillsRecursively(fullPath, root);
       } else if (entry.name.endsWith('.skill.yaml') || entry.name.endsWith('.skill.yml')) {
         try {
           const content = fs.readFileSync(fullPath, 'utf-8');
@@ -519,18 +581,17 @@ export class SkillRegistry {
           const skill = normalizeSkillDefinition(loaded, fullPath);
 
           if (skill && skill.name) {
-            this.validateAndLogWarnings(skill, fullPath);
-            this.skills.set(skill.name, skill);
-
-            // Track module skills separately for efficient lookup
+            this.registerLoadedSkill(skill, fullPath, root);
             if (skill.module) {
-              this.moduleSkills.set(skill.name, skill);
               logger.debug('SkillLoader', `Loaded module skill: ${skill.name} (${skill.module.layer}/${skill.module.component})`);
             } else {
               logger.debug('SkillLoader', `Loaded skill: ${skill.name} (${skill.type})`);
             }
           }
         } catch (error: any) {
+          if (root?.origin === 'external_pack') {
+            throw error;
+          }
           logger.error('SkillLoader', `Failed to load ${fullPath}:`, error.message);
         }
       }
@@ -541,7 +602,7 @@ export class SkillRegistry {
    * 加载 pipeline skills
    * Pipeline skills are a special type that define rendering pipeline configurations
    */
-  private async loadPipelineSkills(dir: string): Promise<void> {
+  private async loadPipelineSkills(dir: string, root?: SkillRootDescriptor): Promise<void> {
     const files = fs.readdirSync(dir);
 
     for (const file of files) {
@@ -555,12 +616,13 @@ export class SkillRegistry {
         const skill = yaml.load(content) as SkillDefinition;
 
         if (skill && skill.name && skill.type === 'pipeline_definition') {
-          this.validateAndLogDisplayWarnings(skill as any, filePath);
-          // Register pipeline skills with a special prefix for discoverability
-          this.skills.set(skill.name, skill);
+          this.registerLoadedSkill(skill, filePath, root);
           logger.debug('SkillLoader', `Loaded pipeline skill: ${skill.name}`);
         }
       } catch (error: any) {
+        if (root?.origin === 'external_pack') {
+          throw error;
+        }
         logger.error('SkillLoader', `Failed to load pipeline ${file}:`, error.message);
       }
     }
@@ -683,7 +745,7 @@ export class SkillRegistry {
   /**
    * 从目录加载 skills
    */
-  private async loadSkillsFromDir(dir: string): Promise<void> {
+  private async loadSkillsFromDir(dir: string, root?: SkillRootDescriptor): Promise<void> {
     const files = fs.readdirSync(dir);
 
     for (const file of files) {
@@ -698,13 +760,49 @@ export class SkillRegistry {
         const skill = normalizeSkillDefinition(loaded, filePath);
 
         if (skill && skill.name) {
-          this.validateAndLogWarnings(skill, filePath);
-          this.skills.set(skill.name, skill);
+          this.registerLoadedSkill(skill, filePath, root);
           logger.debug('SkillLoader', `Loaded skill: ${skill.name} (${skill.type})`);
         }
       } catch (error: any) {
+        if (root?.origin === 'external_pack') {
+          throw error;
+        }
         logger.error('SkillLoader', `Failed to load ${file}:`, error.message);
       }
+    }
+  }
+
+  /**
+   * Load one YAML skill into this registry without marking the registry fully
+   * initialized. This is used by latency-sensitive runtime pre-evidence paths
+   * that need one deterministic Skill while the full registry initializes in
+   * parallel.
+   */
+  loadSingleSkill(skillsDir: string, relativeSkillPath: string): SkillDefinition | undefined {
+    if (this.fragmentCache.size === 0) {
+      this.loadFragments(skillsDir);
+    }
+
+    const filePath = path.isAbsolute(relativeSkillPath)
+      ? relativeSkillPath
+      : path.join(skillsDir, relativeSkillPath);
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const loaded: unknown = yaml.load(content);
+      const skill = normalizeSkillDefinition(loaded, filePath);
+
+      if (!skill?.name) {
+        logger.warn('SkillLoader', `Single skill ${filePath} missing 'name', skipping`);
+        return undefined;
+      }
+
+      this.registerLoadedSkill(skill, filePath);
+      logger.debug('SkillLoader', `Loaded single skill: ${skill.name} (${skill.type})`);
+      return skill;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error('SkillLoader', `Failed to load single skill ${filePath}:`, message);
+      return undefined;
     }
   }
 
@@ -713,6 +811,10 @@ export class SkillRegistry {
    */
   getSkill(name: string): SkillDefinition | undefined {
     return this.skills.get(name);
+  }
+
+  getSkillOrigin(name: string): SkillOriginMetadata | undefined {
+    return this.skillOrigins.get(name);
   }
 
   /**
@@ -727,8 +829,9 @@ export class SkillRegistry {
    * Used for runtime-generated skills where YAML should be the single source of truth.
    */
   upsertSkill(skill: SkillDefinition): void {
-    const newDisplayIssues = this.validateAndLogWarnings(skill);
+    const validation = this.validateAndLogWarnings(skill);
     this.skills.set(skill.name, skill);
+    this.skillOrigins.set(skill.name, { origin: 'built_in' });
 
     // Keep moduleSkills map consistent
     if (skill.module) {
@@ -737,7 +840,7 @@ export class SkillRegistry {
       this.moduleSkills.delete(skill.name);
     }
 
-    if (this.initialized && newDisplayIssues.length > 0) {
+    if (this.initialized && validation.displayIssues.length > 0) {
       this.logDisplayContractSummary();
     }
   }
@@ -875,6 +978,7 @@ export class SkillRegistry {
     this.moduleSkills.clear();
     this.fragmentCache.clear();
     this.vendorOverrides.clear();
+    this.skillOrigins.clear();
     this.displayContractIssues = [];
     this.displayContractIssueKeys.clear();
     this.initialized = false;

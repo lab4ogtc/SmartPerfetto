@@ -325,6 +325,50 @@ describe('final result quality gate', () => {
     })).toBeUndefined();
   });
 
+  it('does not treat quick fact boundary disclaimers as full-report language', () => {
+    const quickRun: NonNullable<AnalysisResult['quickRun']> = {
+      requestedMode: 'auto',
+      resolvedMode: 'quick',
+      profile: 'normal',
+      targetTurns: 5,
+      hardCapTurns: 50,
+      actualTurns: 0,
+      elapsedMs: 64,
+      enforcement: 'turn_cap',
+      stopReason: 'answered',
+      evidence: {
+        frontendPrequeryInjected: 0,
+        frontendPrequeryCited: 0,
+        currentRunDataEnvelopes: 1,
+        citedEvidenceRefs: 1,
+      },
+      contextInjected: {
+        conversationTurns: 0,
+        recentSqlResults: 0,
+        sqlPitfallPairs: 0,
+        patternHints: 0,
+        negativePatternHints: 0,
+        caseBackgroundCases: 0,
+      },
+      verifierStatus: 'passed',
+    };
+
+    const quickFactAnswer = [
+      '当前 trace 的常用数据清单包括：trace_bounds 录制时长 7.815673 秒；slice/track 时间线（slice=101278, track=771）；FrameTimeline（actual=697, expected=697）。这是基于常用 Perfetto 表/模块计数的快速清单，不等同于完整数据源枚举或问题诊断。',
+      '',
+      '## 逐句数据引用（结构化来源）',
+      '- evidence_ref_id=`data:runtime_trace_fact:trace_data_inventory:current:abc123`',
+    ].join('\n');
+
+    expect(assessFinalResultQuality({
+      result: result({
+        conclusion: quickFactAnswer,
+        quickRun,
+      }),
+      query: '这个 trace 采集了哪些数据？',
+    })).toBeUndefined();
+  });
+
   it('marks quick answers with failed claim verification as partial', () => {
     const quickRun: NonNullable<AnalysisResult['quickRun']> = {
       requestedMode: 'fast',
@@ -905,7 +949,7 @@ describe('final result quality gate', () => {
       '',
       '- queueBuffer 不等于上屏；它只证明 producer submission。',
       '- dequeueBuffer 等待更接近 release fence/backpressure。',
-      '- acquire fence 影响 SF latch，present fence 影响可见上屏，release fence 影响 producer 复用。',
+      '- acquire fence 影响 SF latch，present fence 只锚定显示栈提交边界、不证明用户实际看到，release fence 影响 producer 复用。',
       '- BLAST Transaction 到达和 SurfaceFlinger latch 是独立阶段，不能混用。',
       '',
       '## 图形内存/刷新策略边界',

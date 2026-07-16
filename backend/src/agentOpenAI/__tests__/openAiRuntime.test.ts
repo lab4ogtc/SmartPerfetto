@@ -2,9 +2,17 @@
 // Copyright (C) 2024-2026 Gracker (Chris)
 // This file is part of SmartPerfetto. See LICENSE for details.
 
-import { describe, expect, it, jest } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { OpenAIRuntime, __testing } from '../openAiRuntime';
 import type { AnalysisPlanV3, PlanPhase } from '../../agentv3/types';
+import type { OpenAIAgentConfig } from '../../agentRuntime/engines/openai/openAiConfig';
+import * as patternMemory from '../../agentv3/analysisPatternMemory';
+import { createAnalysisRunSpec } from '../../agentRuntime/analysisRunSpec';
+import type { QueryResult, TraceProcessorService } from '../../services/traceProcessorService';
+
+afterEach(() => {
+  jest.restoreAllMocks();
+});
 
 function phase(id: string, status: PlanPhase['status']): PlanPhase {
   const p: PlanPhase = {
@@ -29,7 +37,22 @@ function plan(phases: PlanPhase[]): AnalysisPlanV3 {
   };
 }
 
-function rawOutputTextDelta(delta: string): any {
+type RawOpenAiOutputTextDeltaForTest = {
+  type: 'raw_model_stream_event';
+  data: {
+    type: 'output_text_delta';
+    delta: string;
+  };
+};
+
+type OpenAiStreamContextForTest = {
+  sessionId: string;
+  quickMode: boolean;
+  answerStreamFilter: ReturnType<typeof __testing.createOpenAiReasoningFilterState>;
+  toolInputsByTaskId: Map<string, { toolName: string; args: Record<string, unknown> }>;
+};
+
+function rawOutputTextDelta(delta: string): RawOpenAiOutputTextDeltaForTest {
   return {
     type: 'raw_model_stream_event',
     data: {
@@ -39,7 +62,7 @@ function rawOutputTextDelta(delta: string): any {
   };
 }
 
-function streamContext(sessionId: string, quickMode: boolean): any {
+function streamContext(sessionId: string, quickMode: boolean): OpenAiStreamContextForTest {
   return {
     sessionId,
     quickMode,
@@ -48,16 +71,1070 @@ function streamContext(sessionId: string, quickMode: boolean): any {
   };
 }
 
-function createRuntimeWithUpdates(): { runtime: any; updates: any[] } {
-  const runtime = new OpenAIRuntime({} as any) as any;
-  const updates: any[] = [];
-  runtime.on('update', (update: any) => updates.push(update));
+type OpenAiModeClassificationForTest = {
+  quickMode: boolean;
+  source: 'user_explicit' | 'hard_rule' | 'ai';
+  reason?: string;
+  skipQuickTracePreflightDetection: boolean;
+  quickAcknowledgementDirectAnswer: boolean;
+  quickProcessIdentityPreEvidence: boolean;
+  quickTraceFactPreEvidence: boolean;
+  quickScrollingTriagePreEvidence: boolean;
+};
+
+type OpenAiPrepareContextForTest = {
+  tools: unknown[];
+  allowedTools: string[];
+  systemPrompt: string;
+  directTraceFactAnswer?: { conclusion: string };
+  quickMemoryContextCounts?: Record<string, unknown>;
+};
+
+type OpenAiRuntimeAnalysisResultForTest = {
+  quickRun?: unknown;
+  rounds?: number;
+  conclusion?: string;
+  conclusionContract?: {
+    claims?: Array<{ references?: Array<Record<string, unknown>> }>;
+  };
+  partial?: boolean;
+  terminationReason?: string;
+  findings?: unknown[];
+};
+
+type OpenAiRuntimeSnapshotForTest = {
+  sdkSessionId?: string;
+  openAILastResponseId?: string;
+  openAIHistory?: unknown;
+  openAIRunState?: string;
+  engineState?: {
+    kind?: string;
+    provider?: unknown;
+    openai: {
+      history?: unknown;
+      lastResponseId?: string;
+      runState?: string;
+    };
+  };
+  referenceTraceId?: string;
+  comparisonSource?: string;
+};
+
+type OpenAiSessionMapEntryForTest = Record<string, unknown>;
+
+type OpenAiRuntimeTestAccess = {
+  on: (event: 'update', listener: (update: OpenAiStreamingUpdateForTest) => void) => void;
+  analyze: (...args: unknown[]) => Promise<OpenAiRuntimeAnalysisResultForTest>;
+  classifyModeForRequest: (...args: unknown[]) => Promise<OpenAiModeClassificationForTest>;
+  prepareAnalysisContext: (...args: unknown[]) => Promise<OpenAiPrepareContextForTest>;
+  detectArchitecture: (...args: unknown[]) => Promise<unknown>;
+  detectVendor: (...args: unknown[]) => Promise<string | null>;
+  getPlanCompletionStatus: (...args: unknown[]) => unknown;
+  shouldFinalizeAfterPlanComplete: (...args: unknown[]) => boolean;
+  shouldRequestFinalReportAfterPlanComplete: (...args: unknown[]) => boolean;
+  buildFinalReportAfterPlanCompletePrompt: (...args: unknown[]) => string;
+  formatPlanContinuationMessage: (...args: unknown[]) => string;
+  formatPlanCompleteReportContinuationMessage: (...args: unknown[]) => string;
+  buildCompletedPlanFallbackConclusion: (...args: unknown[]) => string | undefined;
+  buildPlanPhaseSummaryFallbackConclusion: (...args: unknown[]) => string | undefined;
+  handleStreamEvent: (...args: unknown[]) => string;
+  recordMaxTurnsPartialResult: (...args: unknown[]) => OpenAiRuntimeAnalysisResultForTest;
+  recordPatternMemory: (...args: unknown[]) => void;
+  getSdkSessionId: (...args: unknown[]) => string | undefined;
+  forgetOpenAILastResponseId: (...args: unknown[]) => void;
+  takeSnapshot: (...args: unknown[]) => OpenAiRuntimeSnapshotForTest;
+  restoreFromSnapshot: (...args: unknown[]) => void;
+  restoreSessionMapping: (...args: unknown[]) => void;
+  registerAbortHandle: (
+    sessionId: string,
+    handle: {readonly aborted: boolean; abort(): void},
+  ) => () => void;
+  sessionPlans: Map<string, { current: AnalysisPlanV3 | null; history: AnalysisPlanV3[] }>;
+  sessionSqlErrors: Set<string>;
+  sessionMap: Map<string, OpenAiSessionMapEntryForTest>;
+};
+
+type TraceQueryForOpenAiTest = (traceId: string, sql: string) => Promise<QueryResult>;
+type TraceGetForOpenAiTest = (traceId: string) => undefined;
+type TraceProcessorForOpenAiTest = TraceProcessorService & {
+  query: jest.MockedFunction<TraceQueryForOpenAiTest>;
+  getTrace: jest.MockedFunction<TraceGetForOpenAiTest>;
+};
+
+type OpenAiStreamingUpdateForTest = {
+  type?: string;
+  content?: {
+    done?: boolean;
+    message?: unknown;
+    token?: string;
+    [key: string]: unknown;
+  };
+};
+
+function createOpenAiConfigForTest(): OpenAIAgentConfig {
+  return {
+    model: 'test-model',
+    lightModel: 'test-light-model',
+    maxOutputTokens: 1024,
+    maxTurns: 3,
+    quickMaxTurns: 1,
+    quickTargetTurns: 1,
+    protocol: 'responses',
+    cwd: process.cwd(),
+    fullPathPerTurnMs: 60_000,
+    quickPathPerTurnMs: 30_000,
+    classifierTimeoutMs: 10_000,
+    outputLanguage: 'zh-CN',
+  };
+}
+
+function createOpenAiRuntimeForTest(
+  traceProcessor = createTraceProcessorForOpenAiPrepareTest(),
+): OpenAiRuntimeTestAccess {
+  return new OpenAIRuntime(traceProcessor) as unknown as OpenAiRuntimeTestAccess;
+}
+
+function createRuntimeWithUpdates(): {
+  runtime: OpenAiRuntimeTestAccess;
+  updates: OpenAiStreamingUpdateForTest[];
+} {
+  const runtime = createOpenAiRuntimeForTest();
+  const updates: OpenAiStreamingUpdateForTest[] = [];
+  runtime.on('update', update => updates.push(update));
   return { runtime, updates };
 }
 
+function createTraceProcessorForOpenAiPrepareTest(): TraceProcessorForOpenAiTest {
+  return {
+    query: jest.fn<TraceQueryForOpenAiTest>(async () => ({ columns: [], rows: [], durationMs: 0 })),
+    getTrace: jest.fn(() => undefined),
+  } as unknown as TraceProcessorForOpenAiTest;
+}
+
+describe('OpenAIRuntime analysis cancellation scope', () => {
+  it('aborts every provider request linked to the active analysis', () => {
+    const scope = new __testing.RuntimeAnalysisAbortScope();
+    const first = scope.createLinkedController();
+    const second = scope.createLinkedController();
+
+    scope.abort();
+
+    expect(first.controller.signal.aborted).toBe(true);
+    expect(second.controller.signal.aborted).toBe(true);
+  });
+
+  it('pre-aborts provider requests created after cancellation', () => {
+    const scope = new __testing.RuntimeAnalysisAbortScope();
+    scope.abort();
+
+    const late = scope.createLinkedController();
+
+    expect(late.controller.signal.aborted).toBe(true);
+    expect(() => scope.throwIfAborted()).toThrow('Analysis aborted');
+  });
+
+  it('does not retain completed provider-request listeners', () => {
+    const scope = new __testing.RuntimeAnalysisAbortScope();
+    const completed = scope.createLinkedController();
+    completed.dispose();
+
+    scope.abort();
+
+    expect(completed.controller.signal.aborted).toBe(false);
+  });
+
+  it('inherits cancellation across a retry scope handoff', () => {
+    const runtime = createOpenAiRuntimeForTest();
+    const first = new __testing.RuntimeAnalysisAbortScope();
+    runtime.registerAbortHandle('session-a', first);
+    first.abort();
+    const retry = new __testing.RuntimeAnalysisAbortScope();
+
+    runtime.registerAbortHandle('session-a', retry);
+
+    expect(retry.aborted).toBe(true);
+    expect(() => retry.throwIfAborted()).toThrow('Analysis aborted');
+  });
+
+  it('does not commit success when cancellation arrives while the provider is closing', async () => {
+    const scope = new __testing.RuntimeAnalysisAbortScope();
+    let releaseClose: (() => void) | undefined;
+    const closePending = new Promise<void>(resolve => {
+      releaseClose = resolve;
+    });
+    let committed = false;
+
+    const result = __testing.commitAfterProviderClose(
+      () => closePending,
+      scope,
+      () => {
+        committed = true;
+        return 'committed';
+      },
+    );
+    scope.abort();
+    releaseClose?.();
+
+    await expect(result).rejects.toThrow('Analysis aborted');
+    expect(committed).toBe(false);
+  });
+
+  it('commits success only after the provider has closed', async () => {
+    const scope = new __testing.RuntimeAnalysisAbortScope();
+    const order: string[] = [];
+
+    const result = await __testing.commitAfterProviderClose(
+      async () => {
+        order.push('close');
+      },
+      scope,
+      () => {
+        order.push('commit');
+        return 'committed';
+      },
+    );
+
+    expect(result).toBe('committed');
+    expect(order).toEqual(['close', 'commit']);
+  });
+});
+
+type OpenAiSessionContextForPrepareTest = {
+  getAllTurns: jest.MockedFunction<() => unknown[]>;
+  generatePromptContext: jest.MockedFunction<() => string>;
+  generateRecentSqlResultPromptContext: jest.MockedFunction<(maxTurns?: number) => string>;
+  getEntityStore: jest.MockedFunction<() => {
+    getStats: () => { totalEntityCount: number };
+    getAllFrames: () => unknown[];
+    getAllSessions: () => unknown[];
+  }>;
+};
+
+function createSessionContextForOpenAiPrepareTest(): OpenAiSessionContextForPrepareTest {
+  return {
+    getAllTurns: jest.fn(() => []),
+    generatePromptContext: jest.fn(() => ''),
+    generateRecentSqlResultPromptContext: jest.fn(() => ''),
+    getEntityStore: jest.fn(() => ({
+      getStats: () => ({ totalEntityCount: 0 }),
+      getAllFrames: () => [],
+      getAllSessions: () => [],
+    })),
+  };
+}
+
+function createOpenAiAnalysisRunSpecForTest(input: {
+  query: string;
+  sessionId: string;
+  traceId: string;
+  analysisMode?: 'fast' | 'full' | 'auto';
+}) {
+  return createAnalysisRunSpec({
+    query: input.query,
+    sessionId: input.sessionId,
+    traceId: input.traceId,
+    options: input.analysisMode ? { analysisMode: input.analysisMode } : {},
+    runtimeSelection: { kind: 'openai-agents-sdk', source: 'default' },
+    sceneType: 'general',
+    outputLanguage: 'zh-CN',
+    previousTurns: [],
+    resolvedMode: input.analysisMode === 'full' ? 'full' : 'quick',
+    budget: {
+      model: 'deepseek-v4-pro',
+      lightModel: 'deepseek-v4-flash',
+      maxTurns: 3,
+      quickMaxTurns: 1,
+      quickTargetTurns: 1,
+      maxOutputTokens: 1024,
+      fullPathPerTurnMs: 60_000,
+      quickPathPerTurnMs: 30_000,
+      classifierTimeoutMs: 10_000,
+    },
+  });
+}
+
+describe('OpenAIRuntime quick mode classification metadata', () => {
+  it('marks auto acknowledgement follow-ups for zero-turn direct answers', async () => {
+    const runtime = createOpenAiRuntimeForTest();
+
+    const result = await runtime.classifyModeForRequest(
+      '谢谢',
+      's-openai-auto-ack',
+      'trace-openai-auto-ack',
+      {},
+      'general',
+      createOpenAiConfigForTest(),
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      quickMode: true,
+      source: 'hard_rule',
+      quickAcknowledgementDirectAnswer: true,
+      skipQuickTracePreflightDetection: false,
+      quickProcessIdentityPreEvidence: false,
+      quickTraceFactPreEvidence: false,
+    }));
+  });
+
+  it('keeps pure acknowledgement follow-ups direct even when a reference trace is attached', async () => {
+    const runtime = createOpenAiRuntimeForTest();
+
+    const result = await runtime.classifyModeForRequest(
+      '谢谢',
+      's-openai-auto-ack-reference',
+      'trace-openai-auto-ack-reference',
+      { referenceTraceId: 'trace-reference' },
+      'general',
+      createOpenAiConfigForTest(),
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      quickMode: true,
+      source: 'hard_rule',
+      quickAcknowledgementDirectAnswer: true,
+      skipQuickTracePreflightDetection: false,
+      quickProcessIdentityPreEvidence: false,
+      quickTraceFactPreEvidence: false,
+    }));
+  });
+
+  it('marks explicit fast acknowledgement follow-ups for zero-turn direct answers', async () => {
+    const runtime = createOpenAiRuntimeForTest();
+
+    const result = await runtime.classifyModeForRequest(
+      'ok',
+      's-openai-fast-ack',
+      'trace-openai-fast-ack',
+      { analysisMode: 'fast' },
+      'general',
+      createOpenAiConfigForTest(),
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      quickMode: true,
+      source: 'user_explicit',
+      quickAcknowledgementDirectAnswer: true,
+      skipQuickTracePreflightDetection: false,
+      quickProcessIdentityPreEvidence: false,
+      quickTraceFactPreEvidence: false,
+    }));
+  });
+
+  it('marks explicit fast identity fact lookups for quick preflight skip', async () => {
+    const runtime = createOpenAiRuntimeForTest();
+
+    const result = await runtime.classifyModeForRequest(
+      '这个 trace 的应用包名和主要进程是什么？',
+      's-openai-fast-identity',
+      'trace-openai-fast-identity',
+      { analysisMode: 'fast' },
+      'scrolling',
+      createOpenAiConfigForTest(),
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      quickMode: true,
+      source: 'user_explicit',
+      reason: 'user requested fast',
+      skipQuickTracePreflightDetection: true,
+    }));
+  });
+
+  it('keeps explicit fast reference-trace identity lookups off single-trace pre-evidence', async () => {
+    const runtime = createOpenAiRuntimeForTest();
+
+    const result = await runtime.classifyModeForRequest(
+      '这个 trace 的应用包名和主要进程是什么？',
+      's-openai-fast-identity-reference',
+      'trace-openai-fast-identity-reference',
+      { analysisMode: 'fast', referenceTraceId: 'trace-reference' },
+      'scrolling',
+      createOpenAiConfigForTest(),
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      quickMode: true,
+      source: 'user_explicit',
+      reason: 'user requested fast',
+      skipQuickTracePreflightDetection: false,
+      quickProcessIdentityPreEvidence: false,
+      quickTraceFactPreEvidence: false,
+      quickScrollingTriagePreEvidence: false,
+    }));
+  });
+
+  it('keeps explicit fast reference-trace scrolling overviews off scrolling triage pre-evidence', async () => {
+    const runtime = createOpenAiRuntimeForTest();
+
+    const result = await runtime.classifyModeForRequest(
+      'scroll jank overview and smoothness',
+      's-openai-fast-scroll-reference',
+      'trace-openai-fast-scroll-reference',
+      { analysisMode: 'fast', referenceTraceId: 'trace-reference' },
+      'scrolling',
+      createOpenAiConfigForTest(),
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      quickMode: true,
+      source: 'user_explicit',
+      reason: 'user requested fast',
+      skipQuickTracePreflightDetection: false,
+      quickProcessIdentityPreEvidence: false,
+      quickTraceFactPreEvidence: false,
+      quickScrollingTriagePreEvidence: false,
+    }));
+  });
+
+  it('does not skip quick preflight for explicit fast diagnostic questions', async () => {
+    const runtime = createOpenAiRuntimeForTest();
+
+    const result = await runtime.classifyModeForRequest(
+      '分析滑动性能并给优化建议',
+      's-openai-fast-diagnostic',
+      'trace-openai-fast-diagnostic',
+      { analysisMode: 'fast' },
+      'scrolling',
+      createOpenAiConfigForTest(),
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      quickMode: true,
+      source: 'user_explicit',
+      skipQuickTracePreflightDetection: false,
+    }));
+  });
+
+  it('marks auto identity hard-rule lookups for quick preflight skip', async () => {
+    const runtime = createOpenAiRuntimeForTest();
+
+    const result = await runtime.classifyModeForRequest(
+      'What are the package name and main process for this trace?',
+      's-openai-auto-identity',
+      'trace-openai-auto-identity',
+      {},
+      'general',
+      createOpenAiConfigForTest(),
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      quickMode: true,
+      source: 'hard_rule',
+      reason: 'trace identity fact lookup',
+      skipQuickTracePreflightDetection: true,
+      quickProcessIdentityPreEvidence: true,
+      quickTraceFactPreEvidence: false,
+    }));
+  });
+
+  it('marks supported trace fact hard-rule lookups for quick trace evidence', async () => {
+    const runtimeWithPrivates = createOpenAiRuntimeForTest();
+
+    const result = await runtimeWithPrivates.classifyModeForRequest(
+      '滑动 FPS 是多少？',
+      's-openai-auto-trace-fact',
+      'trace-openai-auto-trace-fact',
+      {},
+      'scrolling',
+      {},
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      quickMode: true,
+      source: 'hard_rule',
+      reason: 'trace fact lookup',
+      skipQuickTracePreflightDetection: true,
+      quickProcessIdentityPreEvidence: false,
+      quickTraceFactPreEvidence: true,
+    }));
+  });
+
+  it('uses scoped trace fact pre-evidence and skips quick preflight when a selection context is present', async () => {
+    const runtimeWithPrivates = createOpenAiRuntimeForTest();
+
+    const result = await runtimeWithPrivates.classifyModeForRequest(
+      '这个 trace 一共有多少帧？',
+      's-openai-auto-trace-fact-selection',
+      'trace-openai-auto-trace-fact-selection',
+      {
+        selectionContext: {
+          kind: 'area',
+          source: 'area_selection',
+          startNs: 1,
+          endNs: 2,
+        },
+      },
+      'scrolling',
+      {},
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      quickMode: true,
+      source: 'hard_rule',
+      reason: 'trace fact lookup',
+      skipQuickTracePreflightDetection: true,
+      quickProcessIdentityPreEvidence: false,
+      quickTraceFactPreEvidence: true,
+    }));
+  });
+
+  it('does not use global process identity pre-evidence when a selection context is present in auto mode', async () => {
+    const runtimeWithPrivates = createOpenAiRuntimeForTest();
+
+    const result = await runtimeWithPrivates.classifyModeForRequest(
+      '这个选区的应用包名和主要进程是什么？',
+      's-openai-auto-identity-selection',
+      'trace-openai-auto-identity-selection',
+      {
+        selectionContext: {
+          kind: 'area',
+          source: 'area_selection',
+          startNs: 1,
+          endNs: 2,
+        },
+      },
+      'scrolling',
+      {},
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      quickMode: true,
+      source: 'hard_rule',
+      reason: 'trace identity fact lookup',
+      skipQuickTracePreflightDetection: false,
+      quickProcessIdentityPreEvidence: false,
+      quickTraceFactPreEvidence: false,
+    }));
+  });
+
+  it('does not use global process identity pre-evidence when a selection context is present in fast mode', async () => {
+    const runtimeWithPrivates = createOpenAiRuntimeForTest();
+
+    const result = await runtimeWithPrivates.classifyModeForRequest(
+      '选区里的 PID 是多少？',
+      's-openai-fast-identity-selection',
+      'trace-openai-fast-identity-selection',
+      {
+        analysisMode: 'fast',
+        selectionContext: {
+          kind: 'area',
+          source: 'area_selection',
+          startNs: 1,
+          endNs: 2,
+        },
+      },
+      'scrolling',
+      {},
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      quickMode: true,
+      source: 'user_explicit',
+      reason: 'user requested fast',
+      skipQuickTracePreflightDetection: false,
+      quickProcessIdentityPreEvidence: false,
+      quickTraceFactPreEvidence: false,
+    }));
+  });
+
+  it('marks mixed identity and trace fact lookups for both runtime evidence sources', async () => {
+    const runtimeWithPrivates = createOpenAiRuntimeForTest();
+
+    const result = await runtimeWithPrivates.classifyModeForRequest(
+      'PID 和滑动 FPS 是多少？',
+      's-openai-auto-mixed-facts',
+      'trace-openai-auto-mixed-facts',
+      {},
+      'scrolling',
+      {},
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      quickMode: true,
+      source: 'hard_rule',
+      reason: 'trace identity fact lookup',
+      skipQuickTracePreflightDetection: true,
+      quickProcessIdentityPreEvidence: true,
+      quickTraceFactPreEvidence: true,
+    }));
+  });
+
+  it('restores vendor and architecture preflight when identity-only evidence is unusable', async () => {
+    const traceProcessor = createTraceProcessorForOpenAiPrepareTest();
+    const runtime = createOpenAiRuntimeForTest(traceProcessor);
+    const detectArchitecture = jest.spyOn(runtime, 'detectArchitecture')
+      .mockResolvedValue({ type: 'Standard', confidence: 0.9, evidence: [] });
+    const detectVendor = jest.spyOn(runtime, 'detectVendor')
+      .mockResolvedValue('xiaomi');
+    const sessionContext = createSessionContextForOpenAiPrepareTest();
+
+    const context = await runtime.prepareAnalysisContext(
+      '这个 trace 的应用包名和主要进程是什么？',
+      's-openai-preflight-identity',
+      'trace-openai-preflight-identity',
+      { analysisMode: 'fast' },
+      {
+        config: { outputLanguage: 'zh-CN' },
+        sceneType: 'general',
+        lightweight: true,
+        analysisRunSpec: createOpenAiAnalysisRunSpecForTest({
+          query: '这个 trace 的应用包名和主要进程是什么？',
+          sessionId: 's-openai-preflight-identity',
+          traceId: 'trace-openai-preflight-identity',
+          analysisMode: 'fast',
+        }),
+        sessionContext,
+        previousTurns: [],
+        skipQuickTracePreflightDetection: true,
+        quickProcessIdentityPreEvidence: true,
+      },
+    );
+
+    expect(detectArchitecture).toHaveBeenCalledWith('trace-openai-preflight-identity', undefined);
+    expect(detectVendor).toHaveBeenCalledWith('trace-openai-preflight-identity');
+    expect(sessionContext.generateRecentSqlResultPromptContext).toHaveBeenCalledWith(3);
+    expect(context.quickMemoryContextCounts).toEqual(expect.objectContaining({
+      recentSqlResults: expect.any(Number),
+      patternHints: expect.any(Number),
+    }));
+    expect(runtime.sessionSqlErrors.has('s-openai-preflight-identity')).toBe(true);
+  });
+
+  it('uses trace fact pre-evidence without loading quick tools when evidence is complete', async () => {
+    const traceProcessor = createTraceProcessorForOpenAiPrepareTest();
+    traceProcessor.query.mockImplementation(async (_traceId: string, sql: string) => {
+      if (sql.includes('runtime_frame_metrics')) {
+        return {
+          columns: [
+            'package_name',
+            'process_names',
+            'upid_count',
+            'total_frames',
+            'window_start_ns',
+            'window_end_ns',
+            'duration_s',
+            'fps',
+            'source_table',
+          ],
+          rows: [[
+            'com.example.app',
+            'com.example.app',
+            1,
+            347,
+            10,
+            4_449_374_956,
+            4.449375,
+            77.99,
+            'actual_frame_timeline_slice',
+          ]],
+          durationMs: 2,
+        };
+      }
+      return { columns: [], rows: [], durationMs: 0 };
+    });
+    const runtime = new OpenAIRuntime(traceProcessor);
+    const updates: unknown[] = [];
+    runtime.on('update', update => updates.push(update));
+    const runtimeWithPrivates = runtime as unknown as {
+      detectArchitecture: (...args: unknown[]) => Promise<unknown>;
+      detectVendor: (...args: unknown[]) => Promise<unknown>;
+      prepareAnalysisContext: (...args: unknown[]) => Promise<{
+        tools: unknown[];
+        allowedTools: string[];
+        systemPrompt: string;
+        directTraceFactAnswer?: { conclusion: string };
+      }>;
+    };
+    const detectArchitecture = jest.spyOn(runtimeWithPrivates, 'detectArchitecture')
+      .mockResolvedValue({ type: 'Standard', confidence: 0.9, evidence: [] });
+    const detectVendor = jest.spyOn(runtimeWithPrivates, 'detectVendor')
+      .mockResolvedValue('xiaomi');
+    const sessionContext = createSessionContextForOpenAiPrepareTest();
+
+    const context = await runtimeWithPrivates.prepareAnalysisContext(
+      '滑动 FPS 是多少？',
+      's-openai-preflight-trace-fact',
+      'trace-openai-preflight-trace-fact',
+      { analysisMode: 'fast', packageName: 'com.example.app' },
+      {
+        config: { outputLanguage: 'zh-CN' },
+        sceneType: 'scrolling',
+        lightweight: true,
+        analysisRunSpec: createOpenAiAnalysisRunSpecForTest({
+          query: '滑动 FPS 是多少？',
+          sessionId: 's-openai-preflight-trace-fact',
+          traceId: 'trace-openai-preflight-trace-fact',
+          analysisMode: 'fast',
+        }),
+        sessionContext,
+        previousTurns: [],
+        skipQuickTracePreflightDetection: true,
+        quickTraceFactPreEvidence: true,
+      },
+    );
+
+    expect(detectArchitecture).not.toHaveBeenCalled();
+    expect(detectVendor).not.toHaveBeenCalled();
+    expect(context.tools).toHaveLength(0);
+    expect(context.allowedTools).toEqual([]);
+    expect(context.systemPrompt).toBe('');
+    expect(context.directTraceFactAnswer?.conclusion).toContain('77.99 FPS');
+    expect(sessionContext.generateRecentSqlResultPromptContext).not.toHaveBeenCalled();
+    expect(sessionContext.generatePromptContext).not.toHaveBeenCalled();
+    expect(sessionContext.getEntityStore).not.toHaveBeenCalled();
+    expect(traceProcessor.getTrace).not.toHaveBeenCalled();
+    expect(traceProcessor.query).toHaveBeenCalledTimes(1);
+    expect(updates).toContainEqual(expect.objectContaining({
+      type: 'data',
+      content: [expect.objectContaining({
+        meta: expect.objectContaining({
+          source: 'runtime_trace_fact:frame_metrics',
+          intent: 'runtime_trace_fact_lookup',
+        }),
+      })],
+    }));
+  });
+
+  it('skips focus detection for global trace fact pre-evidence', async () => {
+    const traceProcessor = createTraceProcessorForOpenAiPrepareTest();
+    traceProcessor.query.mockImplementation(async (_traceId: string, sql: string) => {
+      expect(sql).toContain('runtime_cpu_core_count');
+      return {
+        columns: [
+          'observed_cpu_count',
+          'observed_cpus',
+          'universe_source',
+          'cpu_table_count',
+          'cpu_table_cpus',
+          'source_table',
+        ],
+        rows: [[
+          7,
+          '0, 1, 2, 3, 4, 5, 6',
+          'sched_observed',
+          7,
+          '0, 1, 2, 3, 4, 5, 6',
+          'sched_slice/thread_state',
+        ]],
+        durationMs: 2,
+      };
+    });
+    const runtime = new OpenAIRuntime(traceProcessor);
+    const updates: Array<{ type?: string; content?: unknown }> = [];
+    runtime.on('update', update => updates.push(update));
+    const runtimeWithPrivates = runtime as unknown as {
+      detectArchitecture: (...args: unknown[]) => Promise<unknown>;
+      detectVendor: (...args: unknown[]) => Promise<unknown>;
+      prepareAnalysisContext: (...args: unknown[]) => Promise<{
+        tools: unknown[];
+        allowedTools: string[];
+        systemPrompt: string;
+        directTraceFactAnswer?: { conclusion: string };
+      }>;
+    };
+    const detectArchitecture = jest.spyOn(runtimeWithPrivates, 'detectArchitecture')
+      .mockResolvedValue({ type: 'Standard', confidence: 0.9, evidence: [] });
+    const detectVendor = jest.spyOn(runtimeWithPrivates, 'detectVendor')
+      .mockResolvedValue('xiaomi');
+    const sessionContext = createSessionContextForOpenAiPrepareTest();
+
+    const context = await runtimeWithPrivates.prepareAnalysisContext(
+      'CPU 有几核？',
+      's-openai-preflight-global-trace-fact',
+      'trace-openai-preflight-global-trace-fact',
+      { analysisMode: 'fast' },
+      {
+        config: { outputLanguage: 'zh-CN' },
+        sceneType: 'general',
+        lightweight: true,
+        analysisRunSpec: createOpenAiAnalysisRunSpecForTest({
+          query: 'CPU 有几核？',
+          sessionId: 's-openai-preflight-global-trace-fact',
+          traceId: 'trace-openai-preflight-global-trace-fact',
+          analysisMode: 'fast',
+        }),
+        sessionContext,
+        previousTurns: [],
+        skipQuickTracePreflightDetection: true,
+        quickTraceFactPreEvidence: true,
+      },
+    );
+
+    expect(traceProcessor.query).toHaveBeenCalledTimes(1);
+    expect(detectArchitecture).not.toHaveBeenCalled();
+    expect(detectVendor).not.toHaveBeenCalled();
+    expect(context.tools).toHaveLength(0);
+    expect(context.allowedTools).toEqual([]);
+    expect(context.systemPrompt).toBe('');
+    expect(context.directTraceFactAnswer?.conclusion).toContain('7 个 CPU 核心');
+    expect(sessionContext.generateRecentSqlResultPromptContext).not.toHaveBeenCalled();
+    expect(sessionContext.generatePromptContext).not.toHaveBeenCalled();
+    expect(sessionContext.getEntityStore).not.toHaveBeenCalled();
+    expect(traceProcessor.getTrace).not.toHaveBeenCalled();
+    const dataUpdates = updates.filter(update => update.type === 'data');
+    expect(dataUpdates).toHaveLength(1);
+    expect(dataUpdates[0].content).toEqual([expect.objectContaining({
+      meta: expect.objectContaining({
+        source: 'runtime_trace_fact:cpu_core_count',
+        intent: 'runtime_trace_fact_lookup',
+      }),
+    })]);
+  });
+
+  it('answers default auto trace facts before preparing the OpenAI SDK context', async () => {
+    const traceProcessor = createTraceProcessorForOpenAiPrepareTest();
+    traceProcessor.query.mockImplementation(async (_traceId: string, sql: string) => {
+      expect(sql).toContain('runtime_cpu_core_count');
+      return {
+        columns: [
+          'observed_cpu_count',
+          'observed_cpus',
+          'universe_source',
+          'cpu_table_count',
+          'cpu_table_cpus',
+          'source_table',
+        ],
+        rows: [[
+          7,
+          '0, 1, 2, 3, 4, 5, 6',
+          'sched_observed',
+          7,
+          '0, 1, 2, 3, 4, 5, 6',
+          'sched_slice/thread_state',
+        ]],
+        durationMs: 2,
+      };
+    });
+    const runtime = new OpenAIRuntime(traceProcessor);
+    const updates: Array<{ type?: string; content?: unknown }> = [];
+    runtime.on('update', update => updates.push(update));
+    const runtimeWithPrivates = runtime as unknown as {
+      prepareAnalysisContext: (...args: unknown[]) => Promise<unknown>;
+    };
+    const prepareAnalysisContext = jest.spyOn(runtimeWithPrivates, 'prepareAnalysisContext');
+
+    const result = await runtime.analyze(
+      '这个 trace 的 CPU 有几个核心？',
+      's-openai-direct-trace-fact',
+      'trace-openai-direct-trace-fact',
+    );
+
+    expect(prepareAnalysisContext).not.toHaveBeenCalled();
+    expect(traceProcessor.query).toHaveBeenCalledTimes(1);
+    expect(result.quickRun).toMatchObject({
+      requestedMode: 'auto',
+      resolvedMode: 'quick',
+      actualTurns: 0,
+      stopReason: 'answered',
+      evidence: {
+        currentRunDataEnvelopes: 1,
+        citedEvidenceRefs: 1,
+      },
+    });
+    expect(result.rounds).toBe(0);
+    expect(result.conclusion).toContain('7 个 CPU 核心');
+    expect(result.conclusionContract?.claims?.[0]?.references?.[0]).toMatchObject({
+      column: 'observed_cpu_count',
+      value: 7,
+    });
+    expect(updates.map(update => update.type)).toEqual([
+      'data',
+      'progress',
+      'conclusion',
+      'answer_token',
+    ]);
+  });
+
+  it('answers package-scoped trace facts directly without focus detection', async () => {
+    const traceProcessor = createTraceProcessorForOpenAiPrepareTest();
+    traceProcessor.query.mockImplementation(async (_traceId: string, sql: string) => {
+      expect(sql).toContain('runtime_frame_metrics');
+      return {
+        columns: [
+          'package_name',
+          'process_names',
+          'upid_count',
+          'total_frames',
+          'window_start_ns',
+          'window_end_ns',
+          'duration_s',
+          'fps',
+          'source_table',
+        ],
+        rows: [[
+          'com.example.app',
+          'com.example.app',
+          1,
+          347,
+          10,
+          4_449_374_956,
+          4.449375,
+          77.99,
+          'actual_frame_timeline_slice',
+        ]],
+        durationMs: 2,
+      };
+    });
+    const runtime = new OpenAIRuntime(traceProcessor);
+    const updates: Array<{ type?: string; content?: unknown }> = [];
+    runtime.on('update', update => updates.push(update));
+    const runtimeWithPrivates = runtime as unknown as {
+      prepareAnalysisContext: (...args: unknown[]) => Promise<unknown>;
+    };
+    const prepareAnalysisContext = jest.spyOn(runtimeWithPrivates, 'prepareAnalysisContext');
+
+    const result = await runtime.analyze(
+      '滑动 FPS 是多少？',
+      's-openai-direct-scoped-trace-fact',
+      'trace-openai-direct-scoped-trace-fact',
+      { packageName: 'com.example.app' },
+    );
+
+    expect(prepareAnalysisContext).not.toHaveBeenCalled();
+    expect(traceProcessor.query).toHaveBeenCalledTimes(1);
+    expect(result.quickRun).toMatchObject({
+      requestedMode: 'auto',
+      resolvedMode: 'quick',
+      actualTurns: 0,
+      stopReason: 'answered',
+      evidence: {
+        currentRunDataEnvelopes: 1,
+        citedEvidenceRefs: 1,
+      },
+    });
+    expect(result.rounds).toBe(0);
+    expect(result.conclusion).toContain('77.99 FPS');
+    expect(result.conclusionContract?.claims?.[0]?.references).toContainEqual(expect.objectContaining({
+      column: 'fps',
+      value: 77.99,
+    }));
+    expect(updates).toEqual([
+      expect.objectContaining({
+        type: 'data',
+        content: [expect.objectContaining({
+          meta: expect.objectContaining({
+            source: 'runtime_trace_fact:frame_metrics',
+            intent: 'runtime_trace_fact_lookup',
+          }),
+        })],
+      }),
+      expect.objectContaining({ type: 'progress' }),
+      expect.objectContaining({ type: 'conclusion' }),
+      expect.objectContaining({ type: 'answer_token' }),
+    ]);
+  });
+
+  it('restores normal quick preflight when trace fact pre-evidence is unusable', async () => {
+    const traceProcessor = createTraceProcessorForOpenAiPrepareTest();
+    traceProcessor.query.mockImplementation(async (_traceId: string, sql: string) => {
+      expect(sql).toContain('runtime_cpu_core_count');
+      return {
+        columns: [
+          'observed_cpu_count',
+          'observed_cpus',
+          'universe_source',
+          'cpu_table_count',
+          'cpu_table_cpus',
+          'source_table',
+        ],
+        rows: [],
+        durationMs: 2,
+      };
+    });
+    const runtime = new OpenAIRuntime(traceProcessor);
+    const runtimeWithPrivates = runtime as unknown as {
+      detectArchitecture: (...args: unknown[]) => Promise<unknown>;
+      detectVendor: (...args: unknown[]) => Promise<unknown>;
+      sessionSqlErrors: Map<string, unknown[]>;
+      prepareAnalysisContext: (...args: unknown[]) => Promise<{
+        tools: unknown[];
+        allowedTools: string[];
+        systemPrompt: string;
+        quickMemoryContextCounts?: unknown;
+      }>;
+    };
+    const detectArchitecture = jest.spyOn(runtimeWithPrivates, 'detectArchitecture')
+      .mockResolvedValue({ type: 'Standard', confidence: 0.9, evidence: [] });
+    const detectVendor = jest.spyOn(runtimeWithPrivates, 'detectVendor')
+      .mockResolvedValue('xiaomi');
+    const sessionContext = createSessionContextForOpenAiPrepareTest();
+
+    const context = await runtimeWithPrivates.prepareAnalysisContext(
+      'CPU 有几核？',
+      's-openai-preflight-trace-fact-empty',
+      'trace-openai-preflight-trace-fact-empty',
+      { analysisMode: 'fast' },
+      {
+        config: { outputLanguage: 'zh-CN' },
+        sceneType: 'general',
+        lightweight: true,
+        analysisRunSpec: createOpenAiAnalysisRunSpecForTest({
+          query: 'CPU 有几核？',
+          sessionId: 's-openai-preflight-trace-fact-empty',
+          traceId: 'trace-openai-preflight-trace-fact-empty',
+          analysisMode: 'fast',
+        }),
+        sessionContext,
+        previousTurns: [],
+        skipQuickTracePreflightDetection: true,
+        quickTraceFactPreEvidence: true,
+      },
+    );
+
+    expect(detectArchitecture).toHaveBeenCalledWith('trace-openai-preflight-trace-fact-empty', undefined);
+    expect(detectVendor).toHaveBeenCalledWith('trace-openai-preflight-trace-fact-empty');
+    expect(sessionContext.generateRecentSqlResultPromptContext).toHaveBeenCalledWith(3);
+    expect(runtimeWithPrivates.sessionSqlErrors.has('s-openai-preflight-trace-fact-empty')).toBe(true);
+    expect(context.tools.length).toBeGreaterThan(0);
+    expect(context.allowedTools.length).toBeGreaterThan(0);
+    expect(context.quickMemoryContextCounts).toEqual(expect.objectContaining({
+      recentSqlResults: expect.any(Number),
+      patternHints: expect.any(Number),
+    }));
+    expect(context.systemPrompt).not.toContain('data:runtime_trace_fact:cpu_core_count');
+    expect(context.systemPrompt).not.toContain('runtime_trace_fact:cpu_core_count');
+  });
+
+  it('keeps vendor and architecture preflight for diagnostic fast context', async () => {
+    const traceProcessor = createTraceProcessorForOpenAiPrepareTest();
+    const runtime = createOpenAiRuntimeForTest(traceProcessor);
+    const detectArchitecture = jest.spyOn(runtime, 'detectArchitecture')
+      .mockResolvedValue({ type: 'Standard', confidence: 0.9, evidence: [] });
+    const detectVendor = jest.spyOn(runtime, 'detectVendor')
+      .mockResolvedValue('xiaomi');
+    const sessionContext = createSessionContextForOpenAiPrepareTest();
+
+    await runtime.prepareAnalysisContext(
+      '分析滑动性能并给优化建议',
+      's-openai-preflight-diagnostic',
+      'trace-openai-preflight-diagnostic',
+      { analysisMode: 'fast' },
+      {
+        config: { outputLanguage: 'zh-CN' },
+        sceneType: 'scrolling',
+        lightweight: true,
+        analysisRunSpec: createOpenAiAnalysisRunSpecForTest({
+          query: '分析滑动性能并给优化建议',
+          sessionId: 's-openai-preflight-diagnostic',
+          traceId: 'trace-openai-preflight-diagnostic',
+          analysisMode: 'fast',
+        }),
+        sessionContext,
+        previousTurns: [],
+        skipQuickTracePreflightDetection: false,
+      },
+    );
+
+    expect(detectArchitecture).toHaveBeenCalledWith('trace-openai-preflight-diagnostic', undefined);
+    expect(detectVendor).toHaveBeenCalledWith('trace-openai-preflight-diagnostic');
+    expect(sessionContext.generateRecentSqlResultPromptContext).toHaveBeenCalledWith(3);
+    expect(runtime.sessionSqlErrors.has('s-openai-preflight-diagnostic')).toBe(true);
+  });
+});
+
 describe('OpenAIRuntime plan completion guard', () => {
   it('treats full-mode runs as incomplete until every plan phase is closed', () => {
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
 
     expect(runtime.getPlanCompletionStatus('s1', false)).toMatchObject({
       complete: false,
@@ -92,7 +1169,7 @@ describe('OpenAIRuntime plan completion guard', () => {
   });
 
   it('does not require a plan in quick mode', () => {
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
 
     expect(runtime.getPlanCompletionStatus('s1', true)).toMatchObject({
       complete: true,
@@ -102,7 +1179,7 @@ describe('OpenAIRuntime plan completion guard', () => {
   });
 
   it('does not treat closed phases with weak summaries as complete', () => {
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
     const weak = phase('p1', 'completed');
     weak.summary = 'done';
 
@@ -119,7 +1196,7 @@ describe('OpenAIRuntime plan completion guard', () => {
   });
 
   it('does not treat completed phases as complete until structured expected calls are observed', () => {
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
     const p1 = phase('p1', 'completed');
     p1.expectedCalls = [{ tool: 'invoke_skill', skillId: 'scrolling_analysis' }];
     runtime.sessionPlans.set('s1', {
@@ -149,7 +1226,7 @@ describe('OpenAIRuntime plan completion guard', () => {
   });
 
   it('allows deterministic stream finalization after full-mode plan completion', () => {
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
 
     runtime.sessionPlans.set('s1', {
       current: plan([phase('p1', 'completed'), phase('p2', 'in_progress')]),
@@ -309,7 +1386,7 @@ describe('OpenAIRuntime plan completion guard', () => {
           arguments: JSON.stringify({ skillId: 'scrolling_analysis', params: { process_name: 'demo' } }),
         },
       },
-    } as any, 'zh-CN', context);
+    }, 'zh-CN', context);
 
     runtime.handleStreamEvent({
       type: 'run_item_stream_event',
@@ -320,13 +1397,50 @@ describe('OpenAIRuntime plan completion guard', () => {
           output: JSON.stringify([{ type: 'text', text: '{"success":true,"planPhaseId":"p1"}' }]),
         },
       },
-    } as any, 'zh-CN', context);
+    }, 'zh-CN', context);
 
     expect(runtime.sessionPlans.get('s-tools')!.current!.toolCallLog).toContainEqual(expect.objectContaining({
       toolName: 'invoke_skill',
       skillId: 'scrolling_analysis',
       matchedPhaseId: 'p1',
     }));
+  });
+
+  it('projects private wiki tool output before emitting it', () => {
+    const { runtime, updates } = createRuntimeWithUpdates();
+    const context = streamContext('s-private-wiki', false);
+    runtime.handleStreamEvent({
+      type: 'run_item_stream_event',
+      name: 'tool_called',
+      item: {rawItem: {
+        callId: 'wiki-call',
+        name: 'lookup_blog_knowledge',
+        arguments: JSON.stringify({source: 'android_internals_wiki'}),
+      }},
+    }, 'zh-CN', context);
+    runtime.handleStreamEvent({
+      type: 'run_item_stream_event',
+      name: 'tool_output',
+      item: {rawItem: {
+        callId: 'wiki-call',
+        output: JSON.stringify({result: {
+          query: 'Handler',
+          probed: ['android_internals_wiki'],
+          retrievedAt: 1,
+          legacyPath: false,
+          hits: [{
+            chunkId: 'wiki-1',
+            score: 1,
+            metadata: {kind: 'android_internals_wiki', knowledgeSourceId: 'source-a'},
+            snippet: 'OPENAI_PRIVATE_WIKI_CANARY',
+          }],
+        }}),
+      }},
+    }, 'zh-CN', context);
+
+    const serialized = JSON.stringify(updates.filter(update => update.type === 'agent_response'));
+    expect(serialized).not.toContain('OPENAI_PRIVATE_WIKI_CANARY');
+    expect(serialized).toContain('snippetHash');
   });
 
   it('strips OpenAI-compatible reasoning markers from visible text', () => {
@@ -573,7 +1687,7 @@ describe('OpenAIRuntime plan completion guard', () => {
   });
 
   it('requests bounded final-report continuations when a completed plan only has summary fallback', () => {
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
     const planStatus = { complete: true, hasPlan: true, pendingPhases: [] };
     const fallback = '## 综合结论\n\n阶段摘要。\n\n## 分阶段证据摘要\n\n- p1: 采集摘要。';
     const summaryLikeFallback = '## 综合结论\n\n完成综合结论输出。冷启动 TTID=1912ms。\n\n' +
@@ -690,7 +1804,7 @@ describe('OpenAIRuntime plan completion guard', () => {
   });
 
   it('requests final-report continuation when the scene contract is incomplete', () => {
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
     const planStatus = {
       complete: true,
       hasPlan: true,
@@ -719,7 +1833,7 @@ describe('OpenAIRuntime plan completion guard', () => {
   });
 
   it('requests final-report continuation when the memory scene contract is incomplete', () => {
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
     const planStatus = {
       complete: true,
       hasPlan: true,
@@ -746,7 +1860,7 @@ describe('OpenAIRuntime plan completion guard', () => {
   });
 
   it('requests final-report continuation when the power background-governance contract is incomplete', () => {
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
     const planStatus = {
       complete: true,
       hasPlan: true,
@@ -773,7 +1887,7 @@ describe('OpenAIRuntime plan completion guard', () => {
   });
 
   it('requests final-report continuation when the network request-stage contract is incomplete', () => {
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
     const planStatus = {
       complete: true,
       hasPlan: true,
@@ -800,7 +1914,7 @@ describe('OpenAIRuntime plan completion guard', () => {
   });
 
   it('requests final-report continuation when startup diagnostic API boundaries are incomplete', () => {
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
     const planStatus = {
       complete: true,
       hasPlan: true,
@@ -827,7 +1941,7 @@ describe('OpenAIRuntime plan completion guard', () => {
   });
 
   it('requests final-report continuation when memory diagnostic API boundaries are incomplete', () => {
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
     const planStatus = {
       complete: true,
       hasPlan: true,
@@ -854,7 +1968,7 @@ describe('OpenAIRuntime plan completion guard', () => {
   });
 
   it('requests final-report continuation when ANR diagnostic API boundaries are incomplete', () => {
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
     const planStatus = {
       complete: true,
       hasPlan: true,
@@ -881,7 +1995,7 @@ describe('OpenAIRuntime plan completion guard', () => {
   });
 
   it('uses a full-report continuation prompt that preserves scene-specific sections', () => {
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
 
     const zhPrompt = runtime.buildFinalReportAfterPlanCompletePrompt('zh-CN');
     expect(zhPrompt).toContain('继续遵守本轮场景策略');
@@ -909,13 +2023,13 @@ describe('OpenAIRuntime plan completion guard', () => {
   });
 
   it('uses user-facing continuation progress text instead of provider internals', () => {
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
     const message = runtime.formatPlanContinuationMessage({
       hasPlan: true,
       complete: false,
       pendingPhases: [
         { id: 'p3', name: '综合结论' },
-      ] as any,
+      ],
     }, 'zh-CN');
 
     expect(message).toBe('继续补齐剩余分析阶段：综合结论');
@@ -931,7 +2045,7 @@ describe('OpenAIRuntime plan completion guard', () => {
   });
 
   it('builds a user-facing structured fallback when a completed plan has no final answer text', () => {
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
     const p1 = phase('p1', 'completed');
     p1.name = '获取启动概览';
     p1.summary = '检测到冷启动 dur=1338ms，TTID=1912ms，证据来自 art-2。';
@@ -963,7 +2077,7 @@ describe('OpenAIRuntime plan completion guard', () => {
   });
 
   it('builds partial phase-summary fallback for interrupted incomplete plans', () => {
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
     runtime.sessionPlans.set('s1', {
       current: plan([phase('p1', 'completed'), phase('p2', 'completed'), phase('p3', 'pending')]),
       history: [],
@@ -978,11 +2092,11 @@ describe('OpenAIRuntime plan completion guard', () => {
   });
 
   it('records max-turns partial results into session context', () => {
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
     const addTurn = jest.fn();
     const updateWorkingMemoryFromConclusion = jest.fn();
-    const updates: any[] = [];
-    runtime.on('update', (update: any) => updates.push(update));
+    const updates: OpenAiStreamingUpdateForTest[] = [];
+    runtime.on('update', update => updates.push(update));
 
     const result = runtime.recordMaxTurnsPartialResult({
       error: new Error('Max turns exceeded'),
@@ -1024,6 +2138,164 @@ describe('OpenAIRuntime plan completion guard', () => {
       String(update.content?.message).includes('当前上限 1 turns')
     ))).toBe(true);
   });
+
+  it('writes successful quick results to the quick-path memory bucket', () => {
+    const runtime = createOpenAiRuntimeForTest();
+    const saveQuick = jest.spyOn(patternMemory, 'saveQuickPathPattern')
+      .mockResolvedValue(undefined);
+    const saveFull = jest.spyOn(patternMemory, 'saveAnalysisPattern')
+      .mockResolvedValue(undefined);
+    const promote = jest.spyOn(patternMemory, 'promoteQuickPatternIfMatching')
+      .mockResolvedValue(false);
+
+    runtime.recordPatternMemory({
+      sessionId: 's-quick-memory',
+      result: {
+        sessionId: 's-quick-memory',
+        success: true,
+        findings: [{
+          title: '焦点进程已识别',
+          severity: 'high',
+          description: '包名为 com.example.app，来自当前 trace 的 process evidence。',
+          confidence: 0.8,
+          category: 'process_identity',
+        }],
+        hypotheses: [],
+        conclusion: '根因: 当前问题只需要回答包名，焦点进程为 com.example.app。',
+        confidence: 0.8,
+        rounds: 2,
+        totalDurationMs: 1200,
+      },
+      previousTurnCount: 3,
+      quickMode: true,
+      sceneType: 'scrolling',
+      architecture: { type: 'Standard' },
+      packageName: 'com.example.app',
+      options: {},
+    });
+
+    expect(saveQuick).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        'arch:Standard',
+        'scene:scrolling',
+        'domain:example',
+        'cat:process_identity',
+        expect.stringContaining('finding:焦点进程已识别'),
+      ]),
+      expect.arrayContaining([
+        expect.stringContaining('焦点进程已识别'),
+        expect.stringContaining('根因:'),
+      ]),
+      'scrolling',
+      'Standard',
+      expect.objectContaining({
+        status: 'provisional',
+        provenance: { sessionId: 's-quick-memory', turnIndex: 3 },
+      }),
+    );
+    expect(saveFull).not.toHaveBeenCalled();
+    expect(promote).not.toHaveBeenCalled();
+  });
+
+  it('writes successful full OpenAI results to long-term memory and attempts quick promotion', () => {
+    const runtime = createOpenAiRuntimeForTest();
+    const saveQuick = jest.spyOn(patternMemory, 'saveQuickPathPattern')
+      .mockResolvedValue(undefined);
+    const saveFull = jest.spyOn(patternMemory, 'saveAnalysisPattern')
+      .mockResolvedValue(undefined);
+    const promote = jest.spyOn(patternMemory, 'promoteQuickPatternIfMatching')
+      .mockResolvedValue(true);
+
+    runtime.recordPatternMemory({
+      sessionId: 's-full-memory',
+      result: {
+        sessionId: 's-full-memory',
+        success: true,
+        findings: [{
+          title: 'RenderThread blocked by long task',
+          severity: 'high',
+          description: 'A long RenderThread slice overlaps the janky frame window.',
+          confidence: 0.85,
+          category: 'render_thread',
+        }],
+        hypotheses: [],
+        conclusion: '根因: RenderThread 长任务覆盖掉帧窗口。',
+        confidence: 0.85,
+        rounds: 6,
+        totalDurationMs: 8000,
+      },
+      previousTurnCount: 1,
+      quickMode: false,
+      sceneType: 'scrolling',
+      architecture: { type: 'Standard' },
+      packageName: 'com.example.app',
+      options: {},
+    });
+
+    expect(saveFull).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        'arch:Standard',
+        'scene:scrolling',
+        'domain:example',
+        'cat:render_thread',
+        expect.stringContaining('finding:RenderThread blocked'),
+      ]),
+      expect.arrayContaining([expect.stringContaining('RenderThread blocked by long task')]),
+      'scrolling',
+      'Standard',
+      0.85,
+      expect.objectContaining({
+        status: 'provisional',
+        provenance: { sessionId: 's-full-memory', turnIndex: 1 },
+      }),
+    );
+    expect(promote).toHaveBeenCalledWith(expect.objectContaining({
+      sceneType: 'scrolling',
+      architectureType: 'Standard',
+      verifierPassed: true,
+    }));
+    expect(saveQuick).not.toHaveBeenCalled();
+  });
+
+  it('does not write OpenAI pattern memory for partial results', () => {
+    const runtime = createOpenAiRuntimeForTest();
+    const saveQuick = jest.spyOn(patternMemory, 'saveQuickPathPattern')
+      .mockResolvedValue(undefined);
+    const saveFull = jest.spyOn(patternMemory, 'saveAnalysisPattern')
+      .mockResolvedValue(undefined);
+    const promote = jest.spyOn(patternMemory, 'promoteQuickPatternIfMatching')
+      .mockResolvedValue(false);
+
+    runtime.recordPatternMemory({
+      sessionId: 's-partial-memory',
+      result: {
+        sessionId: 's-partial-memory',
+        success: true,
+        findings: [{
+          title: 'Incomplete finding',
+          severity: 'high',
+          description: 'Partial output should not be remembered.',
+          confidence: 0.5,
+        }],
+        hypotheses: [],
+        conclusion: '根因: 尚未完成。',
+        confidence: 0.5,
+        rounds: 1,
+        totalDurationMs: 1000,
+        partial: true,
+      },
+      previousTurnCount: 0,
+      quickMode: true,
+      sceneType: 'scrolling',
+      architecture: { type: 'Standard' },
+      packageName: 'com.example.app',
+      options: {},
+    });
+
+    expect(saveQuick).not.toHaveBeenCalled();
+    expect(saveFull).not.toHaveBeenCalled();
+    expect(promote).not.toHaveBeenCalled();
+  });
 });
 
 describe('OpenAIRuntime previous response recovery', () => {
@@ -1031,9 +2303,9 @@ describe('OpenAIRuntime previous response recovery', () => {
     const resolved = __testing.resolveOpenAIRunInput({
       quickMode: true,
       config: {
-        protocol: 'responses',
+        ...createOpenAiConfigForTest(),
         outputLanguage: 'en',
-      } as any,
+      },
       sessionEntry: {
         history: [{ role: 'user', content: 'full-mode history' }],
         lastResponseId: 'resp_full',
@@ -1044,7 +2316,7 @@ describe('OpenAIRuntime previous response recovery', () => {
         id: 'turn-1',
         timestamp: Date.now(),
         query: 'analyze startup',
-        intent: {} as any,
+        intent: {},
         result: { message: 'Startup report with TTID=1912ms' },
         findings: [{ title: 'TTID high', severity: 'medium' }],
         turnIndex: 0,
@@ -1065,9 +2337,9 @@ describe('OpenAIRuntime previous response recovery', () => {
     const resolved = __testing.resolveOpenAIRunInput({
       quickMode: false,
       config: {
-        protocol: 'responses',
+        ...createOpenAiConfigForTest(),
         outputLanguage: 'en',
-      } as any,
+      },
       sessionEntry: {
         history: [{ role: 'user', content: 'previous question' }],
         lastResponseId: 'resp_fresh',
@@ -1100,7 +2372,7 @@ describe('OpenAIRuntime previous response recovery', () => {
 
   it('does not expose stale OpenAI response mappings for persistence', () => {
     const now = 1_700_000_000_000;
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
     runtime.sessionMap.set('s1', {
       lastResponseId: 'resp_stale',
       updatedAt: now - (5 * 60 * 60 * 1000),
@@ -1115,7 +2387,7 @@ describe('OpenAIRuntime previous response recovery', () => {
   });
 
   it('clears stale previous response ids while preserving local history', () => {
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
     const history = [{ role: 'user', content: 'previous question' }];
     runtime.sessionMap.set('s1', {
       history,
@@ -1140,7 +2412,7 @@ describe('OpenAIRuntime previous response recovery', () => {
 
   it('does not persist stale OpenAI response mappings into snapshots', () => {
     const now = 1_700_000_000_000;
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
     runtime.sessionMap.set('s1', {
       history: [{ role: 'user', content: 'previous question' }],
       lastResponseId: 'resp_stale',
@@ -1179,7 +2451,7 @@ describe('OpenAIRuntime previous response recovery', () => {
 
   it('persists fresh OpenAI response mappings into snapshots', () => {
     const now = 1_700_000_000_000;
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
     const history = [{ role: 'user', content: 'previous question' }];
     runtime.sessionMap.set('s1', {
       history,
@@ -1225,7 +2497,7 @@ describe('OpenAIRuntime previous response recovery', () => {
 
   it('persists fresh comparison OpenAI response mappings into snapshots', () => {
     const now = 1_700_000_000_000;
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
     const history = [{ role: 'user', content: 'previous comparison question' }];
     runtime.sessionMap.set('s1:ref:trace-b', {
       history,
@@ -1265,7 +2537,7 @@ describe('OpenAIRuntime previous response recovery', () => {
 
 
   it('restores OpenAI response mappings with the snapshot timestamp', () => {
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
     const snapshotTimestamp = Date.now() - (5 * 60 * 60 * 1000);
 
     runtime.restoreFromSnapshot('s1', 'trace-1', {
@@ -1303,7 +2575,7 @@ describe('OpenAIRuntime previous response recovery', () => {
   });
 
   it('restores comparison OpenAI response mappings under the comparison key', () => {
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
     const snapshotTimestamp = Date.now() - (30 * 60 * 1000);
 
     runtime.restoreFromSnapshot('s1', 'trace-1', {
@@ -1339,7 +2611,7 @@ describe('OpenAIRuntime previous response recovery', () => {
   });
 
   it('restores explicit OpenAI session mappings under the comparison key', () => {
-    const runtime = new OpenAIRuntime({} as any) as any;
+    const runtime = createOpenAiRuntimeForTest();
 
     runtime.restoreSessionMapping('s1', 'resp_compare_restored', 'trace-b');
 

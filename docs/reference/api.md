@@ -16,6 +16,25 @@ Authorization: Bearer <token>
 | `GET` | `/health` | 后端状态、运行时、模型配置、鉴权状态 |
 | `GET` | `/debug` | 开发调试信息，包含 legacy API 使用快照 |
 
+`/health` 会返回顶层 `aiPolicy`，并在 `aiEngine` 中同步 `aiEnabled` 与
+`disabledReason`，用于前端和 CLI 判断当前是否允许模型分析。`aiPolicy.aiEnabled=false`
+时，trace 上传/读取、SQL、报告、Provider 配置/切换和确定性 Skill 仍可用；模型分析、
+resume、场景还原启动、Provider test 和 LLM Skill step 会返回 `403`：
+
+```json
+{
+  "success": false,
+  "code": "AI_DISABLED",
+  "retryable": false,
+  "feature": "agent_analyze",
+  "aiPolicy": {
+    "schemaVersion": 1,
+    "aiEnabled": false,
+    "source": "env"
+  }
+}
+```
+
 ## Trace 管理
 
 | 方法 | 路径 | 说明 |
@@ -36,6 +55,145 @@ Authorization: Bearer <token>
 curl -F "file=@trace.pftrace" http://localhost:3000/api/traces/upload
 ```
 
+## Workspace-scoped API
+
+新集成优先使用 workspace-scoped 路径。未启用企业/多 workspace 时，旧的全局路径仍可用于本地和兼容场景。
+
+| Base path | 说明 |
+|---|---|
+| `/api/workspaces/:workspaceId/traces` | workspace 范围内的 trace 上传、列表、删除、下载 |
+| `/api/workspaces/:workspaceId/reports` | workspace 范围内的报告读取、导出、删除 |
+| `/api/workspaces/:workspaceId/agent` | workspace 范围内的 agent 分析、SSE、多轮、反馈 |
+| `/api/workspaces/:workspaceId/providers` | workspace 范围内的 Provider Manager profile |
+| `/api/workspaces/:workspaceId/analysis-results` | 分析结果 snapshot 列表、读取、更新 |
+| `/api/workspaces/:workspaceId/windows` | 前端窗口 heartbeat 与 active window 状态 |
+| `/api/workspaces/:workspaceId/comparisons` | 多分析结果 comparison 创建、读取、stream、导出 |
+| `/api/workspaces/:workspaceId/trace-config` | 无副作用 trace config proposal |
+| `/api/workspaces/:workspaceId/skill-packs` | 本地目录型 Skill Pack 预检、安装、启停和移除 |
+| `/api/workspaces/:workspaceId/batch-traces` | workspace trace set 的确定性 Skill batch、报告导出、snapshot promotion 和 comparison bridge |
+
+## Skill Pack API
+
+Base path: `/api/workspaces/:workspaceId/skill-packs`
+
+所有接口需要 `runtime:manage` 权限。第一版只支持管理员选择本机目录作为来源；
+不支持远程 URL、自动同步或 archive 解包。安装会重新执行 preview，通过后只把
+manifest 声明的 Skill YAML、SQL fragment 和 docs 复制到受管目录
+`backendDataPath('skill-packs', tenantId, workspaceId, packId, version)`。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/` | 列出当前 workspace 已安装的 Skill Pack |
+| `POST` | `/preview` | 预检本地目录，返回 manifest、Skill ID、fragment、docs 和错误列表，不写入受管目录 |
+| `POST` | `/install` | 重新预检本地目录，成功后复制声明资产并写入 `skill_registry_entries` |
+| `PATCH` | `/:packId` | 传 `{ "enabled": true | false }` 启用或禁用已安装 pack |
+| `DELETE` | `/:packId` | 禁用 pack 并删除受管目录副本，内置 Skill 不受影响 |
+
+```bash
+curl -X POST http://localhost:3000/api/workspaces/default-workspace/skill-packs/preview \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{ "sourcePath": "/absolute/path/to/local-skill-pack" }'
+```
+
+`smartperfetto-skill-pack.json` 中的每个 asset 必须声明 `kind`、`path`、
+`sha256` 和 `sizeBytes`。允许的根目录是 `atomic/`、`composite/`、
+`deep/`、`system/`、`comparison/`、`modules/`、`pipelines/`、`fragments/`
+和 `docs/`。`strategies/`、`vendors/`、`custom/`、隐藏文件、symlink 和可执行
+扩展会被拒绝。Skill ID 与 SQL fragment key 不能覆盖内置内容。
+
+## Batch Trace API
+
+Base path: `/api/workspaces/:workspaceId/batch-traces`
+
+第一版在请求内同步执行确定性 YAML Skill batch。输入必须是当前 workspace 中已经存在的
+`traceId`；上传 trace set 仍使用 workspace trace upload API。该 API 不调用 LLM、
+不执行 raw batch SQL、不创建远程 worker、不提供浏览器 UI，也不会自动把结果写入
+analysis-result snapshot。需要进入 comparison 时必须显式 promotion。
+
+同步 HTTP create 默认最多接收 20 条 trace，可通过
+`SMARTPERFETTO_BATCH_TRACE_API_SYNC_MAX_TRACES` 调整。进程内同时执行的 HTTP
+batch create 默认最多 2 个，可通过
+`SMARTPERFETTO_BATCH_TRACE_API_MAX_IN_FLIGHT_RUNS` 调整；超过时返回 `429`
+和 `batch_trace_api_busy`。离线 CLI batch 的总 trace 上限仍由
+`SMARTPERFETTO_BATCH_TRACE_MAX_TRACES` 控制。
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| `POST` | `/` | `agent:run` | 创建 batch run，body 为 `{ skillId, traceIds, params?, maxConcurrency? }` |
+| `GET` | `/` | `report:read` | 列出当前 workspace 的 batch runs |
+| `GET` | `/:runId` | `report:read` | 读取单个 batch run |
+| `GET` | `/:runId/report/export` | `report:read` | 导出 HTML batch report |
+| `POST` | `/:runId/promote-snapshots` | `analysis_result:create` | 将选中的 completed per-trace 结果提升为 analysis-result snapshots |
+| `POST` | `/:runId/comparisons` | `comparison:create` | 必要时先提升 snapshot，再创建普通 analysis-result comparison |
+
+创建示例：
+
+```bash
+curl -X POST http://localhost:3000/api/workspaces/default-workspace/batch-traces \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{
+    "skillId": "startup_analysis",
+    "traceIds": ["trace-a", "trace-b"],
+    "params": { "package": "com.example" },
+    "maxConcurrency": 2
+  }'
+```
+
+响应包含 `{ "success": true, "run": BatchTraceRunV1 }`。`run.perTrace`
+保留每条 trace 的完成/失败状态、diagnostics、metric 列表和证据 envelope ID；
+`run.aggregate` 保留统计值、outlier ordinals、missing metric 与 failed trace
+限制说明。标准 startup / scrolling 指标会映射为 comparison metric key，未映射数字值
+只作为 batch-local metric 保存。
+
+Promotion 默认选择所有 completed trace，也可以传 `{ "ordinals": [0, 2] }`。
+失败或 unsupported 的 per-trace 结果不会被提升。Comparison bridge 接受
+`{ "ordinals": [0, 1], "baselineSnapshotId": "...", "metricKeys": ["startup.total_ms"] }`；
+未传 `ordinals` 时使用所有 completed 结果。comparison 仍写入普通
+`/api/workspaces/:workspaceId/comparisons` 存储和报告路径，不创建 batch-only 私有对比格式。
+
+## Trace Config Proposal API
+
+Base path: `/api/workspaces/:workspaceId/trace-config`
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/proposals` | 根据自然语言生成确定性的 Android trace config proposal |
+
+该接口需要 `trace:write` 权限，但不会调用 LLM、ADB 或 tracebox，也不会录制设备。
+响应中的 `proposal.config.textproto` 来自 `smp capture config` 使用的同一个 renderer。
+
+```bash
+curl -X POST http://localhost:3000/api/workspaces/default-workspace/trace-config/proposals \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request": "debug startup first frame jank",
+    "app": "com.example.app",
+    "durationSeconds": 10,
+    "categories": ["dalvikviktime"]
+  }'
+```
+
+响应示例：
+
+```json
+{
+  "success": true,
+  "proposal": {
+    "schemaVersion": 1,
+    "source": "deterministic",
+    "target": "android",
+    "preset": "startup",
+    "confidence": "high",
+    "command": {
+      "config": ["smp", "capture", "config", "--preset", "startup"],
+      "capture": ["smp", "capture", "android", "--preset", "startup"]
+    }
+  }
+}
+```
+
 ## Agent v1 主路径
 
 Base path: `/api/agent/v1`
@@ -43,13 +201,16 @@ Base path: `/api/agent/v1`
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | `POST` | `/analyze` | 启动分析 |
+| `POST` | `/sessions/:sessionId/runs` | 在已有 session 下启动新 run |
 | `GET` | `/:sessionId/stream` | SSE 流 |
+| `GET` | `/runs/:runId/stream` | 按 run id 订阅 SSE |
 | `GET` | `/:sessionId/status` | 查询状态 |
 | `GET` | `/:sessionId/turns` | 获取多轮历史 |
 | `GET` | `/:sessionId/turns/:turnId` | 获取单轮详情 |
 | `POST` | `/resume` | 恢复已有 session |
 | `POST` | `/:sessionId/respond` | 继续或终止 awaiting_user 会话 |
-| `POST` | `/:sessionId/cancel` | 取消分析 |
+| `POST` | `/sessions/:sessionId/respond` | `respond` 的 session-scoped alias |
+| `POST` | `/:sessionId/cancel` | 按精确 `runId` 取消分析 |
 | `POST` | `/:sessionId/interaction` | 记录 UI 交互 |
 | `GET` | `/:sessionId/focus` | 查询 focus 状态 |
 | `GET` | `/:sessionId/report` | 获取分析报告 |
@@ -59,6 +220,8 @@ Base path: `/api/agent/v1`
 | `POST` | `/teaching/pipeline` | 渲染管线教学 |
 | `GET` | `/sessions` | session catalog |
 | `GET` | `/logs` | agent logs，受 feature flag 控制 |
+
+Workspace-scoped agent base 为 `/api/workspaces/:workspaceId/agent`，其子路径与上表一致。`/api/agent/v1` 当前仍存在，但会通过 legacy telemetry 标记迁移目标。
 
 启动分析：
 
@@ -79,6 +242,23 @@ curl -X POST http://localhost:3000/api/agent/v1/analyze \
 ```bash
 curl -N http://localhost:3000/api/agent/v1/<sessionId>/stream
 ```
+
+取消必须携带 `/analyze` 回执中的精确 `runId`。缺失、未知或已经不再拥有当前
+session 的 run 不会触发 session 级 runtime abort：
+
+```bash
+curl -X POST http://localhost:3000/api/agent/v1/<sessionId>/cancel \
+  -H "Content-Type: application/json" \
+  -d '{"runId":"<runId>"}'
+```
+
+取消终态可以先返回给客户端，但同一 session 的下一轮会在被取消的 runtime 真正退出前返回
+`409 CANCELLATION_IN_PROGRESS`，避免旧 run 的清理或会话状态污染新 run。
+
+终态 `analysis_completed` 事件可能携带 `analysisReceipt`、
+`traceConfigProposal` 和 `uiActionProposals`。`uiActionProposals` 只包含从
+DataEnvelope 证据和列点击元数据派生的安全 UI 提案，例如跳转到时间范围、打开证据表
+或固定证据；客户端必须等待用户点击后再执行，不能把它当成自动命令。
 
 支持的 `selectionContext`：
 
@@ -183,6 +363,90 @@ Admin path: `/api/admin`
 | `POST` | `/strategies/reload` | 重新加载策略 |
 | `GET` | `/self-improve/metrics` | 自改进指标 |
 
+## Provider Manager API
+
+Legacy base path: `/api/v1/providers`。新集成优先使用
+`/api/workspaces/:workspaceId/providers`。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/` | 列出 provider profile |
+| `GET` | `/templates` | 获取内置 provider 模板 |
+| `GET` | `/effective` | 获取当前生效 provider/runtime |
+| `GET` | `/:id` | 获取单个 provider |
+| `POST` | `/` | 创建 provider |
+| `PATCH` | `/:id` | 更新 provider |
+| `DELETE` | `/:id` | 删除 provider |
+| `POST` | `/deactivate` | 停用 active provider，回到 system default |
+| `POST` | `/:id/activate` | 激活 provider |
+| `POST` | `/:id/runtime` | 更新 provider runtime pinning |
+| `POST` | `/:id/rotate-secret` | 轮换 provider secret |
+| `POST` | `/:id/test` | 测试 provider；AI disabled 时返回 `AI_DISABLED` 且不发起 provider 网络请求 |
+
+AI disabled 只阻断 provider connection test。Provider profile 的列表、创建、更新、
+删除、激活、停用、runtime pinning 和 secret rotation 仍是配置操作，可以继续使用。
+
+## Codebase / RAG API
+
+Base path: `/api/rag`
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/stats` | RAG store 统计 |
+| `GET` | `/chunks/:chunkId` | 读取 chunk |
+| `DELETE` | `/chunks/:chunkId` | 删除 chunk |
+| `POST` | `/search` | 搜索代码/知识 chunk |
+| `POST` | `/android-internals/preview` | 预览允许路径内的 Wiki 文章清单，不返回正文 |
+| `GET` | `/android-internals/sources` | 列出当前 scope 的外部 Wiki 注册项 |
+| `POST` | `/android-internals/sources` | 以独立权利确认和 provider 同意注册 Wiki |
+| `POST` | `/android-internals/sources/:id/reindex` | 分阶段重建并原子激活索引 generation |
+| `GET` | `/android-internals/sources/:id/audit` | 返回每篇文章的 metadata-only Skill disposition |
+| `PATCH` | `/android-internals/sources/:id/consent` | 显式授予或撤销 provider-send 同意 |
+| `DELETE` | `/android-internals/sources/:id/index` | 停用 generation 并清除该 source 的全部 chunk |
+| `GET` | `/codebases` | 列出已注册 codebase |
+| `POST` | `/codebases/preview` | 预览 path security gate 接受的文件 |
+| `POST` | `/codebases/register` | 注册本机代码库 |
+| `GET` | `/codebases/:id` | codebase 详情 |
+| `GET` | `/codebases/:id/symbols` | 符号解析 |
+| `GET` | `/codebases/:id/excerpt` | 读取已索引片段 |
+| `POST` | `/codebases/:id/reindex` | 重新索引 |
+| `GET` | `/codebases/:id/audit` | 索引审计 |
+
+Android Internals 接口的路径 allowlist、CC 权利确认、可撤销同意、请求级
+`options.knowledgeSourceIds` 和 Docker mount 流程见
+[Android Internals 外部知识库](../getting-started/android-internals-knowledge.md)。这类私有
+chunk 对普通 `/chunks/:id` 和 `/search` 完全不可见；仅专用 source/audit 管理接口返回
+当前 scope 内的无正文审计元数据。
+
+## Analysis Result Comparison API
+
+Workspace base path: `/api/workspaces/:workspaceId/comparisons`
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/` | 创建 analysis-result comparison |
+| `PATCH` | `/:comparisonId/baseline` | 更新 baseline |
+| `GET` | `/:comparisonId/report/export` | 导出 comparison report |
+| `GET` | `/:comparisonId` | 获取 comparison |
+| `GET` | `/:comparisonId/stream` | 订阅 comparison stream |
+
+Analysis-result snapshot base path: `/api/workspaces/:workspaceId/analysis-results`
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/` | 列出 snapshot |
+| `GET` | `/:snapshotId` | 读取 snapshot |
+| `PATCH` | `/:snapshotId` | 更新 snapshot 元数据 |
+| `POST` | `/:snapshotId/similarity` | 查询相似历史 snapshot，可选 case-library hint |
+
+`POST /:snapshotId/similarity` body 支持 `{ "limit": 5, "includeCases": false }`。
+`limit` 范围是 1 到 20；`includeCases` 默认 `false`。响应包含
+`signature`、`snapshotHints`、`caseHints`、合并的 `hints` 和 `count`。每个
+hint 都是 `SimilarityHintV1`，并带有
+`allowedUse: "navigation_hint_only"`；它只能作为导航/回看提示，不能作为当前
+trace 的诊断证据或 root-cause 证明。接口复用当前 workspace scope、
+`analysis_result:read` 权限和 snapshot repository 的可读性规则。
+
 ## 报告与导出
 
 | 方法 | 路径 | 说明 |
@@ -198,7 +462,13 @@ Admin path: `/api/admin`
 
 以下接口仍存在，但新集成应优先使用 `/api/agent/v1/*`：
 
+- `/api/traces/*`，优先迁移到 `/api/workspaces/:workspaceId/traces/*`
+- `/api/reports/*`，优先迁移到 `/api/workspaces/:workspaceId/reports/*`
+- `/api/agent/v1/*`，workspace 产品优先迁移到 `/api/workspaces/:workspaceId/agent/*`
+- `/api/v1/providers/*`，优先迁移到 `/api/workspaces/:workspaceId/providers/*`
 - `/api/perfetto-sql/*`
 - `/api/template-analysis/*`
+
+仍在维护的辅助 API 包括 `/api/flamegraph/*`、`/api/critical-path/*`、`/api/baselines/*`、`/api/memory/*`、`/api/cases/*`、`/api/ci/*`、`/api/tp/*`、`/api/auth/*`、`/api/tenant/*` 和 `/api/admin/runtime/*`。这些接口面向特定产品面或管理面，调用前应先确认当前部署是否启用了对应 feature / auth。
 
 legacy agent API base 会被 `rejectLegacyAgentApi` 拒绝，避免外部继续接入废弃路径。`/api/advanced-ai/*`、`/api/auto-analysis/*` 和 `/api/agent/v1/llm/*` 这类旧 direct AI route 已移除；统一使用 `/api/agent/v1/analyze`。

@@ -179,7 +179,7 @@ provider/runtime identity.
     "providerMode": "openai_responses",
     "diagnostics": {
       "protocol": "responses",
-      "model": "gpt-5.5"
+      "model": "gpt-5.4-mini"
     }
   }
 }

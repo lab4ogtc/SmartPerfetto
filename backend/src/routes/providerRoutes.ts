@@ -8,6 +8,7 @@ import { testProviderConnection } from '../services/providerManager/connectionTe
 import { authenticate, requireRequestContext, type RequestContext } from '../middleware/auth';
 import { recordEnterpriseAuditEventForContext } from '../services/enterpriseAuditService';
 import { hasRbacPermission, sendForbidden } from '../services/rbac';
+import { requireAiEnabledForHttp } from './aiCapabilityPolicyHttp';
 
 const router = express.Router();
 
@@ -215,6 +216,9 @@ router.post('/:id/rotate-secret', (req, res) => {
 });
 
 router.post('/:id/test', async (req, res) => {
+  if (!requireAiEnabledForHttp(res, 'provider_test')) {
+    return;
+  }
   const svc = getProviderService();
   const context = requireRequestContext(req);
   const provider = svc.getRaw(req.params.id, providerScopeForRequest(req));

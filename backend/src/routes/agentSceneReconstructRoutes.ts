@@ -30,6 +30,10 @@ import {
   sendResourceNotFound,
 } from '../services/resourceOwnership';
 import { readTraceMetadataForContext } from '../services/traceMetadataStore';
+import {
+  requireAiEnabledForHttp,
+  sendAiDisabledErrorIfPresent,
+} from './aiCapabilityPolicyHttp';
 
 export interface SceneReconstructConversationStep {
   eventId: string;
@@ -244,6 +248,10 @@ export function registerSceneReconstructRoutes<TSession extends SceneReconstruct
         });
       }
 
+      if (!requireAiEnabledForHttp(res, 'scene_reconstruct_start')) {
+        return;
+      }
+
       if (!await ensureTraceAccessible(req, res, traceId)) {
         return;
       }
@@ -271,6 +279,7 @@ export function registerSceneReconstructRoutes<TSession extends SceneReconstruct
 
       const orchestrator: IOrchestrator = createAgentOrchestrator({
         traceProcessorService: getTraceProcessorService(),
+        aiFeature: 'scene_reconstruct_start',
       });
 
       const logger = createSessionLogger(analysisId);
@@ -346,6 +355,9 @@ export function registerSceneReconstructRoutes<TSession extends SceneReconstruct
         architecture: 'agent-driven',
       });
     } catch (error: any) {
+      if (sendAiDisabledErrorIfPresent(res, error)) {
+        return;
+      }
       console.error('[AgentRoutes] Scene reconstruction start error:', error);
       res.status(500).json({
         success: false,

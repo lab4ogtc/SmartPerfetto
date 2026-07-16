@@ -74,6 +74,7 @@ export function buildTraceContextDataEnvelopes(
         columns: buildColumnDefinitions(dataset.columns),
         evidenceRefId: dataset.evidenceRefId,
         traceSide: dataset.traceSide || 'current',
+        paneSide: dataset.paneSide,
         traceId: dataset.traceId || traceId,
         queryHash: dataset.queryHash,
         sourceToolCallId: dataset.sourceToolCallId,

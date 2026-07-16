@@ -1,0 +1,142 @@
+{
+  "schema_version": 1,
+  "case_id": "gpu-workload",
+  "marker": "SmartPerfetto::CASE::gpu-workload",
+  "expectations": [
+    {
+      "id": "execute-android_gpu_work_period_track",
+      "type": "skill",
+      "target": "android_gpu_work_period_track",
+      "mode": "semantic",
+      "source_file": "backend/skills/atomic/android_gpu_work_period_track.skill.yaml",
+      "parameters": {},
+      "required_steps": [
+        "gpu_work"
+      ],
+      "semantic_step": "gpu_work",
+      "required_marker": "SmartPerfetto::CASE::gpu-workload"
+    },
+    {
+      "id": "execute-gpu_analysis",
+      "type": "skill",
+      "target": "gpu_analysis",
+      "mode": "semantic",
+      "source_file": "backend/skills/composite/gpu_analysis.skill.yaml",
+      "parameters": {
+        "high_freq_threshold_pct": 70,
+        "mid_freq_threshold_pct": 40,
+        "low_freq_threshold_pct": 10,
+        "freq_drop_ratio": 0.7,
+        "freq_drop_count_threshold": 20,
+        "high_load_min_dur_ns": 500000000
+      },
+      "required_steps": [
+        "data_check",
+        "gpu_freq_overview"
+      ],
+      "semantic_step": "gpu_freq_overview",
+      "required_marker": "SmartPerfetto::CASE::gpu-workload"
+    },
+    {
+      "id": "execute-gpu_compute_kernel_analysis",
+      "type": "skill",
+      "target": "gpu_compute_kernel_analysis",
+      "mode": "semantic",
+      "source_file": "backend/skills/composite/gpu_compute_kernel_analysis.skill.yaml",
+      "parameters": {
+        "max_rows": 50
+      },
+      "required_steps": [
+        "data_check",
+        "kernel_summary",
+        "launch_configuration"
+      ],
+      "semantic_step": "kernel_summary",
+      "required_marker": "SmartPerfetto::CASE::gpu-workload"
+    },
+    {
+      "id": "definition-gpu_freq_in_range",
+      "type": "skill",
+      "target": "gpu_freq_in_range",
+      "mode": "definition",
+      "source_file": "backend/skills/atomic/gpu_freq_in_range.skill.yaml",
+      "required_marker": "SmartPerfetto::CASE::gpu-workload"
+    },
+    {
+      "id": "definition-gpu_frequency_analysis",
+      "type": "skill",
+      "target": "gpu_frequency_analysis",
+      "mode": "definition",
+      "source_file": "backend/skills/atomic/gpu_frequency_analysis.skill.yaml",
+      "required_marker": "SmartPerfetto::CASE::gpu-workload"
+    },
+    {
+      "id": "execute-gpu_metrics",
+      "type": "skill",
+      "target": "gpu_metrics",
+      "mode": "semantic",
+      "source_file": "backend/skills/atomic/gpu_metrics.skill.yaml",
+      "parameters": {},
+      "required_steps": [
+        "gpu_frequency"
+      ],
+      "semantic_step": "gpu_frequency",
+      "required_marker": "SmartPerfetto::CASE::gpu-workload"
+    },
+    {
+      "id": "execute-gpu_module",
+      "type": "skill",
+      "target": "gpu_module",
+      "mode": "semantic",
+      "source_file": "backend/skills/modules/hardware/gpu_module.skill.yaml",
+      "parameters": {},
+      "required_steps": [
+        "gpu_frequency_overview"
+      ],
+      "semantic_step": "gpu_frequency_overview",
+      "required_marker": "SmartPerfetto::CASE::gpu-workload"
+    },
+    {
+      "id": "execute-gpu_v57_ai_diagnostics",
+      "type": "skill",
+      "target": "gpu_v57_ai_diagnostics",
+      "mode": "semantic",
+      "source_file": "backend/skills/composite/gpu_v57_ai_diagnostics.skill.yaml",
+      "parameters": {
+        "target_freq_ratio": 0.9,
+        "min_throttle_ns": 1000,
+        "max_rows": 20
+      },
+      "required_steps": [
+        "data_check",
+        "gpu_inventory"
+      ],
+      "semantic_step": "gpu_inventory",
+      "required_marker": "SmartPerfetto::CASE::gpu-workload"
+    },
+    {
+      "id": "definition-pipeline_angle_gles_vulkan",
+      "type": "skill",
+      "target": "pipeline_angle_gles_vulkan",
+      "mode": "definition",
+      "source_file": "backend/skills/pipelines/angle_gles_vulkan.skill.yaml",
+      "required_marker": "SmartPerfetto::CASE::gpu-workload"
+    },
+    {
+      "id": "definition-pipeline_opengl_es",
+      "type": "skill",
+      "target": "pipeline_opengl_es",
+      "mode": "definition",
+      "source_file": "backend/skills/pipelines/opengl_es.skill.yaml",
+      "required_marker": "SmartPerfetto::CASE::gpu-workload"
+    },
+    {
+      "id": "definition-pipeline_vulkan_native",
+      "type": "skill",
+      "target": "pipeline_vulkan_native",
+      "mode": "definition",
+      "source_file": "backend/skills/pipelines/vulkan_native.skill.yaml",
+      "required_marker": "SmartPerfetto::CASE::gpu-workload"
+    }
+  ]
+}

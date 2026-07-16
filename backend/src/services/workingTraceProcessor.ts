@@ -281,7 +281,7 @@ export interface TraceProcessorRuntimeStats {
   startupRssBytes?: number | null;
   peakRssBytes?: number | null;
   lastRssSampleAt?: number | null;
-  rssSampleSource: 'procfs' | 'ps' | 'unavailable' | 'external';
+  rssSampleSource: 'procfs' | 'ps' | 'powershell' | 'unavailable' | 'external';
   rssSampleError?: string;
   sqlWorker?: {
     running: boolean;

@@ -1,6 +1,6 @@
 {
   "name": "smart-perfetto",
-  "version": "1.0.37",
+  "version": "1.0.39",
   "description": "AI-powered Perfetto analysis platform",
   "private": true,
   "scripts": {
@@ -14,6 +14,16 @@
     "shellcheck": "shellcheck -x start.sh scripts/*.sh",
     "check:frontend-prebuild": "node scripts/check-frontend-prebuild.cjs",
     "test:node-env": "bash scripts/test-node-env.sh",
+    "test:governance": "node --test scripts/__tests__/check-perfetto-skills-impact.test.mjs",
+    "sync:rendering-pipelines": "node scripts/sync-rendering-pipelines.mjs",
+    "check:rendering-pipelines": "node scripts/sync-rendering-pipelines.mjs --check",
+    "verify:rendering-pipelines": "npm run check:rendering-pipelines && node --test scripts/__tests__/sync-rendering-pipelines.test.mjs scripts/__tests__/rendering-pipeline-runtime-assets.test.mjs && npm --prefix backend run generate:pipeline-detection -- --check",
+    "test:e2e:dual-trace": "node scripts/run-dual-trace-browser-e2e.cjs",
+    "test:e2e:dual-trace-real": "node scripts/run-dual-trace-browser-e2e.cjs --real-provider",
+    "trace:validate": "node Trace/tools/trace-corpus.cjs validate --check-generated",
+    "trace:build": "node Trace/tools/trace-corpus.cjs build --check",
+    "trace:test": "npm --prefix backend run trace:test",
+    "trace:regression": "npm run trace:validate && npm run trace:build && npm run trace:test",
     "rust:fmt": "cargo fmt --manifest-path rust/flamegraph-analyzer/Cargo.toml -- --check",
     "rust:check": "cargo check --manifest-path rust/flamegraph-analyzer/Cargo.toml",
     "rust:test": "cargo test --manifest-path rust/flamegraph-analyzer/Cargo.toml",
@@ -24,11 +34,13 @@
     "package:linux": "./scripts/package-portable.sh --targets linux-x64",
     "version:sync": "node scripts/sync-version.cjs",
     "version:set": "node scripts/sync-version.cjs",
+    "verify:public-skills": "./scripts/verify-public-skill-export.sh",
+    "check:perfetto-skills-impact": "node scripts/check-perfetto-skills-impact.mjs",
     "trace-processor:sync-prebuilts": "node scripts/sync-trace-processor-prebuilts.cjs",
     "release:portable": "./scripts/release-portable.sh",
     "release:windows-exe": "./scripts/release-windows-exe.sh",
     "quality": "npm run lint && npm run format:check && npm run deadcode && npm run shellcheck",
-    "verify:pr": "npm run quality && npm run check:frontend-prebuild && npm run rust:verify && npm --prefix backend run verify:pr"
+    "verify:pr": "npm run test:governance && npm run verify:rendering-pipelines && npm run quality && npm run check:frontend-prebuild && npm run rust:verify && npm --prefix backend run verify:pr"
   },
   "engines": {
     "node": ">=24.0.0 <25.0.0"
@@ -37,7 +49,8 @@
     "node": "24.15.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.16",
-    "knip": "^6.14.2"
+    "@biomejs/biome": "^2.5.3",
+    "js-yaml": "^4.3.0",
+    "knip": "^6.26.0"
   }
 }

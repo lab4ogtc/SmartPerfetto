@@ -22,8 +22,11 @@
  * @module ragStore
  */
 
+import {createHash} from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+
+import {backendLogPath} from '../runtimePaths';
 
 import {
   type RagChunk,
@@ -48,6 +51,7 @@ const LICENSE_REQUIRED_KINDS: ReadonlySet<RagSourceKind> = new Set([
   'aosp',
   'oem_sdk',
   'kernel_source',
+  'android_internals_wiki',
 ]);
 
 /** All RagSourceKind values. Kept here so getStats() can initialize a
@@ -63,6 +67,7 @@ const ALL_RAG_SOURCE_KINDS: readonly RagSourceKind[] = [
   'case_library',
   'app_source',
   'kernel_source',
+  'android_internals_wiki',
 ];
 
 /** Stable on-disk envelope. The schemaVersion is bumped when the layout
@@ -90,6 +95,10 @@ export interface RagStoreSearchOptions {
   symbolExact?: string;
   filePathExact?: string;
   languages?: RagChunk['language'][];
+  /** Request-scoped private knowledge source allowlist. */
+  knowledgeSourceIds?: string[];
+  /** Active generation per allowed private knowledge source. */
+  activeSourceGenerations?: Record<string, string>;
 }
 
 export interface RagStoreListOptions {
@@ -105,14 +114,51 @@ export type RagStoreStats = Record<
   {chunkCount: number; lastIndexedAt?: number}
 >;
 
-/** Tokenize: lower-case, keep alphanumerics + underscores, drop tokens
- * shorter than two characters. The token set is intersected with the
- * query token set to score chunks. */
+/** Tokenize Unicode words and emit overlapping Han bigrams so Chinese queries
+ * can match a phrase embedded in a longer sentence without a segmenter or
+ * provider dependency. The token set is intersected with the query token set
+ * to score chunks. */
 function tokenize(text: string): string[] {
-  return text
-    .toLowerCase()
-    .split(/[^a-z0-9_]+/)
-    .filter(t => t.length >= 2);
+  const tokens: string[] = [];
+  const normalized = text.normalize('NFKC').toLowerCase();
+  for (const match of normalized.matchAll(/[\p{L}\p{N}_]+/gu)) {
+    const runs: Array<{han: boolean; value: string}> = [];
+    for (const character of Array.from(match[0])) {
+      const han = /^\p{Script=Han}$/u.test(character);
+      const previous = runs[runs.length - 1];
+      if (previous?.han === han) previous.value += character;
+      else runs.push({han, value: character});
+    }
+    for (const run of runs) {
+      if (!run.han) {
+        if (run.value.length >= 2) tokens.push(run.value);
+        continue;
+      }
+      const characters = Array.from(run.value);
+      if (characters.length === 1) tokens.push(run.value);
+      for (let index = 0; index < characters.length - 1; index++) {
+        tokens.push(`${characters[index]}${characters[index + 1]}`);
+      }
+    }
+  }
+  return tokens;
+}
+
+function isPrivateKnowledgeChunk(chunk: RagChunk): boolean {
+  return chunk.kind === 'android_internals_wiki';
+}
+
+function privateKnowledgeScopeFingerprint(scope?: KnowledgeScope): string | undefined {
+  if (!scope?.tenantId || !scope.workspaceId || !scope.userId) return undefined;
+  return createHash('sha256')
+    .update(`${scope.tenantId}\0${scope.workspaceId}\0${scope.userId}`)
+    .digest('hex');
+}
+
+function privateKnowledgeVisibleInScope(chunk: RagChunk, scope?: KnowledgeScope): boolean {
+  if (!isPrivateKnowledgeChunk(chunk)) return true;
+  const fingerprint = privateKnowledgeScopeFingerprint(scope);
+  return Boolean(fingerprint && chunk.knowledgeScopeFingerprint === fingerprint);
 }
 
 /** Build a fresh stats accumulator with every known source kind set to
@@ -139,6 +185,8 @@ function defaultRegistryOrigin(kind: RagSourceKind): RagChunk['registryOrigin'] 
     case 'app_source':
     case 'kernel_source':
       return 'codebase_registry';
+    case 'android_internals_wiki':
+      return 'external_knowledge_registry';
   }
 }
 
@@ -161,6 +209,12 @@ function normalizeChunkForStorage(chunk: RagChunk): RagChunk {
 }
 
 function backfillChunk(chunk: RagChunk): RagChunk {
+  if (isPrivateKnowledgeChunk(chunk) && !chunk.knowledgeScopeFingerprint) {
+    return {
+      ...chunk,
+      unsupportedReason: chunk.unsupportedReason ?? 'pre_scope_private_knowledge_chunk',
+    };
+  }
   if (chunk.registryOrigin) return chunk;
   if (chunk.kind === 'app_source' || chunk.kind === 'kernel_source') {
     return {
@@ -183,6 +237,8 @@ function backfillChunk(chunk: RagChunk): RagChunk {
 export class RagStore {
   private readonly storagePath: string;
   private readonly chunks = new Map<string, RagChunk>();
+  private readonly pendingUpserts = new Set<string>();
+  private readonly pendingDeletes = new Set<string>();
   private loaded = false;
 
   constructor(storagePath: string) {
@@ -218,14 +274,30 @@ export class RagStore {
    */
   addChunk(chunk: RagChunk, scope?: KnowledgeScope): void {
     this.load();
-    const normalized = normalizeChunkForStorage(chunk);
+    let normalized = normalizeChunkForStorage(chunk);
     if (LICENSE_REQUIRED_KINDS.has(chunk.kind) && !chunk.license) {
       throw new Error(
         `License required for source kind '${chunk.kind}' but missing on chunk '${chunk.chunkId}'`,
       );
     }
+    if (isPrivateKnowledgeChunk(normalized)) {
+      const scopeFingerprint = privateKnowledgeScopeFingerprint(scope);
+      if (!scopeFingerprint) {
+        throw new Error(`Private knowledge chunk '${chunk.chunkId}' requires tenant/workspace/user scope`);
+      }
+      if (
+        normalized.registryOrigin !== 'external_knowledge_registry' ||
+        !normalized.knowledgeSourceId ||
+        !normalized.sourceGeneration
+      ) {
+        throw new Error(`Private knowledge chunk '${chunk.chunkId}' requires source registry metadata`);
+      }
+      normalized = {...normalized, knowledgeScopeFingerprint: scopeFingerprint};
+    }
     if (legacyKnowledgeFilesystemWritesEnabled()) {
       this.chunks.set(normalized.chunkId, normalized);
+      this.pendingUpserts.add(normalized.chunkId);
+      this.pendingDeletes.delete(normalized.chunkId);
     }
     if (enterpriseKnowledgeDbWritesEnabled()) {
       upsertScopedKnowledgeRecord(
@@ -247,24 +319,108 @@ export class RagStore {
     }
     if (legacyKnowledgeFilesystemWritesEnabled()) {
       this.load();
-      const had = this.chunks.delete(chunkId);
+      const existing = this.chunks.get(chunkId);
+      const had = Boolean(existing && privateKnowledgeVisibleInScope(existing, scope));
+      if (had) {
+        this.chunks.delete(chunkId);
+        this.pendingDeletes.add(chunkId);
+        this.pendingUpserts.delete(chunkId);
+      }
       if (had) this.persist();
       removed = had || removed;
     }
     return removed;
   }
 
+  /** Remove all staged and active generations belonging to one private source. */
+  removeKnowledgeSourceChunks(sourceId: string, scope?: KnowledgeScope): number {
+    return this.removeKnowledgeSourceChunksMatching(sourceId, scope, () => true);
+  }
+
+  /** Remove an exact pre-activation snapshot without touching later generations. */
+  removeKnowledgeSourceChunkIds(
+    sourceId: string,
+    chunkIds: readonly string[],
+    scope?: KnowledgeScope,
+  ): number {
+    let removed = 0;
+    for (const chunkId of new Set(chunkIds)) {
+      const chunk = this.getChunk(chunkId, scope);
+      if (chunk?.knowledgeSourceId !== sourceId) continue;
+      if (this.removeChunk(chunkId, scope)) removed++;
+    }
+    return removed;
+  }
+
+  /** Remove staged and superseded generations after a new generation is active. */
+  removeInactiveKnowledgeSourceChunks(
+    sourceId: string,
+    activeGeneration: string,
+    scope?: KnowledgeScope,
+  ): number {
+    return this.removeKnowledgeSourceChunksMatching(
+      sourceId,
+      scope,
+      chunk => chunk.sourceGeneration !== activeGeneration,
+    );
+  }
+
+  private removeKnowledgeSourceChunksMatching(
+    sourceId: string,
+    scope: KnowledgeScope | undefined,
+    shouldRemove: (chunk: RagChunk) => boolean,
+  ): number {
+    const removedIds = new Set<string>();
+    if (enterpriseKnowledgeDbWritesEnabled()) {
+      const chunks = listScopedKnowledgeRecords<RagChunk>(
+        KNOWLEDGE_KIND,
+        scope,
+        {rowScopePrefix: RAG_ROW_SCOPE_PREFIX, includeSystem: true},
+      ).map(row => row.record);
+      for (const chunk of chunks) {
+        if (
+          chunk.knowledgeSourceId !== sourceId ||
+          !privateKnowledgeVisibleInScope(chunk, scope) ||
+          !shouldRemove(chunk)
+        ) continue;
+        if (removeScopedKnowledgeRecord(KNOWLEDGE_KIND, chunk.chunkId, scope)) {
+          removedIds.add(chunk.chunkId);
+        }
+      }
+    }
+    if (legacyKnowledgeFilesystemWritesEnabled()) {
+      this.load();
+      let changed = false;
+      for (const [chunkId, chunk] of this.chunks) {
+        if (
+          chunk.knowledgeSourceId !== sourceId ||
+          !privateKnowledgeVisibleInScope(chunk, scope) ||
+          !shouldRemove(chunk)
+        ) continue;
+        this.chunks.delete(chunkId);
+        this.pendingDeletes.add(chunkId);
+        this.pendingUpserts.delete(chunkId);
+        removedIds.add(chunkId);
+        changed = true;
+      }
+      if (changed) this.persist();
+    }
+    return removedIds.size;
+  }
+
   /** Get a chunk by id, or undefined when absent. */
   getChunk(chunkId: string, scope?: KnowledgeScope): RagChunk | undefined {
     if (enterpriseKnowledgeStoreEnabled()) {
-      return getScopedKnowledgeRecord<RagChunk>(
+      const chunk = getScopedKnowledgeRecord<RagChunk>(
         KNOWLEDGE_KIND,
         chunkId,
         scope,
       )?.record;
+      return chunk && privateKnowledgeVisibleInScope(chunk, scope) ? chunk : undefined;
     }
     this.load();
-    return this.chunks.get(chunkId);
+    const chunk = this.chunks.get(chunkId);
+    return chunk && privateKnowledgeVisibleInScope(chunk, scope) ? chunk : undefined;
   }
 
   /** List chunks for rebuild/maintenance callers without changing search semantics. */
@@ -277,6 +433,7 @@ export class RagStore {
           {rowScopePrefix: RAG_ROW_SCOPE_PREFIX, includeSystem: true},
         ).map(row => row.record)
       : Array.from(this.chunks.values());
+    chunks = chunks.filter(chunk => privateKnowledgeVisibleInScope(chunk, opts.scope));
     if (opts.kind) chunks = chunks.filter(chunk => chunk.kind === opts.kind);
     if (opts.registryOrigin) {
       chunks = chunks.filter(chunk => chunk.registryOrigin === opts.registryOrigin);
@@ -300,7 +457,7 @@ export class RagStore {
           {rowScopePrefix: RAG_ROW_SCOPE_PREFIX, includeSystem: true},
         ).map(row => row.record)
       : Array.from(this.chunks.values());
-    for (const c of chunks) {
+    for (const c of chunks.filter(chunk => privateKnowledgeVisibleInScope(chunk, scope))) {
       const s = stats[c.kind];
       s.chunkCount++;
       if (s.lastIndexedAt === undefined || c.indexedAt > s.lastIndexedAt) {
@@ -334,6 +491,9 @@ export class RagStore {
         ).map(row => row.record)
       : Array.from(this.chunks.values());
     const codebaseFilter = opts.codebaseIds ? new Set(opts.codebaseIds) : null;
+    const knowledgeSourceFilter = opts.knowledgeSourceIds
+      ? new Set(opts.knowledgeSourceIds)
+      : null;
     const languageFilter = opts.languages ? new Set(opts.languages) : null;
 
     const probed = opts.kinds
@@ -345,9 +505,19 @@ export class RagStore {
     let eligibleSeen = 0;
 
     for (const chunk of chunks) {
+      if (!privateKnowledgeVisibleInScope(chunk, opts.scope)) continue;
+      if (isPrivateKnowledgeChunk(chunk) && !knowledgeSourceFilter) continue;
       if (kindFilter && !kindFilter.has(chunk.kind)) continue;
       if (chunk.unsupportedReason) continue;
       if (codebaseFilter && (!chunk.codebaseId || !codebaseFilter.has(chunk.codebaseId))) continue;
+      if (
+        knowledgeSourceFilter &&
+        (!chunk.knowledgeSourceId || !knowledgeSourceFilter.has(chunk.knowledgeSourceId))
+      ) continue;
+      if (knowledgeSourceFilter && chunk.knowledgeSourceId) {
+        const activeGeneration = opts.activeSourceGenerations?.[chunk.knowledgeSourceId];
+        if (!activeGeneration || chunk.sourceGeneration !== activeGeneration) continue;
+      }
       if (opts.vendor && chunk.vendor !== opts.vendor) continue;
       if (opts.buildId && chunk.buildId !== opts.buildId) continue;
       if (opts.pathPrefix && !(chunk.filePath ?? chunk.uri).startsWith(opts.pathPrefix)) continue;
@@ -420,22 +590,50 @@ export class RagStore {
   private persist(): void {
     const dir = path.dirname(this.storagePath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, {recursive: true});
+    const merged = new Map<string, RagChunk>();
+    if (fs.existsSync(this.storagePath)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(this.storagePath, 'utf8')) as StorageEnvelope;
+        if ((parsed.schemaVersion === 1 || parsed.schemaVersion === 2) && Array.isArray(parsed.chunks)) {
+          for (const chunk of parsed.chunks) merged.set(chunk.chunkId, backfillChunk(chunk));
+        }
+      } catch {
+        // Match load(): an unreadable legacy file contributes no merge base.
+      }
+    }
+    for (const chunkId of this.pendingDeletes) merged.delete(chunkId);
+    for (const chunkId of this.pendingUpserts) {
+      const chunk = this.chunks.get(chunkId);
+      if (chunk) merged.set(chunkId, chunk);
+    }
+    this.chunks.clear();
+    for (const [chunkId, chunk] of merged) this.chunks.set(chunkId, chunk);
     // Per-process unique tmp suffix — Codex round E P1#5 cross-process
     // collision guard. Single-process is the documented contract, but a
     // unique suffix costs nothing and removes the foot-gun.
     const tmp = `${this.storagePath}.tmp.${process.pid}.${Math.random().toString(36).slice(2)}`;
     const envelope: StorageEnvelope = {
       schemaVersion: 2,
-      chunks: Array.from(this.chunks.values()),
+      chunks: Array.from(merged.values()),
     };
     fs.writeFileSync(tmp, JSON.stringify(envelope, null, 2), 'utf-8');
     fs.renameSync(tmp, this.storagePath);
+    this.pendingUpserts.clear();
+    this.pendingDeletes.clear();
   }
 }
 
 /** Whether the given source kind needs a `license` field at ingest time. */
 export function ragStoreRequiresLicense(kind: RagSourceKind): boolean {
   return LICENSE_REQUIRED_KINDS.has(kind);
+}
+
+let defaultRagStore: RagStore | undefined;
+
+/** Process-wide store shared by admin ingestion and runtime retrieval. */
+export function getDefaultRagStore(): RagStore {
+  defaultRagStore ??= new RagStore(backendLogPath('rag_store.json'));
+  return defaultRagStore;
 }
 
 function ragRowScope(kind: RagSourceKind): string {

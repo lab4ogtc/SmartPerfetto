@@ -57,10 +57,11 @@ export function commitTurnOutputs(input: CommitTurnInput): void {
   const { paths, sp, renderer, sessionId, turn, query, result, config, turnMarkdown, reportAppendix, indexEntry } = input;
 
   const conclusion = result.result.conclusion || '';
+  const turnPrefix = path.join(sp.turnsDir, String(turn).padStart(3, '0'));
+  const cliTurnPath = `${turnPrefix}.md`;
 
   writeConclusion(sp, conclusion);
   writeTurnMarkdown(sp, turn, reportAppendix?.markdown ? `${turnMarkdown}\n\n${reportAppendix.markdown}` : turnMarkdown);
-  writeAnalysisQualitySidecars(sp, turn, result);
 
   let turnReportPath: string | undefined;
   const reportHtml = result.reportHtml && reportAppendix?.html
@@ -69,6 +70,8 @@ export function commitTurnOutputs(input: CommitTurnInput): void {
   const reportPathForUser = result.reportHtml
     ? (turnReportPath = writeTurnReportHtml(sp, turn, reportHtml || ''), writeReportHtml(sp, reportHtml || ''), sp.report)
     : `(report generation failed${result.reportError ? `: ${result.reportError}` : ''})`;
+  attachCliReceiptPath(result, cliTurnPath);
+  writeAnalysisQualitySidecars(sp, turn, result);
 
   writeConfig(sp, config);
 
@@ -116,6 +119,22 @@ function writeAnalysisQualitySidecars(sp: SessionPaths, turn: number, result: Ru
   writeJsonFile(sp, `${turnPrefix}.claim-verification.json`, result.result.claimVerificationResult || null);
   writeJsonFile(sp, sp.identityResolutions, result.result.identityResolutions || []);
   writeJsonFile(sp, `${turnPrefix}.identity-resolutions.json`, result.result.identityResolutions || []);
+  writeJsonFile(sp, path.join(sp.dir, 'analysis-receipt.json'), result.result.analysisReceipt || null);
+  writeJsonFile(sp, `${turnPrefix}.analysis-receipt.json`, result.result.analysisReceipt || null);
+  writeJsonFile(sp, path.join(sp.dir, 'ui-action-proposals.json'), result.result.uiActionProposals || []);
+  writeJsonFile(sp, `${turnPrefix}.ui-action-proposals.json`, result.result.uiActionProposals || []);
+}
+
+function attachCliReceiptPath(result: RunTurnOutput, cliTurnPath: string): void {
+  const receipt = result.result.analysisReceipt;
+  if (!receipt) return;
+  result.result.analysisReceipt = {
+    ...receipt,
+    outputs: {
+      ...receipt.outputs,
+      cliTurnPath,
+    },
+  };
 }
 
 function appendHtmlToBody(html: string, appendixHtml: string): string {

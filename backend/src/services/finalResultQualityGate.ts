@@ -3,6 +3,10 @@
 // This file is part of SmartPerfetto. See LICENSE for details.
 
 import type { AgentRuntimeAnalysisResult } from '../agent/core/orchestratorTypes';
+import {
+  QUICK_TRIAGE_MAX_CHINESE_CHARS,
+  QUICK_TRIAGE_MAX_CLAIMS,
+} from '../agentv3/quickAnswerContract';
 import { assessFinalReportContractCompleteness } from './finalReportContractGate';
 
 export type FinalResultQualityIssueCode =
@@ -285,17 +289,34 @@ function isQuickRunResult(result: AgentRuntimeAnalysisResult): boolean {
   return result.quickRun?.resolvedMode === 'quick';
 }
 
+function removeNegatedFullReportBoundaryText(text: string): string {
+  return text
+    .replace(
+      /(?:不(?:等同于|是|代表|应被视为)|并非|不能(?:作为|当作)?|不可(?:作为|当作)?|不是).{0,24}(?:完整|全面|全景).{0,40}(?:诊断|分析|报告)/g,
+      '',
+    )
+    .replace(
+      /(?:not|isn't|doesn't|should\s+not|cannot|can't).{0,30}(?:full|complete|comprehensive).{0,50}(?:diagnosis|analysis|report)/gi,
+      '',
+    );
+}
+
 function looksLikeOverExpandedQuickReport(
   result: AgentRuntimeAnalysisResult,
   conclusion: string,
 ): boolean {
   if (!isQuickRunResult(result)) return false;
-  const headingCount = countMatches(conclusion, /(^|\n)\s{0,3}#{1,3}\s+\S/g);
+  const reportShapeText = removeNegatedFullReportBoundaryText(conclusion);
+  const headingCount = countMatches(reportShapeText, /(^|\n)\s{0,3}#{1,3}\s+\S/g);
+  const claimCount = result.conclusionContract?.claims?.length ?? 0;
   const hasFullReportLanguage =
-    /(?:完整|全面|全景).{0,16}(?:诊断|分析|报告)|(?:full|complete|comprehensive).{0,20}(?:diagnosis|analysis|report)/i.test(conclusion) ||
-    /(^|\n)\s{0,3}#{1,3}\s*[^\n]{0,40}(?:完整诊断报告|完整分析报告|综合诊断报告|Full Report|Comprehensive Report)/i.test(conclusion);
-  const triageOverBudget = result.quickRun?.profile === 'triage' && conclusion.length > 1800;
-  return hasFullReportLanguage || triageOverBudget || headingCount >= 6 || conclusion.length > 3600;
+    /(?:完整|全面|全景).{0,16}(?:诊断|分析|报告)|(?:full|complete|comprehensive).{0,20}(?:diagnosis|analysis|report)/i.test(reportShapeText) ||
+    /(^|\n)\s{0,3}#{1,3}\s*[^\n]{0,40}(?:完整诊断报告|完整分析报告|综合诊断报告|Full Report|Comprehensive Report)/i.test(reportShapeText);
+  const triageOverBudget = result.quickRun?.profile === 'triage' &&
+    reportShapeText.length > QUICK_TRIAGE_MAX_CHINESE_CHARS * 2;
+  const triageContractOverrun = result.quickRun?.profile === 'triage' &&
+    (headingCount > 2 || claimCount > QUICK_TRIAGE_MAX_CLAIMS);
+  return hasFullReportLanguage || triageOverBudget || triageContractOverrun || headingCount >= 6 || reportShapeText.length > 3600;
 }
 
 function assessKernelBlockingClaimBoundary(conclusion: string): FinalResultQualityIssue | undefined {
@@ -306,10 +327,10 @@ function assessKernelBlockingClaimBoundary(conclusion: string): FinalResultQuali
   const claimsDStateAsIoRootCause =
     /(?:\bD-state\b|D\s*状态|D\/DK|不可中断睡眠|uninterruptible\s+sleep).{0,80}(?:io|i\/o|磁盘|存储|disk|storage).{0,80}(?:根因|证明|导致|阻塞|等待|瓶颈|卡顿|慢)/i.test(text) ||
     /(?:io|i\/o|磁盘|存储|disk|storage).{0,80}(?:根因|证明|导致|阻塞|等待|瓶颈|卡顿|慢).{0,80}(?:\bD-state\b|D\s*状态|D\/DK|不可中断睡眠|uninterruptible\s+sleep)/i.test(text);
-	  const hasDStateIoEvidence =
-	    /io_wait\s*(?:=|为|是)?\s*1/i.test(text) ||
-	    /(?:filemap|io_schedule|wait_on_page|folio_wait|submit_bio|blk_|ext4|f2fs|erofs|ufshcd|mmc_|dm_|fsync)/i.test(text) ||
-	    /(?:sqlite|file\s*i\/?o|文件\s*i\/?o|数据库|sharedpreferences).{0,40}(?:slice|trace|stack|调用栈|证据|耗时|ms)/i.test(text);
+  const hasDStateIoEvidence =
+    /io_wait\s*(?:=|为|是)?\s*1/i.test(text) ||
+    /(?:filemap|io_schedule|wait_on_page|folio_wait|submit_bio|blk_|ext4|f2fs|erofs|ufshcd|mmc_|dm_|fsync)/i.test(text) ||
+    /(?:sqlite|file\s*i\/?o|文件\s*i\/?o|数据库|sharedpreferences).{0,40}(?:slice|trace|stack|调用栈|证据|耗时|ms)/i.test(text);
   const qualifiesDStateBoundary =
     /(?:候选|不能|不可|不等于|无法|证据不足|ambiguous|candidate|not enough)/i.test(text);
   if (mentionsUninterruptibleState && claimsDStateAsIoRootCause && !hasDStateIoEvidence && !qualifiesDStateBoundary) {

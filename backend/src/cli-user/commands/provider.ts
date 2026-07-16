@@ -11,6 +11,11 @@ import { getClaudeRuntimeDiagnostics } from '../../agentv3/claudeConfig';
 import { getOpenAIRuntimeDiagnostics, hasOpenAICredentials } from '../../agentOpenAI/openAiConfig';
 import { withConsoleLogToStderr } from '../io/stdio';
 import { isClaudeSdkBinaryUsable } from '../services/runtimeGuard';
+import {
+  AiDisabledError,
+  assertAiFeatureEnabled,
+  buildAiDisabledPayload,
+} from '../../services/aiCapabilityPolicy';
 
 export interface ProviderCommandBaseArgs {
   envFile?: string;
@@ -50,6 +55,18 @@ export async function runProviderTestCommand(args: ProviderTestCommandArgs): Pro
   const format = args.format ?? 'text';
   const target = args.target || 'system';
   const svc = await withConsoleLogToStderr(format !== 'text', async () => getProviderService());
+  try {
+    assertAiFeatureEnabled('cli_provider_test');
+  } catch (error) {
+    if (error instanceof AiDisabledError) {
+      return writeResult(format, {
+        ok: false,
+        target,
+        ...buildAiDisabledPayload(error),
+      });
+    }
+    throw error;
+  }
 
   if (target !== 'system') {
     const provider = svc.getRaw(target);

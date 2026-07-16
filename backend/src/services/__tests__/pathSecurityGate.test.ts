@@ -31,7 +31,7 @@ describe('PathSecurityGate', () => {
     expect(isWithinAllowlist(path.join(sibling), [root])).toBe(false);
   });
 
-  it('previews only allowed source files and skips excluded paths', () => {
+  it('previews only allowed source files and skips excluded paths', async () => {
     const root = path.join(tmpDir, 'repo');
     fs.mkdirSync(path.join(root, 'src'), {recursive: true});
     fs.mkdirSync(path.join(root, 'build'), {recursive: true});
@@ -41,7 +41,7 @@ describe('PathSecurityGate', () => {
     fs.writeFileSync(path.join(root, 'README.md'), '# docs\n');
 
     const gate = new PathSecurityGate({allowlistRoots: [tmpDir]});
-    const preview = gate.preview(root);
+    const preview = await gate.preview(root);
 
     expect(preview.blocked).toBe(false);
     expect(preview.rootRealpath).toBe(fs.realpathSync(root));
@@ -51,13 +51,32 @@ describe('PathSecurityGate', () => {
     );
   });
 
-  it('rejects roots outside the allowlist', () => {
+  it('rejects roots outside the allowlist', async () => {
     const root = path.join(tmpDir, 'repo');
     fs.mkdirSync(root);
     const gate = new PathSecurityGate({allowlistRoots: [path.join(tmpDir, 'other')]});
-    const preview = gate.preview(root);
+    const preview = await gate.preview(root);
     expect(preview.blocked).toBe(true);
     expect(preview.blockedReason).toBe('root_outside_allowlist');
   });
-});
 
+  it('reads a dedicated knowledge-root environment allowlist at preview time', async () => {
+    const root = path.join(tmpDir, 'wiki');
+    fs.mkdirSync(root);
+    fs.writeFileSync(path.join(root, 'article.md'), '# Article');
+    process.env.SMARTPERFETTO_TEST_KNOWLEDGE_ROOTS = tmpDir;
+    const gate = new PathSecurityGate({
+      allowlistEnvironmentVariable: 'SMARTPERFETTO_TEST_KNOWLEDGE_ROOTS',
+      allowedExtensions: ['.md'],
+    });
+
+    const preview = await gate.preview(root);
+
+    delete process.env.SMARTPERFETTO_TEST_KNOWLEDGE_ROOTS;
+    expect(preview.blocked).toBe(false);
+    expect(preview.acceptedFiles).toEqual([{
+      relativePath: 'article.md',
+      sizeBytes: expect.any(Number),
+    }]);
+  });
+});

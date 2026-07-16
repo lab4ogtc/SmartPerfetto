@@ -20,7 +20,11 @@
  */
 
 import { jest, describe, it, expect } from '@jest/globals';
-import type { AnalysisPlanV3, AnalysisNote, Hypothesis, UncertaintyFlag } from '../types';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import type { AnalysisPlanV3, AnalysisNote, Hypothesis, TracePairContext, UncertaintyFlag } from '../types';
+import type { OutputLanguage } from '../outputLanguage';
 
 // ── Mock dependencies ────────────────────────────────────────────────────
 
@@ -28,6 +32,15 @@ import type { AnalysisPlanV3, AnalysisNote, Hypothesis, UncertaintyFlag } from '
 jest.mock('../../services/skillEngine/skillAnalysisAdapter', () => ({
   getSkillAnalysisAdapter: jest.fn(() => ({
     adaptSkillResult: jest.fn((r: any) => r),
+    setSkillRegistry: jest.fn(),
+    listSkills: jest.fn(async () => [
+      { id: 'scrolling_analysis', displayName: 'Scrolling Analysis', description: 'Analyze scrolling jank', type: 'composite', keywords: ['scroll', 'jank'] },
+      { id: 'cpu_analysis', displayName: 'CPU Analysis', description: 'Analyze CPU usage', type: 'atomic', keywords: ['cpu'] },
+    ]),
+  })),
+  createSkillAnalysisAdapter: jest.fn(() => ({
+    adaptSkillResult: jest.fn((r: any) => r),
+    setSkillRegistry: jest.fn(),
     listSkills: jest.fn(async () => [
       { id: 'scrolling_analysis', displayName: 'Scrolling Analysis', description: 'Analyze scrolling jank', type: 'composite', keywords: ['scroll', 'jank'] },
       { id: 'cpu_analysis', displayName: 'CPU Analysis', description: 'Analyze CPU usage', type: 'atomic', keywords: ['cpu'] },
@@ -44,11 +57,16 @@ jest.mock('../../agent/detectors/architectureDetector', () => ({
 jest.mock('../../services/skillEngine/skillLoader', () => ({
   skillRegistry: {
     getSkill: jest.fn(() => ({ type: 'atomic', name: 'test_skill' })),
+    getVendorOverride: jest.fn(() => undefined),
     getAllSkills: jest.fn(() => [
       { name: 'scrolling_analysis', type: 'composite', description: 'Scrolling analysis' },
       { name: 'cpu_analysis', type: 'atomic', description: 'CPU analysis' },
     ]),
   },
+}));
+
+jest.mock('../../services/skillPacks/workspaceSkillRegistryProvider', () => ({
+  getWorkspaceSkillRegistry: jest.fn(),
 }));
 
 jest.mock('../artifactStore', () => ({
@@ -71,7 +89,21 @@ jest.mock('../artifactStore', () => ({
         ...(artifact.planPhaseTitle ? { planPhaseTitle: artifact.planPhaseTitle } : {}),
         ...(artifact.traceProvenance?.traceSide ? { traceSide: artifact.traceProvenance.traceSide } : {}),
         ...(artifact.traceProvenance?.traceId ? { traceId: artifact.traceProvenance.traceId } : {}),
+        ...(artifact.queryReview ? { queryReview: artifact.queryReview } : {}),
+        ...(artifact.executionStatus ? { executionStatus: artifact.executionStatus } : {}),
+        ...(artifact.executionMessage ? { executionMessage: artifact.executionMessage } : {}),
+        ...(artifact.executionError ? { executionError: artifact.executionError } : {}),
       };
+    }),
+    updateQueryReview: jest.fn(function(
+      this: { _artifacts: Map<string, { queryReview?: unknown }> },
+      id: string,
+      queryReview: unknown,
+    ) {
+      const artifact = this._artifacts.get(id);
+      if (!artifact || !queryReview) return false;
+      artifact.queryReview = queryReview;
+      return true;
     }),
     fetch: jest.fn(function(this: any, id: string, detail: string, offset?: number, limit?: number) {
       const artifact = this._artifacts.get(id);
@@ -92,6 +124,10 @@ jest.mock('../artifactStore', () => ({
           planPhaseGoal: artifact?.planPhaseGoal,
           sourceToolCallId: artifact?.sourceToolCallId,
           identityResolution: artifact?.identityResolution,
+          queryReview: artifact?.queryReview,
+          executionStatus: artifact?.executionStatus,
+          executionMessage: artifact?.executionMessage,
+          executionError: artifact?.executionError,
         };
       }
       const effectiveOffset = offset ?? 0;
@@ -118,6 +154,10 @@ jest.mock('../artifactStore', () => ({
         traceSide: artifact?.traceProvenance?.traceSide,
         traceId: artifact?.traceProvenance?.traceId,
         traceProvenance: artifact?.traceProvenance,
+        queryReview: artifact?.queryReview,
+        executionStatus: artifact?.executionStatus,
+        executionMessage: artifact?.executionMessage,
+        executionError: artifact?.executionError,
       };
     }),
     get: jest.fn(function(this: any, id: string) {
@@ -196,6 +236,15 @@ import {
 } from '../claudeMcpServer';
 import { ArtifactStore } from '../artifactStore';
 import { createArchitectureDetector } from '../../agent/detectors/architectureDetector';
+import { createSkillAnalysisAdapter } from '../../services/skillEngine/skillAnalysisAdapter';
+import { getWorkspaceSkillRegistry } from '../../services/skillPacks/workspaceSkillRegistryProvider';
+import {
+  ANALYSIS_RESULT_SNAPSHOT_SCHEMA_VERSION,
+  type AnalysisResultSnapshot,
+} from '../../types/multiTraceComparison';
+import type { TraceSimilaritySnapshotRepository } from '../../services/similarity/similarityService';
+import {RagStore} from '../../services/ragStore';
+import {ExternalKnowledgeSourceRegistry} from '../../services/externalKnowledgeSourceRegistry';
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -211,6 +260,14 @@ function createTestServer(options: {
   codebaseIds?: string[];
   caseLibrary?: any;
   ragStore?: any;
+  externalKnowledgeRegistry?: any;
+  knowledgeSourceIds?: string[];
+  analysisResultSnapshotRepository?: TraceSimilaritySnapshotRepository;
+  knowledgeScope?: { tenantId: string; workspaceId: string; userId?: string };
+  tracePairContext?: TracePairContext;
+  packageName?: string;
+  referencePackageName?: string;
+  outputLanguage?: OutputLanguage;
 } = {}) {
   const analysisNotes: AnalysisNote[] = [];
   const hypotheses: Hypothesis[] = [];
@@ -246,7 +303,10 @@ function createTestServer(options: {
       displayResults: [{ stepId: 'result', title: 'Result', layer: 'list', format: 'table', data: { rows: [[1]], columns: ['a'] } }],
       layers: {},
     })),
+    replaceRegisteredSkills: jest.fn(),
+    registerSkills: jest.fn(),
     registerSkill: jest.fn(),
+    setFragmentRegistry: jest.fn(),
   };
 
   const { server, allowedTools, toolDefinitions } = createClaudeMcpServer({
@@ -259,6 +319,7 @@ function createTestServer(options: {
     uncertaintyFlags,
     watchdogWarning,
     artifactStore: new ArtifactStore() as any,
+    packageName: options.packageName,
     emitUpdate: (u: any) => emittedUpdates.push(u),
     sceneType: options.sceneType,
     cachedArchitecture: options.cachedArchitecture,
@@ -266,15 +327,22 @@ function createTestServer(options: {
     codebaseIds: options.codebaseIds,
     caseLibrary: options.caseLibrary,
     ragStore: options.ragStore,
+    externalKnowledgeRegistry: options.externalKnowledgeRegistry,
+    knowledgeSourceIds: options.knowledgeSourceIds,
+    analysisResultSnapshotRepository: options.analysisResultSnapshotRepository,
+    knowledgeScope: options.knowledgeScope,
+    outputLanguage: options.outputLanguage,
     ...(options.lightweight ? { lightweight: true } : { analysisPlan }),
     ...(options.referenceTraceId ? {
       referenceTraceId: options.referenceTraceId,
       comparisonContext: {
         referenceTraceId: options.referenceTraceId,
+        ...(options.tracePairContext ? { tracePairContext: options.tracePairContext } : {}),
+        ...(options.referencePackageName ? { referencePackageName: options.referencePackageName } : {}),
         commonCapabilities: ['slice'],
       },
     } : {}),
-  });
+  } as any);
 
   // Extract tool handlers from the mock SDK server
   const tools: Map<string, ToolDef> = new Map();
@@ -297,6 +365,37 @@ function createTestServer(options: {
     emittedUpdates,
     mockTpService,
     mockSkillExecutor,
+  };
+}
+
+function horizontalTracePairContext(): TracePairContext {
+  return {
+    schemaVersion: 1,
+    layout: 'horizontal',
+    primarySide: 'left',
+    referenceSide: 'right',
+    activeSide: 'left',
+    aliases: {
+      '左侧': 'current',
+      '右侧': 'reference',
+    },
+    panes: [
+      {
+        side: 'left',
+        traceSide: 'current',
+        traceId: 'test-trace-123',
+        traceName: 'primary.trace',
+        active: true,
+        visualState: 'live',
+      },
+      {
+        side: 'right',
+        traceSide: 'reference',
+        traceId: 'ref-trace-456',
+        traceName: 'reference.trace',
+        visualState: 'live',
+      },
+    ],
   };
 }
 
@@ -353,6 +452,52 @@ function parseLeadingJsonObject(text: string): unknown | null {
   return null;
 }
 
+function analysisSnapshot(
+  id: string,
+  overrides: Partial<AnalysisResultSnapshot> = {},
+): AnalysisResultSnapshot {
+  return {
+    id,
+    tenantId: 'tenant-a',
+    workspaceId: 'workspace-a',
+    traceId: `${id}-trace`,
+    sessionId: `${id}-trace-session`,
+    runId: `${id}-trace-run`,
+    createdBy: 'user-a',
+    visibility: 'workspace',
+    sceneType: 'scrolling',
+    title: id,
+    userQuery: 'analyze scrolling',
+    traceLabel: id,
+    traceMetadata: {
+      appPackage: 'com.example.app',
+      processName: 'com.example.app',
+      deviceModel: 'Pixel 9',
+      androidVersion: '16',
+      reason_code: 'shader_compile',
+      responsibility: 'app',
+    },
+    summary: {headline: 'ok'},
+    metrics: [{
+      key: 'scrolling.jank_count',
+      label: 'Jank count',
+      group: 'jank',
+      value: 10,
+      confidence: 0.9,
+      source: {type: 'skill', skillId: 'scrolling'},
+    }],
+    evidenceRefs: [{
+      id: `${id}-evidence`,
+      type: 'skill_step',
+      metadata: {render_slices: ['makePipeline']},
+    }],
+    status: 'ready',
+    schemaVersion: ANALYSIS_RESULT_SNAPSHOT_SCHEMA_VERSION,
+    createdAt: 1_700_000_000_000,
+    ...overrides,
+  };
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────
 
 describe('createClaudeMcpServer', () => {
@@ -373,8 +518,8 @@ describe('createClaudeMcpServer', () => {
       // *removes* a critical tool still fails loudly.
       const { tools } = createTestServer();
       expect(tools.size).toBeGreaterThanOrEqual(15);
-      expect(tools.size).toBeLessThanOrEqual(25);
-      for (const required of ['execute_sql', 'invoke_skill', 'lookup_sql_schema', 'submit_plan']) {
+      expect(tools.size).toBeLessThanOrEqual(26);
+      for (const required of ['execute_sql', 'invoke_skill', 'lookup_sql_schema', 'submit_plan', 'recall_similar_result']) {
         expect(tools.has(required)).toBe(true);
       }
     });
@@ -443,6 +588,73 @@ describe('createClaudeMcpServer', () => {
       });
     });
 
+    it('recalls similar analysis results as navigation-only MCP hints', async () => {
+      const current = analysisSnapshot('current');
+      const similar = analysisSnapshot('similar', {
+        traceId: 'similar-trace',
+        sessionId: 'similar-session',
+        runId: 'similar-run',
+      });
+      const snapshots = new Map([
+        [current.id, current],
+        [similar.id, similar],
+      ]);
+      const repository: TraceSimilaritySnapshotRepository = {
+        getSnapshot(_scope, snapshotId) {
+          return snapshots.get(snapshotId) ?? null;
+        },
+        listSnapshots() {
+          return [...snapshots.values()];
+        },
+      };
+      const { tools } = createTestServer({
+        knowledgeScope: {tenantId: 'tenant-a', workspaceId: 'workspace-a', userId: 'user-a'},
+        analysisResultSnapshotRepository: repository,
+      });
+
+      const result = await callTool(tools, 'recall_similar_result', {
+        snapshot_id: 'current',
+        top_k: 3,
+      });
+
+      expect(result).toMatchObject({
+        success: true,
+        allowedUse: 'navigation_hint_only',
+        snapshotId: 'current',
+      });
+      expect(result.hints[0]).toMatchObject({
+        source: 'analysis_result_snapshot',
+        sourceId: 'similar',
+        allowedUse: 'navigation_hint_only',
+      });
+      expect(result.hints[0].limitations.length).toBeGreaterThan(0);
+    });
+
+    it('reports missing analysis-result snapshots without fabricating hints', async () => {
+      const repository: TraceSimilaritySnapshotRepository = {
+        getSnapshot() {
+          return null;
+        },
+        listSnapshots() {
+          return [];
+        },
+      };
+      const { tools } = createTestServer({
+        knowledgeScope: {tenantId: 'tenant-a', workspaceId: 'workspace-a', userId: 'user-a'},
+        analysisResultSnapshotRepository: repository,
+      });
+
+      const result = await callTool(tools, 'recall_similar_result', {
+        snapshot_id: 'missing',
+      });
+
+      expect(result).toEqual({
+        success: false,
+        allowedUse: 'navigation_hint_only',
+        error: 'Analysis result snapshot not found',
+      });
+    });
+
     it('should auto-derive allowedTools matching registered tools (P2-G1)', () => {
       const { tools, allowedTools } = createTestServer();
       // Every tool should have a matching allowedTools entry (with prefix)
@@ -460,10 +672,87 @@ describe('createClaudeMcpServer', () => {
         'lookup_sql_schema', 'submit_plan', 'update_plan_phase', 'revise_plan',
         'submit_hypothesis', 'resolve_hypothesis', 'write_analysis_note',
         'fetch_artifact', 'query_perfetto_source', 'flag_uncertainty', 'recall_patterns',
+        'recall_similar_result',
       ];
       for (const name of expected) {
         expect(tools.has(name)).toBe(true);
       }
+    });
+
+    it('binds workspace skill registry for list_skills and invoke_skill', async () => {
+      const workspaceSkill = {
+        name: 'external_skill',
+        type: 'atomic',
+        meta: { display_name: 'External Skill', description: 'Workspace approved skill' },
+      };
+      const workspaceRegistry = {
+        getAllSkills: jest.fn(() => [workspaceSkill]),
+        getFragmentCache: jest.fn(() => new Map([['fragments/external.sql', 'external AS (SELECT 1 AS value)']])),
+        getSkill: jest.fn(() => ({ type: 'atomic', name: 'external_skill' })),
+        getVendorOverride: jest.fn(() => undefined),
+        getSkillOrigin: jest.fn(() => ({
+          origin: 'external_pack',
+          packId: 'local-pack',
+          packVersion: '1.0.0',
+          trustState: 'approved',
+          sourcePath: '/managed/local-pack',
+        })),
+      };
+      const adapter = {
+        adaptSkillResult: jest.fn((r: unknown) => r),
+        setSkillRegistry: jest.fn(),
+        listSkills: jest.fn(async () => [{
+          id: 'external_skill',
+          displayName: 'External Skill',
+          description: 'Workspace approved skill',
+          type: 'atomic',
+          keywords: ['external'],
+          origin: workspaceRegistry.getSkillOrigin(),
+        }]),
+      } as unknown as ReturnType<typeof createSkillAnalysisAdapter>;
+      (createSkillAnalysisAdapter as jest.MockedFunction<typeof createSkillAnalysisAdapter>)
+        .mockReturnValueOnce(adapter);
+      (getWorkspaceSkillRegistry as jest.MockedFunction<typeof getWorkspaceSkillRegistry>)
+        .mockResolvedValue({
+          registry: workspaceRegistry,
+          registryFingerprint: 'workspace-fingerprint-1',
+          enabledPacks: [],
+          getSkillOrigin: workspaceRegistry.getSkillOrigin,
+        } as unknown as Awaited<ReturnType<typeof getWorkspaceSkillRegistry>>);
+      const { tools, mockSkillExecutor } = createTestServer({
+        knowledgeScope: { tenantId: 'tenant-a', workspaceId: 'workspace-a', userId: 'user-a' },
+      });
+
+      const skills = await callTool(tools, 'list_skills', {});
+      await callTool(tools, 'submit_plan', {
+        phases: [{ id: 'p1', name: 'Workspace skill', goal: 'Run approved workspace skill', expectedTools: ['invoke_skill'] }],
+        successCriteria: 'Workspace skill executes through the request-scoped registry',
+      });
+      await callTool(tools, 'invoke_skill', { skillId: 'external_skill', params: {} });
+
+      expect(adapter.setSkillRegistry).toHaveBeenCalledWith(
+        expect.objectContaining({ getAllSkills: expect.any(Function) }),
+        'workspace-fingerprint-1',
+      );
+      expect(mockSkillExecutor.replaceRegisteredSkills).toHaveBeenCalledWith([workspaceSkill]);
+      expect(mockSkillExecutor.setFragmentRegistry).toHaveBeenCalledWith(workspaceRegistry.getFragmentCache());
+      expect(skills).toEqual([
+        expect.objectContaining({
+          id: 'external_skill',
+          origin: expect.objectContaining({
+            origin: 'external_pack',
+            packId: 'local-pack',
+            packVersion: '1.0.0',
+            trustState: 'approved',
+          }),
+        }),
+      ]);
+      expect(mockSkillExecutor.execute).toHaveBeenCalledWith(
+        'external_skill',
+        'test-trace-123',
+        {},
+        expect.objectContaining({ signal: undefined }),
+      );
     });
 
     it('keeps fetch_artifact available in lightweight mode for skill artifacts', () => {
@@ -700,10 +989,6 @@ describe('createClaudeMcpServer', () => {
         artifactId: skillResult.diagnosticsArtifactId,
         detail: 'rows',
       });
-      const fetchedSynthesize = await callTool(tools, 'fetch_artifact', {
-        artifactId: skillResult.synthesizeArtifacts[0].artifactId,
-        detail: 'rows',
-      });
 
       expect(fetched.identityResolution).toEqual(expect.objectContaining({
         identityRefId: 'identity:test',
@@ -713,10 +998,77 @@ describe('createClaudeMcpServer', () => {
         identityRefId: 'identity:test',
         status: 'verified',
       }));
-      expect(fetchedSynthesize.identityResolution).toEqual(expect.objectContaining({
+    });
+
+    it('returns answerable lightweight artifact previews with evidence refs', async () => {
+      const { tools, mockSkillExecutor } = createTestServer({ lightweight: true });
+      mockSkillExecutor.execute.mockResolvedValueOnce({
+        skillId: 'scrolling_analysis',
+        skillName: '滑动性能分析',
+        success: true,
+        displayResults: [{
+          stepId: 'frame_summary',
+          title: '滑动性能概览',
+          layer: 'overview',
+          format: 'table',
+          data: {
+            columns: ['total_frames', 'perceived_jank_frames', 'jank_rate'],
+            rows: [[347, 7, 2.02]],
+          },
+        }],
+        identityResolution: {
+          version: 'identity_contract@1',
+          identityRefId: 'identity:test',
+          target: {
+            traceId: 'test-trace-123',
+            packageName: 'com.example',
+            processName: 'com.example',
+            source: 'skill_param',
+          },
+          status: 'verified',
+          processes: [],
+          threads: [],
+          warnings: [],
+        },
+        synthesizeData: [{
+          stepId: 'large_synth',
+          stepName: 'Large Synth',
+          success: true,
+          data: [{ frame_id: 1, blocked_ms: 120 }],
+        }],
+        executionTimeMs: 5,
+      } as any);
+
+      const result = await callTool(tools, 'invoke_skill', {
+        skillId: 'scrolling_analysis',
+        params: { process_name: 'com.example' },
+      });
+
+      expect(result.quickMode).toMatchObject({
+        answerNow: true,
+      });
+      expect(result.hint).toContain('answer from previews');
+      expect(result.identity).toMatchObject({
         identityRefId: 'identity:test',
         status: 'verified',
-      }));
+        packageName: 'com.example',
+        processName: 'com.example',
+      });
+      expect(result.identityResolution).toBeUndefined();
+      expect(result.synthesizeArtifacts).toBeUndefined();
+      expect(result.artifacts).toEqual([
+        expect.objectContaining({
+          id: 'art-1',
+          stepId: 'frame_summary',
+          evidenceRefId: expect.stringContaining('data:skill:scrolling_analysis'),
+          sourceToolCallId: expect.stringContaining('invoke_skill:'),
+          preview: {
+            total_frames: 347,
+            perceived_jank_frames: 7,
+            jank_rate: 2.02,
+          },
+        }),
+      ]);
     });
 
     it('creates fetchable diagnostics artifacts without display results', async () => {
@@ -1236,6 +1588,8 @@ describe('createClaudeMcpServer', () => {
           layer: 'list',
           format: 'table',
           data: { rows: [], columns: ['launch_id', 'dur_ms'] },
+          executionStatus: 'empty',
+          executionMessage: 'No startup rows were recorded.',
         }],
         diagnostics: [],
         executionTimeMs: 5,
@@ -1248,6 +1602,10 @@ describe('createClaudeMcpServer', () => {
         .find((env: any) => env.display?.title === 'No launch rows');
 
       expect(result.success).toBe(true);
+      expect(result.artifacts?.[0]).toMatchObject({
+        executionStatus: 'empty',
+        executionMessage: 'No startup rows were recorded.',
+      });
       expect(envelope).toMatchObject({
         data: { rows: [], columns: ['launch_id', 'dur_ms'] },
         display: { format: 'table', title: 'No launch rows' },
@@ -1256,6 +1614,8 @@ describe('createClaudeMcpServer', () => {
           stepId: 'empty_launches',
           planPhaseId: 'p1',
           planPhaseAttribution: 'active',
+          executionStatus: 'empty',
+          executionMessage: 'No startup rows were recorded.',
         },
       });
       expect(envelope?.meta?.evidenceRefId).toContain('data:skill:startup_analysis:empty_launches');
@@ -1314,6 +1674,60 @@ describe('createClaudeMcpServer', () => {
   });
 
   describe('comparison trace provenance (M3)', () => {
+    it('get_comparison_context returns pane mapping and aliases', async () => {
+      const tracePairContext: TracePairContext = {
+        schemaVersion: 1,
+        layout: 'horizontal',
+        primarySide: 'left',
+        referenceSide: 'right',
+        activeSide: 'left',
+        aliases: {
+          '左侧': 'current',
+          '上方': 'current',
+          '右侧': 'reference',
+          '下方': 'reference',
+        },
+        panes: [
+          {
+            side: 'left',
+            traceSide: 'current',
+            traceId: 'test-trace-123',
+            traceName: 'primary.trace',
+            active: true,
+            visualState: 'live',
+          },
+          {
+            side: 'right',
+            traceSide: 'reference',
+            traceId: 'ref-trace-456',
+            traceName: 'reference.trace',
+            visualState: 'context_only',
+          },
+        ],
+      };
+      const { tools } = createTestServer({
+        referenceTraceId: 'ref-trace-456',
+        tracePairContext,
+      });
+
+      const result = await callTool(tools, 'get_comparison_context');
+
+      expect(result.success).toBe(true);
+      expect(result.current).toMatchObject({
+        traceId: 'test-trace-123',
+        paneSide: 'left',
+        visualState: 'live',
+        traceName: 'primary.trace',
+      });
+      expect(result.reference).toMatchObject({
+        traceId: 'ref-trace-456',
+        paneSide: 'right',
+        visualState: 'context_only',
+        traceName: 'reference.trace',
+      });
+      expect(result.tracePairContext).toEqual(tracePairContext);
+    });
+
     it('execute_sql_on routes reference SQL to the reference trace and returns provenance', async () => {
       const { tools, mockTpService } = createTestServer({ referenceTraceId: 'ref-trace-456' });
       await callTool(tools, 'submit_plan', {
@@ -1476,6 +1890,65 @@ describe('createClaudeMcpServer', () => {
         phaseId: 'p1',
         status: 'in_progress',
       });
+    });
+
+    it('labels execute_sql_on phase summaries and envelopes with pane-aware trace locations', async () => {
+      const { tools, emittedUpdates } = createTestServer({
+        referenceTraceId: 'ref-trace-456',
+        tracePairContext: horizontalTracePairContext(),
+      });
+      await callTool(tools, 'submit_plan', {
+        phases: [{ id: 'p1', name: 'Compare', goal: 'Collect reference summary', expectedTools: ['execute_sql_on'] }],
+        successCriteria: 'Summary output is pane labeled',
+      });
+
+      const result = await callTool(tools, 'execute_sql_on', {
+        trace: 'reference',
+        sql: 'SELECT id FROM slice',
+        summary: true,
+      });
+      const envelope = emittedUpdates
+        .filter((u: any) => u.type === 'data')
+        .flatMap((u: any) => u.content ?? [])
+        .find((env: any) => env.display?.format === 'summary');
+      const phaseUpdate = emittedUpdates.find((u: any) => u.type === 'plan_phase_updated');
+
+      expect(result.success).toBe(true);
+      expect(result.trace).toBe('[右侧/参考 Trace]');
+      expect(phaseUpdate?.content?.summary).toContain('右侧/参考 Trace');
+      expect(envelope?.meta?.paneSide).toBe('right');
+      expect(envelope?.meta?.producerReason).toContain('右侧/参考 Trace');
+      expect(envelope?.meta?.toolNarration).toContain('右侧/参考 Trace');
+    });
+
+    it('labels execute_sql_on English output with pane-aware trace locations', async () => {
+      const { tools, emittedUpdates } = createTestServer({
+        referenceTraceId: 'ref-trace-456',
+        tracePairContext: horizontalTracePairContext(),
+        outputLanguage: 'en',
+      });
+      await callTool(tools, 'submit_plan', {
+        phases: [{ id: 'p1', name: 'Compare', goal: 'Collect reference summary', expectedTools: ['execute_sql_on'] }],
+        successCriteria: 'Summary output is pane labeled in English',
+      });
+
+      const result = await callTool(tools, 'execute_sql_on', {
+        trace: 'reference',
+        sql: 'SELECT id FROM slice',
+        summary: true,
+      });
+      const envelope = emittedUpdates
+        .filter((u: any) => u.type === 'data')
+        .flatMap((u: any) => u.content ?? [])
+        .find((env: any) => env.display?.format === 'summary');
+      const phaseUpdate = emittedUpdates.find((u: any) => u.type === 'plan_phase_updated');
+
+      expect(result.success).toBe(true);
+      expect(result.trace).toBe('[right pane/reference trace]');
+      expect(phaseUpdate?.content?.summary).toContain('right pane/reference trace');
+      expect(envelope?.meta?.paneSide).toBe('right');
+      expect(envelope?.meta?.producerReason).toContain('right pane/reference trace');
+      expect(envelope?.meta?.toolNarration).toContain('right pane/reference trace');
     });
 
     it('leaves evidence unbound when multiple pending phases match the same tool', async () => {
@@ -2319,11 +2792,42 @@ describe('createClaudeMcpServer', () => {
       expect(failedResult.error).toContain('bad sql');
     });
 
-    it('compare_skill executes both traces and emits side provenance envelopes', async () => {
-      const { tools, mockSkillExecutor, emittedUpdates } = createTestServer({ referenceTraceId: 'ref-trace-456' });
+    it('compare_skill executes both traces and emits pane-aware provenance envelopes', async () => {
+      const tracePairContext: TracePairContext = {
+        schemaVersion: 1,
+        layout: 'vertical',
+        primarySide: 'top',
+        referenceSide: 'bottom',
+        activeSide: 'top',
+        aliases: {
+          top: 'current',
+          bottom: 'reference',
+        },
+        panes: [
+          {
+            side: 'top',
+            traceSide: 'current',
+            traceId: 'test-trace-123',
+            traceName: 'before.trace',
+            active: true,
+            visualState: 'live',
+          },
+          {
+            side: 'bottom',
+            traceSide: 'reference',
+            traceId: 'ref-trace-456',
+            traceName: 'after.trace',
+            visualState: 'live',
+          },
+        ],
+      };
+      const { tools, mockSkillExecutor, emittedUpdates } = createTestServer({
+        referenceTraceId: 'ref-trace-456',
+        tracePairContext,
+      });
       await callTool(tools, 'submit_plan', {
         phases: [{ id: 'p1', name: 'Compare', goal: 'Run both traces', expectedTools: ['compare_skill'] }],
-        successCriteria: 'Both skill results are side-labeled',
+        successCriteria: 'Both skill results are side and pane labeled',
       });
 
       const result = await callTool(tools, 'compare_skill', {
@@ -2336,32 +2840,36 @@ describe('createClaudeMcpServer', () => {
         'scrolling_analysis',
         'test-trace-123',
         { process_name: 'com.example', package: 'com.example' },
-        { __traceSide: 'current' },
+        expect.objectContaining({ __traceSide: 'current', __paneSide: 'top' }),
       );
       expect(mockSkillExecutor.execute).toHaveBeenNthCalledWith(
         2,
         'scrolling_analysis',
         'ref-trace-456',
         { process_name: 'com.example', package: 'com.example' },
-        { __traceSide: 'reference' },
+        expect.objectContaining({ __traceSide: 'reference', __paneSide: 'bottom' }),
       );
       expect(result.success).toBe(true);
       expect(result.current).toMatchObject({
         traceSide: 'current',
+        paneSide: 'top',
         traceId: 'test-trace-123',
         traceProvenance: {
           traceSide: 'current',
+          paneSide: 'top',
           traceId: 'test-trace-123',
-          databaseScope: { processorKey: 'test-trace-123', isolation: 'shared' },
+          databaseScope: { processorKey: 'test-trace-123', isolation: 'shared', paneSide: 'top' },
         },
       });
       expect(result.reference).toMatchObject({
         traceSide: 'reference',
+        paneSide: 'bottom',
         traceId: 'ref-trace-456',
         traceProvenance: {
           traceSide: 'reference',
+          paneSide: 'bottom',
           traceId: 'ref-trace-456',
-          databaseScope: { processorKey: 'ref-trace-456', isolation: 'shared' },
+          databaseScope: { processorKey: 'ref-trace-456', isolation: 'shared', paneSide: 'bottom' },
         },
       });
 
@@ -2369,9 +2877,150 @@ describe('createClaudeMcpServer', () => {
         .filter((u: any) => u.type === 'data')
         .flatMap((u: any) => u.content ?? []);
       expect(envelopes).toEqual(expect.arrayContaining([
-        expect.objectContaining({ traceSide: 'current', traceId: 'test-trace-123' }),
-        expect.objectContaining({ traceSide: 'reference', traceId: 'ref-trace-456' }),
+        expect.objectContaining({
+          traceSide: 'current',
+          paneSide: 'top',
+          traceId: 'test-trace-123',
+          meta: expect.objectContaining({
+            traceSide: 'current',
+            paneSide: 'top',
+            traceId: 'test-trace-123',
+            producerReason: expect.stringContaining('上方/当前 Trace'),
+            toolNarration: expect.stringContaining('上方/当前 Trace'),
+          }),
+        }),
+        expect.objectContaining({
+          traceSide: 'reference',
+          paneSide: 'bottom',
+          traceId: 'ref-trace-456',
+          meta: expect.objectContaining({
+            traceSide: 'reference',
+            paneSide: 'bottom',
+            traceId: 'ref-trace-456',
+            producerReason: expect.stringContaining('下方/参考 Trace'),
+            toolNarration: expect.stringContaining('下方/参考 Trace'),
+          }),
+        }),
       ]));
+    });
+
+    it('compare_skill emits English pane-aware provenance envelopes', async () => {
+      const tracePairContext: TracePairContext = {
+        schemaVersion: 1,
+        layout: 'vertical',
+        primarySide: 'top',
+        referenceSide: 'bottom',
+        activeSide: 'top',
+        panes: [
+          {
+            side: 'top',
+            traceSide: 'current',
+            traceId: 'test-trace-123',
+            traceName: 'before.trace',
+            active: true,
+            visualState: 'live',
+          },
+          {
+            side: 'bottom',
+            traceSide: 'reference',
+            traceId: 'ref-trace-456',
+            traceName: 'after.trace',
+            visualState: 'live',
+          },
+        ],
+      };
+      const { tools, emittedUpdates } = createTestServer({
+        referenceTraceId: 'ref-trace-456',
+        tracePairContext,
+        outputLanguage: 'en',
+      });
+      await callTool(tools, 'submit_plan', {
+        phases: [{ id: 'p1', name: 'Compare', goal: 'Run both traces', expectedTools: ['compare_skill'] }],
+        successCriteria: 'Both skill results are side and pane labeled in English',
+      });
+
+      const result = await callTool(tools, 'compare_skill', {
+        skillId: 'startup_analysis',
+        params: { process_name: 'com.example' },
+      });
+      const envelopes = emittedUpdates
+        .filter((u: any) => u.type === 'data')
+        .flatMap((u: any) => u.content ?? []);
+
+      expect(result.success).toBe(true);
+      expect(envelopes).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          traceSide: 'current',
+          paneSide: 'top',
+          meta: expect.objectContaining({
+            producerReason: expect.stringContaining('top pane/current trace'),
+            toolNarration: expect.stringContaining('top pane/current trace'),
+          }),
+        }),
+        expect.objectContaining({
+          traceSide: 'reference',
+          paneSide: 'bottom',
+          meta: expect.objectContaining({
+            producerReason: expect.stringContaining('bottom pane/reference trace'),
+            toolNarration: expect.stringContaining('bottom pane/reference trace'),
+          }),
+        }),
+      ]));
+    });
+
+    it('compare_skill remaps current package filters and supports side-specific params for raw trace pairs', async () => {
+      const { tools, mockSkillExecutor } = createTestServer({
+        referenceTraceId: 'ref-trace-456',
+        packageName: 'com.example.current',
+        referencePackageName: 'com.example.reference',
+      });
+      await callTool(tools, 'submit_plan', {
+        phases: [{
+          id: 'p1',
+          name: 'Compare startup detail',
+          goal: 'Run startup detail on both live traces',
+          expectedTools: ['compare_skill'],
+          expectedCalls: [{ tool: 'compare_skill', skillId: 'startup_detail' }],
+        }],
+        successCriteria: 'Both sides use their own trace identity and time window',
+      });
+
+      const result = await callTool(tools, 'compare_skill', {
+        skillId: 'startup_detail',
+        params: { process_name: 'com.example.current', start_ts: 100, end_ts: 200 },
+        currentParams: { startup_id: 7, end_ts: 240 },
+        referenceParams: { startup_id: 3, start_ts: 500, end_ts: 650 },
+      });
+
+      expect(mockSkillExecutor.execute).toHaveBeenNthCalledWith(
+        1,
+        'startup_detail',
+        'test-trace-123',
+        {
+          process_name: 'com.example.current',
+          package: 'com.example.current',
+          startup_id: 7,
+          start_ts: 100,
+          end_ts: 240,
+        },
+        expect.objectContaining({ __traceSide: 'current' }),
+      );
+      expect(mockSkillExecutor.execute).toHaveBeenNthCalledWith(
+        2,
+        'startup_detail',
+        'ref-trace-456',
+        {
+          process_name: 'com.example.reference',
+          package: 'com.example.reference',
+          startup_id: 3,
+          start_ts: 500,
+          end_ts: 650,
+        },
+        expect.objectContaining({ __traceSide: 'reference' }),
+      );
+      expect(result.parameterMapping.referenceIdentityRemapped).toBe(true);
+      expect(result.current.effectiveParams.process_name).toBe('com.example.current');
+      expect(result.reference.effectiveParams.process_name).toBe('com.example.reference');
     });
   });
 
@@ -2437,6 +3086,46 @@ describe('createClaudeMcpServer', () => {
           { tool: 'fetch_artifact' },
         ],
       });
+    });
+
+    it('accepts compare_skill expectedCalls whose skillId is nested in params', async () => {
+      const { tools, analysisPlan } = createTestServer({ sceneType: 'startup' });
+
+      const result = await callTool(tools, 'submit_plan', {
+        phases: [
+          {
+            id: 'p1',
+            name: 'startup_timing',
+            goal: 'compare_skill startup_analysis 获取左右 Trace 的 TTID/TTFD',
+            expectedTools: ['compare_skill'],
+            expectedCalls: [{ tool: 'compare_skill', params: { skillId: 'startup_analysis' } }],
+          },
+          {
+            id: 'p2',
+            name: 'launch_type_verdict',
+            goal: '基于 startup_analysis 判定启动类型',
+            expectedTools: ['compare_skill'],
+            expectedCalls: [{ tool: 'compare_skill', params: { skill_id: 'startup_analysis' } }],
+          },
+          {
+            id: 'p3',
+            name: 'phase_breakdown',
+            goal: 'compare_skill startup_detail 分解左右 Trace 的启动阶段',
+            expectedTools: ['compare_skill', 'fetch_artifact'],
+            expectedCalls: [
+              { tool: 'compare_skill', params: { skillId: 'startup_detail' } },
+              { tool: 'fetch_artifact' },
+            ],
+          },
+        ],
+        successCriteria: 'Compare both startup traces with structured evidence',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.unresolvedAspects).toBeUndefined();
+      expect(analysisPlan.current?.phases[0].expectedCalls).toEqual([
+        { tool: 'compare_skill', skillId: 'startup_analysis' },
+      ]);
     });
 
     it('rejects informational expectations even when submitted via aliases and strings', async () => {
@@ -3405,6 +4094,85 @@ describe('createClaudeMcpServer', () => {
       expect(detected.nonWaivableMissingAspectIds).toEqual(['architecture_specific_jank']);
       const blockedSql = await callTool(tools, 'execute_sql', { sql: 'SELECT 1 AS ok' });
       expect(blockedSql.action_required).toBe('revise_plan');
+    });
+  });
+
+  describe('private external knowledge', () => {
+    it('defaults the only request-whitelisted source id and returns the sanitized wiki result', async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-private-knowledge-'));
+      try {
+        const scope = {tenantId: 'tenant-a', workspaceId: 'workspace-a', userId: 'user-a'};
+        const root = path.join(tmpDir, 'wiki');
+        fs.mkdirSync(root);
+        const externalKnowledgeRegistry = new ExternalKnowledgeSourceRegistry(
+          path.join(tmpDir, 'external-sources.json'),
+        );
+        const source = externalKnowledgeRegistry.register({
+          kind: 'android_internals_wiki',
+          displayName: 'Android Internals Wiki',
+          rootRealpath: root,
+          revision: 'a'.repeat(40),
+          contentFingerprint: 'b'.repeat(64),
+          dirty: false,
+          license: 'CC-BY-NC-SA-4.0',
+          rightsAcknowledged: true,
+          sendToProvider: true,
+          consentedBy: 'user-a',
+          scope,
+        });
+        await externalKnowledgeRegistry.withIngestLease(source.sourceId, scope, lease =>
+          lease.activateGeneration({
+            generation: 'generation-a',
+            revision: source.revision,
+            contentFingerprint: source.contentFingerprint,
+            dirty: false,
+            indexedArticleCount: 1,
+            indexedChunkCount: 1,
+          }));
+        const ragStore = new RagStore(path.join(tmpDir, 'rag.json'));
+        ragStore.addChunk({
+          chunkId: 'wiki-handler',
+          kind: 'android_internals_wiki',
+          registryOrigin: 'external_knowledge_registry',
+          knowledgeSourceId: source.sourceId,
+          sourceGeneration: 'generation-a',
+          uri: `android-internals-wiki://${source.sourceId}/handler`,
+          title: 'Handler internals',
+          snippet: '消息队列 Handler callback evidence',
+          indexedAt: Date.now(),
+          license: 'CC-BY-NC-SA-4.0',
+          attribution: 'Android Internals Wiki by Gracker (CC BY-NC-SA 4.0)',
+          sourceStatus: 'finalized',
+          sourceConfidence: 'high',
+          commitHash: source.revision,
+          contentFingerprint: source.contentFingerprint,
+          filePath: 'src/handler.md',
+        }, scope);
+        const {tools} = createTestServer({
+          ragStore,
+          externalKnowledgeRegistry,
+          knowledgeSourceIds: [source.sourceId],
+          knowledgeScope: scope,
+        });
+
+        const result = await callTool(tools, 'lookup_blog_knowledge', {
+          query: '消息队列 Handler',
+          source: 'android_internals_wiki',
+        });
+
+        expect(result).toEqual(expect.objectContaining({
+          success: true,
+          result: expect.objectContaining({
+            legacyPath: false,
+            hits: [expect.objectContaining({
+              chunkId: 'wiki-handler',
+              snippet: '消息队列 Handler callback evidence',
+            })],
+          }),
+        }));
+      } finally {
+        fs.rmSync(tmpDir, {recursive: true, force: true});
+      }
     });
   });
 });

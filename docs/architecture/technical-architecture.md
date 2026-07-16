@@ -402,7 +402,7 @@ LLM 只需要决定"用哪个 Skill"，Skill 负责"怎么分析"。
 | **Composite** | `backend/skills/composite/` | 组合分析 (如 scrolling_analysis = 多个 atomic 的编排) |
 | **Comparison** | `backend/skills/comparison/` | 对比分析 |
 | **Deep** | `backend/skills/deep/` | 深度分析 (cpu_profiling, callstack_analysis) |
-| **Pipeline** | `backend/skills/pipelines/` | 渲染管线检测 + 教学 |
+| **Pipeline** | `backend/skills/pipelines/` | 渲染管线检测子路径、特征证据与教学来源引用 |
 | **Module** | `backend/skills/modules/` | 模块分析 (app/framework/hardware/kernel) |
 
 当前数量以 `rg --files backend/skills | rg '\.skill\.yaml$' | wc -l` 为准。
@@ -523,22 +523,24 @@ thread_states_quadrant AS (
 
 Skill 可以通过 `fragments: [vsync_config, thread_states_quadrant]` 引用，避免重复编写。
 
-### 5.7 Pipeline Skills — 渲染管线教学
+### 5.7 Pipeline Skills — Android 17 类型与检测子路径
 
-SmartPerfetto 支持多类 Android 渲染管线的自动识别和教学，当前覆盖范围以 `backend/skills/pipelines/` 与 `docs/rendering_pipelines/` 为准：
+`backend/skills/pipelines/index.yaml` 是产品内的渲染目录真相。它固定
+`Gracker/rendering_pipelines` 的上游 commit、Android/kernel tag、14 篇 S01-S14
+文档及 SHA-256，并把现有 31 个检测条目映射到 13 个具体 rendering type。
 
-```
-Standard View (Blast/Legacy) | Flutter (TextureView/SurfaceView)
-Compose | WebView (多种变体) | OpenGL ES | Vulkan | ANGLE
-SurfaceControl | Video Overlay | Camera Pipeline | Game Engine
-...
-```
+目录刻意区分两种角色：
 
-每个 Pipeline Skill 包含：
-- **detection**: 如何在 trace 中识别该管线 (signal matching)
-- **teaching**: Mermaid 序列图 + 线程角色说明
-- **auto_pin**: 推荐 pin 到时间线的 track
-- **analysis**: 常见问题 + 推荐 Skills
+- **variant**：可以参与主类型竞争，输出 `primary_rendering_type_id` 和检测子路径；
+- **feature**：只补充 ANGLE、HWC、PIP、SurfaceControl 等证据，不能覆盖主类型。
+
+每个 Pipeline Skill 保留 trace signal、置信度、auto-pin 和分析建议；其
+`teaching.source` 只引用同步后的 S01-S14 Markdown，不再内嵌另一套 Mermaid/线程
+说明。教学服务以 Markdown 为内容来源，构建会把这些文档复制到
+`backend/dist/rendering_pipelines/`，供源码、Docker、portable 和 npm CLI 使用。
+
+同步和完整性校验入口分别是 `npm run sync:rendering-pipelines -- --source <checkout> --apply`
+与 `npm run check:rendering-pipelines`。不要手工修改同步后的 Markdown。
 
 ---
 
