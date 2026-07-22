@@ -22,7 +22,7 @@ interface SignalComponent {
   pattern: string;
 }
 
-const SCORE_THRESHOLD = 0.3;
+const SCORE_THRESHOLD = 0.7;
 const MAX_CANDIDATES = 5;
 
 function sqlStringLiteral(value: string): string {
@@ -428,7 +428,7 @@ function buildDeterminePipelineSql(catalog: PipelineCatalog): string {
           ROW_NUMBER() OVER (ORDER BY ps.score DESC, ps.pipeline_id ASC) as rank
         FROM pipeline_scores ps
         JOIN pipeline_metadata pm USING (pipeline_id)
-        WHERE ps.score >= ${SCORE_THRESHOLD}
+        WHERE ps.score > ${SCORE_THRESHOLD}
           AND pm.primary_eligible = 1
       ),
       primary_pipeline AS (
@@ -447,7 +447,7 @@ function buildDeterminePipelineSql(catalog: PipelineCatalog): string {
         FROM pipeline_scores ps
         JOIN pipeline_metadata pm USING (pipeline_id)
         WHERE pm.feature_visible = 1
-          AND ps.score >= ${SCORE_THRESHOLD}
+          AND ps.score > ${SCORE_THRESHOLD}
       ),
       rendering_type_scores AS (
         SELECT

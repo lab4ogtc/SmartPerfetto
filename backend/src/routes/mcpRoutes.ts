@@ -64,8 +64,8 @@ function visibleToolCount(session: McpSession): number {
   return filterByExposure(session.registry.list(), session.allowedExposures).length;
 }
 
-function registerAttachTool(session: McpSession): void {
-  session.registry.registerShared({
+function registerAttachTool(registry: McpToolRegistry): void {
+  registry.registerShared({
     name: 'attach_session',
     description: 'Attach this MCP session to a local workspace and trace file. '
       + 'workspaceId is treated as the local codebase root; filePath must point to a trace file inside it.',
@@ -90,15 +90,61 @@ function registerAttachTool(session: McpSession): void {
   } satisfies SharedToolSpec);
 }
 
+function unattachedToolResult(toolName: string) {
+  return {
+    content: [{
+      type: 'text' as const,
+      text: JSON.stringify({
+        success: false,
+        message: `Call attach_session before using ${toolName}.`,
+      }),
+    }],
+    isError: true,
+  };
+}
+
+function registerUnattachedExternalToolDescriptors(
+  registry: McpToolRegistry,
+  sessionId: string,
+  artifactStore: ArtifactStore,
+): void {
+  const {registry: traceRegistry} = createClaudeMcpServer({
+    traceId: '__smartperfetto_unattached__',
+    traceProcessorService: traceService,
+    skillExecutor: createSkillExecutor(traceService),
+    artifactStore,
+    sessionId,
+    codeAwareMode: 'off',
+  });
+
+  for (const def of filterByExposure(traceRegistry.list(), EXTERNAL_ATTACHED_EXPOSURES)) {
+    registry.registerShared({
+      ...def.shared,
+      handler: async () => unattachedToolResult(def.name),
+    });
+  }
+}
+
+export function createBootstrapMcpRegistry(
+  sessionId: string,
+  artifactStore: ArtifactStore,
+): McpToolRegistry {
+  const registry = new McpToolRegistry();
+  registerAttachTool(registry);
+  registerUnattachedExternalToolDescriptors(registry, sessionId, artifactStore);
+  return registry;
+}
+
 function createMcpSession(res?: express.Response): McpSession {
+  const sessionId = crypto.randomUUID();
+  const artifactStore = new ArtifactStore();
   const session: McpSession = {
-    sessionId: crypto.randomUUID(),
-    registry: new McpToolRegistry(),
-    allowedExposures: ['public'],
-    artifactStore: new ArtifactStore(),
+    sessionId,
+    registry: createBootstrapMcpRegistry(sessionId, artifactStore),
+    allowedExposures: EXTERNAL_ATTACHED_EXPOSURES,
+    artifactStore,
     ...(res ? {res} : {}),
   };
-  registerAttachTool(session);
   activeMcpSessions.set(session.sessionId, session);
   return session;
 }
@@ -193,7 +239,7 @@ async function attachWithRequestContext(
 
     const nextRegistry = new McpToolRegistry();
     session.registry = nextRegistry;
-    registerAttachTool(session);
+    registerAttachTool(session.registry);
     for (const def of analysisRegistry.list()) {
       session.registry.register({
         name: def.name,

@@ -49,6 +49,8 @@ describe('rendering_pipeline_detection generator', () => {
     expect(determineStep.sql).toContain("GROUP BY 'all_candidates'");
     expect(determineStep.sql).toContain('SELECT pipeline_id, rendering_type_id, score, rank');
     expect(determineStep.sql).toContain('ORDER BY rank ASC');
+    expect(determineStep.sql.match(/ps\.score > 0\.7/g)).toHaveLength(2);
+    expect(determineStep.sql).not.toContain('ps.score >= 0.7');
 
     // Non-primary / feature-only pipelines should not win primary selection.
     // Keep these checks stable to prevent regressions where a backend/impl-detail pipeline

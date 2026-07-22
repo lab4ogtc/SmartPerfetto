@@ -186,3 +186,5 @@ providers.json
 # Trace corpus private staging and materialized constructed outputs
 /Trace/real/.private/
 /Trace/.generated/
+
+.understand-anything/

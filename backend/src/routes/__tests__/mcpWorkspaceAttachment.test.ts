@@ -11,6 +11,9 @@ import {
   ensureWorkspaceCodebase,
   resolveWorkspaceAttachmentPaths,
 } from '../mcpWorkspaceAttachment';
+import {dispatch} from '../../agentv3/standaloneMcpServer';
+import {ArtifactStore} from '../../agentv3/artifactStore';
+import {createBootstrapMcpRegistry} from '../mcpRoutes';
 
 let tmpDir = '';
 
@@ -93,5 +96,41 @@ describe('ensureWorkspaceCodebase', () => {
       kinds: ['app_source'],
       codebaseIds: [first.codebaseId],
     }).results).toHaveLength(1);
+  });
+});
+
+describe('createBootstrapMcpRegistry', () => {
+  it('advertises the attached external tool surface before attach so deferred hosts can discover it', async () => {
+    const registry = createBootstrapMcpRegistry('session-a', new ArtifactStore());
+
+    const listResp = await dispatch(registry, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/list',
+    }, {allowedExposures: ['public', 'public-readonly', 'requires_codebase_permission']});
+    const names = (listResp!.result as {tools: Array<{name: string}>}).tools.map(t => t.name);
+
+    expect(names).toEqual(expect.arrayContaining([
+      'attach_session',
+      'execute_sql',
+      'lookup_sql_schema',
+      'list_skills',
+      'lookup_app_source',
+      'lookup_baseline',
+      'recall_similar_case',
+    ]));
+
+    const callResp = await dispatch(registry, {
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: {name: 'execute_sql', arguments: {sql: 'SELECT 1'}},
+    });
+    const result = callResp!.result as {content: Array<{text: string}>; isError?: boolean};
+    const payload = JSON.parse(result.content[0].text) as {success: boolean; message: string};
+
+    expect(result.isError).toBe(true);
+    expect(payload.success).toBe(false);
+    expect(payload.message).toMatch(/attach_session/);
   });
 });

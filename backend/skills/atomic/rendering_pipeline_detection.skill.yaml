@@ -558,7 +558,7 @@ steps:
                 ROW_NUMBER() OVER (ORDER BY ps.score DESC, ps.pipeline_id ASC) as rank
               FROM pipeline_scores ps
               JOIN pipeline_metadata pm USING (pipeline_id)
-              WHERE ps.score >= 0.3
+              WHERE ps.score > 0.7
                 AND pm.primary_eligible = 1
             ),
             primary_pipeline AS (
@@ -577,7 +577,7 @@ steps:
               FROM pipeline_scores ps
               JOIN pipeline_metadata pm USING (pipeline_id)
               WHERE pm.feature_visible = 1
-                AND ps.score >= 0.3
+                AND ps.score > 0.7
             ),
             rendering_type_scores AS (
               SELECT
